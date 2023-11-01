@@ -1,0 +1,565 @@
+input x is one-hot encoded 24x64 tensor of the input
+
+repeat num_layers times:
+  a = (x - mean(x)) / sqrt(var(x) + 0.00001) .* ln_attn.weight + ln_attn.bias (mean and var taken over each row)
+
+  Q = attn.proj_q.weight * a + attn.proj_q.bias
+  K = attn.proj_k.weight * a + attn.proj_k.bias
+  V = attn.proj_v.weight * a + attn.proj_v.bias
+  a = softmax(Q * K / sqrt(k)) * V
+  a = attn.linear.weight * a + attn.linear.bias
+
+  x = x + a
+  x = (x - mean(x)) / sqrt(var(x) + 0.00001) .* ln_ff.weight + ln_ff.bias
+  x = ff0.weight * x + ff0.bias
+  x = x .* sigmoid(x)
+  x = (I + ff3.weight) * x + ff3.bias
+
+x = (x - mean(x)) / sqrt(var(x) + 0.00001) .* ln_head.weight + ln_head.bias
+
+
+
+the last row of ff3.weight * x is roughly equal to [-8, -8, -8, -8, -8, -8, -8, -8, 2, -8, ...]
+the last row of ff3.weight * x is computed by x[-1,:] * ff3.weight.T (i.e. the i-th element of this last row is computed by dot(x[-1,:], ff3.weight[i,:]))
+  ff3.weight is selecting 1-2 elements of x[-1,:]
+  e.g. ff3.weight[8,:] seems to select x[-1,25] and x[-1,36] (the argmin and argmax of ff3_weight[8,:], respectively)
+  e.g. ff3.weight[0,:] seems to select x[-1,20] and x[-1,53] (the argmin and argmax of ff3_weight[0,:], respectively)
+  but when the input is such that the answer is 8, x[-1,25]=-0.0008, x[-1,36]=-0.2402, but x[-1,20]=6.9726, x[-1,53]=7.6684
+  at this point, each index of x will map to a particular output value.
+
+  the "swish" layer ensures that if x[-1,i] has large magnitude, it must be positive. and so ff3_weight is selecting the indices of the last row of the input x to x .* sigmoid(x) that are negative.
+  e.g. let x2 be the input to x to x .* sigmoid(x); x2[-1,25]=-9.3289, x2[-1,36]=-1.9797, but x2[-1,20]=6.9791, x2[-1,53]=7.6720
+
+  unfortunately, ff0.weight is not as sparse as ff3.weight
+
+
+if we train without the last FF layer:
+the first layer normalization layer before the first attention layer seems to just add a fixed vector to each row, which looks quite sparse (with -0.2674 being the element with the greatest magnitude). the magnitude of the non-zero input value is increased by ~1.6-2x, depending on its position.
+
+
+
+for 2layer_noff_sparsev:
+this only gets about 98% accuracy
+[22, 21,  7,  1, 21,  7, 15, 21, 11, 15, 21, 11,  4, 21,  1, 18, 21, 18, 11, 23,  7,  4, 20,  7]
+the output of the first attention layer is sparse. the indices of the nonzero element are as follows:
+row 0: [1, 4, 7, 11, 15, 18, 20, 21, 22, 23] (the first three EDGE_PREFIX_TOKENs, then the 4th source vertex, then the 5th target vertex, then the 6th target vertex, then the path vertices)
+row 1: [21] (the 2nd path vertex)
+row 2: [7, 21] (the 3rd EDGE_PREFIX_TOKEN)
+row 3: [1, 7, 21] (the 1st and 3rd EDGE_PREFIX_TOKENs, and the 2nd path vertex)
+row 4: [1, 7, 21]
+row 5: [1, 7, 21]
+row 6: [1, 7, 15, 21] (the 1st and 3rd EDGE_PREFIX_TOKENs, the 5th target vertex, and the 2nd path vertex)
+row 7: [1, 7, 15, 21]
+row 8: [1, 7, 11, 15, 21] (the 1st and 3rd EDGE_PREFIX_TOKENs, the 4th source vertex, the 5th target vertex, and the 2nd path vertex)
+row 9: [1, 7, 11, 15, 21]
+row 10: [1, 7, 11, 15, 21]
+row 11: [1, 7, 11, 15, 21]
+row 12: [1, 4, 7, 11, 15, 21] (the first three EDGE_PREFIX_TOKENs, then the 4th source vertex, then the 5th target vertex, and the 2nd path vertex)
+row 13: [1, 4, 7, 11, 15, 21]
+row 14: [1, 4, 7, 11, 15, 21]
+row 15: [1, 4, 7, 11, 15, 18, 21] (the first three EDGE_PREFIX_TOKENs, then the 4th source vertex, then the 5th target vertex, then the 6th target vertex, and the 2nd path vertex)
+row 16: [1, 4, 7, 11, 15, 18, 21]
+row 17: [1, 4, 7, 11, 15, 18, 21]
+row 18: [1, 4, 7, 11, 15, 18, 21]
+row 19: [1, 4, 7, 11, 15, 18, 21, 23] (the first three EDGE_PREFIX_TOKENs, then the 4th source vertex, then the 5th target vertex, then the 6th target vertex, the 2nd path vertex, and the last path vertex)
+row 20: [1, 4, 7, 11, 15, 18, 21, 23]
+row 21: [1, 4, 7, 11, 15, 18, 21, 23]
+row 22: [1, 4, 7, 11, 15, 18, 20, 21, 23] (the first three EDGE_PREFIX_TOKENs, then the 4th source vertex, then the 5th target vertex, then the 6th target vertex, the 1st path vertex, the 2nd path vertex, and the last path vertex)
+row 23: [1, 4, 7, 11, 15, 18, 20, 21, 23]
+
+the first feedforward layer, however, is dense
+
+the output of the second attention layer is almost sparse.
+
+
+2layer_noff_noprojv:
+the output of the 1st attention layer is sparse and identical to the previous analysis
+the output of the linear layer is dense again
+
+
+2layer_noff_noprojv_nolinear:
+only converges to ~92%
+the output of the 1st attention layer is sparse and identical to the previous analysis
+the 2nd attention matrix looks sparse:
+row 1: is sparse with [0] nonzero
+row 1: is sparse with [1] nonzero
+row 2: is sparse with [2] nonzero
+row 3: is sparse with [3] nonzero
+row 4: [2, 3] are large (1st source vertex, 1st target vertex)
+row 5: is sparse with [3] nonzero
+row 6: is sparse with [1] nonzero
+row 7: is sparse with [1] nonzero
+row 8: [3, 4, 6, 7] are large (1st target vertex, 2nd EDGE_PREFIX_TOKEN, 2nd target vertex, 3rd EDGE_PREFIX_TOKEN)
+row 9: [1, 7, 8] are large (1st EDGE_PREFIX_TOKEN, 3rd EDGE_PREFIX_TOKEN, 3rd source vertex)
+row 10: is sparse with [1] nonzero
+row 11: [9, 10] are large (3rd target vertex, 4th EDGE_PREFIX_TOKEN)
+row 12: [1, 12] are large (1st EDGE_PREFIX_TOKEN, 4th target vertex)
+row 13: is sparse with [1] nonzero
+row 14: [12, 13] are large (4th target vertex, 5th EDGE_PREFIX_TOKEN)
+row 15: [12, 13] are large (4th target vertex, 5th EDGE_PREFIX_TOKEN)
+row 16: is sparse with [1] nonzero
+row 17: [12, 16] are large (4th target vertex, 6th EDGE_PREFIX_TOKEN)
+row 18: [12, 13, 16] are large (4th target vertex, 5th and 6th EDGE_PREFIX_TOKENs)
+row 19: [12] is large (4th target vertex)
+row 20: [2] is large (first source vertex), rest are small except [3]
+row 21: [13, 18, 19] are large, [1, 2, 3, 4, 5, ~7, 15, 17, 21] are small, rest are uniform
+row 22: is sparse with [1] nonzero
+row 23: [3, 6, 7, 9] are large, [1, 2, 15, 17, 20, 21, 22, 23] are small, the rest are uniform (the large ones are the first 3 target vertices, plus the 3rd EDGE_PREFIX_TOKEN)
+NOTE: the first two edges are valid
+
+the model predicts vertex 1 at the end, but 15 is very close behind
+
+
+for the input
+[22, 22, 22, 22, 22, 22, 22, 21, 14, 16, 21, 17, 14, 21, 18,  5, 21,  5, 17, 23, 18, 16, 20, 18]
+and model 2layer_noff_noprojv_nolinear:
+the output of the 1st attention layer looks like
+row 23: [5, 14, 16, 17, 18, 20, 21, 23] (pad, 3rd source vertex, 4th EDGE_PREFIX_TOKEN, 4th target vertex, 2nd path vertex, last path vertex)
+
+for the input
+[22, 22, 22, 22, 22, 22, 21, 14, 16, 21, 17, 14, 21, 18,  5, 21,  5, 17, 23, 18, 16, 20, 18,  5]
+and model 2layer_noff_noprojv_nolinear:
+the output of the 1st attention layer looks like
+row 23: [5, 14, 16, 17, 18, 20, 21, 23] (pad, 3rd source vertex, 4th
+
+for the input
+[21,  7,  1, 21,  7, 15, 21, 11, 15, 21, 11,  4, 21,  1, 18, 21, 18, 11, 23,  7,  4, 20,  7,  1]
+and model 2layer_noff_noprojv_nolinear:
+the output of the 1st attention layer looks like
+row 23: [1, 4, 7, 11, 15, 18, 20, 21, 23] (all 6 source vertices, 2nd path vertex, 3rd path vertex, last path vertex)
+
+
+after adding absolute position info concatenated, the attention-only model was able to learn the task perfectly.
+for the input
+[ 0,  1,  2,  3,  4,  5,  6,  7,  8,  9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]
+[22, 21,  7,  1, 21,  7, 15, 21, 11, 15, 21, 11,  4, 21,  1, 18, 21, 18, 11, 23,  7,  4, 20,  7]
+the output of the 1st attention layer looks sparse:
+row 0: [1, 4, 7, 11, 15, 18, 51, 60] are large (first 3 EDGE_PREFIX_TOKENs, 4th source vertex, 5th and 6th target vertices, position emb at 3. position emb at 12)
+row 1: [49] is large (in the hidden space)
+row 2: [49] is large
+row 3: [21, 49] are large (5th EDGE_PREFIX_TOKEN, query target vertex)
+row 4: [1, 7, 50, 51] are large
+row 5: [1, 7, 21, 49, 51, 52, 53] are large
+row 6: [1, 7, 15, 50, 51, 54] are large
+row 7: [7, 50, 53] are large
+row 8: [1, 15, 51, 54] are large
+row 9: [1, 7, 11, 50, 51, 53, 56] are large
+row 10: [7, 11, 53, 56] are large
+row 11: [1, 7, 15, 50, 51, 57] are large
+row 12: [11, 15, 54, 59] are large
+row 13: [7, 11, 53, 56] are large
+row 14: [4, 15, 57, 60] are large
+row 15: [1, 4, 18, 51, 60, 63] are large
+row 16: [7, 11, 50, 53, 56] are large
+row 17: [1, 4, 15, 51, 57, 60] are large
+row 18: [1, 4, 18, 51, 60, 63] are large
+row 19: [15, 54] are large
+row 20: [1, 7, 11, 50, 51] are large
+row 21: [11, 56, 59] are large
+row 22: [1, 15, 51, 54, 57] are large
+row 23: [1, 4, 11, 51, 59, 60] are large
+
+we only have a layer normalization and a nonlinearity layer for the feedforward component, but its output is similar (after adding back the original input):
+row 0: [22, 48, 51]
+row 1: [21, 49]
+row 2: [7, 21, 49, 50]
+row 3: [1, 21, 49, 51]
+row 4: [1, 7, 21, 50, 51, 52]
+row 5: [1, 7, 51, 53]
+row 6: [1, 15, 50, 51, 54] -> 1 has weight 1.48, 15 has weight 3.16, 50 has weight 1.42, 51 has weight 5.80, 54 has weight 10.96
+row 7: [7, 21, 53, 55]
+row 8: [1, 11, 15, 51, 54, 56]
+row 9: [1, 7, 15, 50, 51, 53, 56, 57]
+row 10: [7, 11, 21, 53, 56, 58]
+row 11: [1, 7, 11, 50, 51, 57, 59]
+row 12: [4, 11, 59, 60]
+row 13: [11, 21, 56, 61]
+row 14: [1, 4, 57, 60, 62]
+row 15: [4, 18, 51, 60, 63]
+row 16: [7, 11, 21, 50, 53, 56, 64]
+row 17: [4, 18, 51, 57, 60, 65]
+row 18: [4, 11, 18, 51, 60, 63, 66]
+row 19: [15, 23, 54, 67]
+row 20: [1, 7, 50, 51, 68]
+row 21: [4, 11, 56, 59, 69]
+row 22: [15, 20, 51, 54, 57, 70]
+row 23: [4, 7, 11, 51, 59, 60] -> 4 has weight 1.19, 7 has weight 3.11, 11 has weight 1.11, 51 has weight 1.62, 59 has weight 1.74, 60 has weight 2.31
+
+the attention matrix in the 2nd attention layer looks like:
+row 23: [6] has weight 0.54, [8] has weight 0.05, [14] has weight 0.25, [15] has weight 0.05, [17] has weight 0.04, [18] has weight 0.04, [22] has weight 0.02
+the model, at this point, has computed the index of the correct vertex (6) and now only needs to copy its value
+so how does the model compute this?
+well Q*K^T also looks very similar, except in an unnormalized (and scaled) log space
+we can look at the key/query projections as a quadratic form
+Q = x*P_q^T + b_q
+K = x*P_k^T + b_k
+we can modify the above into a single matrix multiplication by concatenating a column of 1s to the end of x, and concatenating b_q as a new column of P_q; call this matrix U_q. similarly define U_k, so:
+Q = x*U_q^T, K = x*U_k^T
+therefore, Q*K^T = (x*U_q^T)*(x*U_k^T)^T = x*U_q^T*U_k*x^T
+let A = U_q^T*U_k
+note the value of [x*A*x^T]_{23,6} = 78.09, this is the dot product of x_23 and [A*x^T]_{:,6}. the largest contribution to this dot product comes from x_{23,59}*[A*x^T]_{59,6} = 48.05.
+considering the other grouping, [x*A*x^T]_{23,6} is also the dot product of (x*A) and x^T. the largest contribution to this dot product comes from (x*A)_{23,54}*[x^T]_{54,6} = 58.43 and (x*A)_{23,72}*[x^T]_{72,6} = 60.11, but notice the latter is the affine contribution, so it is constant across all rows.
+in general, (x*A)_23 has few large positive values: at indices [20, 48, 50, 54, 57, 63, 64, 72] (query source vertex, which is equal to the current vertex, padding token, position emb of 1st source vertex, which is equal to the current vertex, position emb of 2nd target vertex, whose source is equal to the current vertex, 3rd target vertex, )
+
+so going one step back, why is [x^T]_{54,6} = x_{6,54} so large, and why is x_{23,59} so large? well x_{6,54} is large because that comes from the position encoding. x_{23,59} seems to be large for many different inputs.
+
+NOTE: the following are useful commands for computing the above matrices
+k_params = {k:v for k,v in self.proj_k.named_parameters()}
+q_params = {k:v for k,v in self.proj_q.named_parameters()}
+P_k = k_params['weight']
+P_q = q_params['weight']
+U_k = torch.cat((P_k,k_params['bias'].unsqueeze(1)),1)
+U_q = torch.cat((P_q,q_params['bias'].unsqueeze(1)),1)
+A = torch.matmul(U_q.transpose(-2,-1),U_k)
+input_prime = torch.cat((input, torch.ones((24,1))), 1)
+QK = torch.matmul(torch.matmul(input_prime, A), input_prime.transpose(-2,-1)) / math.sqrt(72)
+attn = QK
+attn += mask.type_as(attn) * attn.new_tensor(-1e4)
+attn = self.attn.dropout(attn.softmax(-1))
+
+OR if debugging from TransformerLayer:
+k_params = {k:v for k,v in self.transformers[1].attn.proj_k.named_parameters()}
+q_params = {k:v for k,v in self.transformers[1].attn.proj_q.named_parameters()}
+f_params = {k:v for k,v in self.transformers[0].ff.named_parameters()}
+P_k = k_params['weight']
+P_q = q_params['weight']
+P_f = f_params['3.weight']
+U_k = torch.cat((P_k,k_params['bias'].unsqueeze(1)),1)
+U_q = torch.cat((P_q,q_params['bias'].unsqueeze(1)),1)
+U_f = torch.cat((P_f,f_params['3.bias'].unsqueeze(1)),1)
+U_f = torch.cat((U_f,nn.functional.one_hot(torch.LongTensor([72]))),0)
+A = torch.matmul(U_q.transpose(-2,-1),U_k)
+B = torch.matmul(torch.matmul(U_f.transpose(-2,-1),A),U_f)
+
+let's look a bit more carefully at the A matrix in the first attention layer. the input x is sparse. consider an input vector x (this is a single row of x_prime). this vector will be sparse, having a 1 at the index corresponding to its value i, its position 48 + j, and the last index 72 for the bias term. thus, x*A is he sum of the rows of A: A[i,:] + A[48+j,:] + A[72,:].
+
+for the input
+[ 0,  1,  2,  3,  4,  5,  6,  7,  8,  9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]
+[22, 22, 22, 22, 22, 22, 22, 21, 14, 16, 21, 17, 14, 21, 18,  5, 21,  5, 17, 23, 18, 16, 20, 18]
+the output of the last attention layer is:
+row 0: [5, 14, 22, 60] (pad token, 3rd source vertex, PATH_PREFIX_TOKEN, position emb at 12)
+row 1: [17, 18, 22, 62, 68] (4th source vertex, 4th target vertex, PATH_PREFIX_TOKEN, position emb at 20)
+row 2: [20, 21, 22, 55, 58, 61, 70] (query source vertex, query target vertex, PATH_PREFIX_TOKEN, position emb at 13, 16, 19, 22)
+row 3: [20, 70]
+row 4: [21, 22, 23, 58, 61, 67]
+row 5: [14, 21, 22, 53, 56]
+row 6: [16, 17, 22, 54, 57, 59]
+row 7: [21, 55]
+row 8: [14, 21, 55, 56]
+row 9: [14, 56]
+row 10: [14, 56]
+row 11: [14, 16, 56, 57]
+row 12: [17, 59]
+row 13: [14, 56]
+row 14: [14, 16, 57, 60]
+row 15: [5, 14, 60, 63]
+row 16: [14, 56]
+row 17: [14, 16, 57, 60]
+row 18: [5, 14, 60, 63]
+row 19: [14, 17, 56, 59]
+row 20: [14, 17, 59]
+row 21: [14, 17, 59]
+row 22: [16, 57]
+row 23: [5, 14, 17, 56, 59, 60] are large
+
+we only have a layer normalization and a nonlinearity layer for the feedforward component, but its output is similar:
+row 0: [22, 48, 51]
+row 1: [18, 22, 49, 62]
+...
+row 15: [5, 14, 60, 63]
+row 16: [14, 21, 56, 64]
+row 17: [5, 14, 57, 60, 65]
+row 18: [5, 14, 17, 60, 63, 66]
+row 19: [17, 23, 56, 59, 67]
+row 20: [16, 18, 57, 68]
+row 21: [16, 17, 59, 69] are large
+row 22: [16, 20, 57, 70] are large
+row 23: [14, 18, 56, 59, 60] are large
+
+thet output of the 2nd attention layer is:
+...
+row 23: [5, 14] are large (not as negative as other values)
+(only 23 is relevant here since this is the last layer and the logits are taken from the last row)
+Q: how does the attention layer compute 5? (this is the correct answer)
+the attention matrix in the 2nd attention layer looks like:
+row 23: [15] has weight 0.84, [17] has weight 0.02, [18] has weight 0.09, [22] has weight 0.01
+so the network, at this point, has computed the index of the correct vertex, and now only needs to copy the value from that index
+why? Q*K^T looks very similar, except in an unnormalized (and scaled) logspace
+but Q and K each look dense and difficult to interpret
+
+Q*K^T = (X*P_q + b_q)*(X*P_k + b_k)^T = (X*P_q + b_q)*(P_k^T*X^T + b_k^T) = X*P_q*(P_k^T*X^T + b_k^T) + b_q*(P_k^T*X^T + b_k^T)
+ = X*P_q*P_k^T*X^T + X*P_q*b_k^T + b_q*P_k^T*X^T + b_q*b_k^T
+[X*P_q*P_k^T*X^T]_ij = \sum_a [X*P_q*P_k^T]_ia [X^T]_aj = \sum_a \sum_b [X]_ib [P_q*P_k^T]_ba [X^T]_aj
+this is a quadratic form, and so it has a unique orthogonal diagonalization
+
+
+training on a dataset with more examples of shorter paths seems to remove the dependence on the property that the solution vertex must appear more than once in the input (regardless of whether it appears along the query path).
+for this trained model, we try the following input:
+[ 0,  1,  2,  3,  4,  5,  6,  7,  8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]
+[22, 21,  7, 15, 21,  4,  1, 21, 11, 2, 21, 11,  4, 21,  4, 19, 21, 18, 11, 23,  7,  4, 20,  7]
+
+before the second attention layer, the input is sparse:
+row 1: [21, 49, 72] are large
+row 2: [7, 49, 50, 72] are large
+row 3: [15, 51, 72] are large
+row 4: [7, 21, 50, 52, 72] are large
+row 5: [4, 15, 50, 51, 53, 72] are large
+row 6: [1, 54, 72] are large
+row 23: [4,  7, 11, 51, 53, 56, 57, 59, 60, 62, 63, 65, 71, 72] are large-ish
+
+after multiplying by A, x[23,:]*A looks sparse: most values are close to 0, except [51, 71, 72] -> 51 is the position encoding (i.e. 3) for the correct vertex. so how does x[23,:]*A calculate the correct position encoding?
+the information must be encoded in x[23,:] somehow since A is independent of the input.
+
+trying the input:
+[ 0,  1,  2,  3,  4,  5,  6,  7,  8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]
+[22, 21,  4,  1, 21, 11,  2, 21, 11, 4, 21,  4, 19, 21, 18, 11, 21,  7, 15, 23,  7,  4, 20,  7]
+
+before the second attention layer, the input is sparse:
+row 1: [21, 49, 72] are large
+row 2: [4, 21, 49, 50, 72] are large
+row 14: [18, 60, 62, 72] are large
+row 15: [11, 60, 63, 72] are large
+row 16: [4, 11, 21, 50, 56, 64, 72] are large
+row 17: [7, 19, 60, 62, 63, 65, 72] are large
+row 18: [11, 15, 60, 63, 66, 72] are large
+row 19: [1, 4, 21, 23, 50, 51, 59, 61, 67, 72] are large
+row 23: [4, 7, 50, 51, 53, 56, 57, 59, 60, 62, 63, 71, 72] are large
+
+after multiplying by A, x[23,:]*A also looks mostly sparse: most values are close to 0, except [3, 54, 60, 66, 72] with weights 3:0.86, 54:0.79, 60:3.08, 66:2.14, 72:14.95
+note that 54 is the positional encoding for 6 (2nd target vertex), 60 is the positional encoding for 12 (4th target vertex), 66 is the positional encoding for 18 (6th target vertex and the correct answer), 72 is the translation/bias term which is the same across all rows. so it seems like x[23,:]*A is computing the positions of the target vertices.
+looking at A[:,66] more closely, it seems to contain three sections: one sparse region where only 0, 1, 13, 15, 18 are large, then a dense region where 21-48 are large, then a sparse region where 50, 53, 56, 59, 62, 63, 66, 68 are large. the third region are position encodings for indices 2, 5, 8, 11, 14, 15, 18, 20; these correspond to the first 5 source vertices, the 5th and 6th target vertices, the query source vertex; interestingly, A[65,66] is very negative (-4.76) and this multiplies with a small negative number in input_prime[65] to produce a relatively large positive contribution to (x*A)[23,66]. in fact, much of the off-diagonal in the lower-right block of A (i.e. A[i-1,i] has fairly large negative values, suggesting that it is shifting the indices of the input by 1 and negating it)
+in fact, looking at the negative values in input_prime[23,:], the indices beyond 48 that are less than -0.02 are: 49, 52, 55, 58, 61, 64, 65, 67, 68, 69, which correspond to the first 6 EDGE_PREFIX_TOKENs and the QUERY_PREFIX_TOKEN, and the 6th source vertex (i.e. the valid edge). so it seems like the negative values of the input store the position encodings of the input that matches the current vertex.
+
+looking at the other off-diagonal elements of A, we see that A[i-1,i] is negative for i in {48,49,50,51,53,54,56,57,59,60,61,62,63,64,65,66,68,69}.
+but for i in {52,55,58,67,70,71,72}, A[i-1,i] is positive (and sometimes very large too). perhaps a different circuit is doing the computation when the target vertex is at those positions.
+
+going further back in the network, we see that the output of the first attention layer seems to have 3 levels of values: most position encoding elements are very small and close to zero, some of the position encoding elements are very large, and only one is medium-scale which is 65 (the position encoding of the source vertex of the valid edge; i.e. matching the current vertex)
+
+the first attention matrix is also similar:
+row 23 also has 3 levels of values. most are very small (e.g. a[23,1] = 0.0041), some (at 2, 3, 5, 6, 8, 9, 11, 12, 14, 15, 18) are very large (e.g. a[23,11] = 0.1313), and some (17, 21, 22) are in-between (e.g. a[23,17] = 0.0115). and this pattern continues even after the feedforward network, though after the nonlinearity, the small values become negative, the middle values become slightly negative, and the large values become positive.
+
+question: how does the network avoid matching the query? this is impossible since if the current vertex is the start vertex, and the network only needs to learn to avoid matching with elements at indices -1, -2, -3, and -4 (i.e. 23, 22, 21, 20). We can see this by computing the A matrix for the first attention layer: A[i,i] is ~around -16 for all i in {0,1,...,19} but for i in {20, 21, 22}, A[i,i] has a small positive value.
+
+but what about those large non-negative off-diagonal elements of the second A matrix? well actually, if we provide the input
+[22, 22, 21, 19,  2, 21, 11, 4, 21,  4, 19, 21, 2, 13, 21,  7, 4, 23,  7,  13, 20,  7, 4, 19]
+the model mispredicts 13 (the correct answer is 2)
+
+but if we instead give the input (changing just the target query vertex)
+[22, 22, 21, 19,  2, 21, 11, 4, 21,  4, 19, 21, 2, 13, 21,  7, 4, 23,  7,  2, 20,  7, 4, 19]
+the model correctly predicts 2. so the model is using the heuristic that the target query vertex is the answer. but i think this can only happen when the path is long (at least 4 vertices), and in this case, under the training distribution, its very likely for the next vertex to coincide with the last vertex in the path.
+
+inspecting the heuristic further: the second attention matrix is indeed putting a lot of weight on index 19 (the target query vertex). most of this comes from A[57,67], A[60,67], A[61,67], which are large and positive. the input to the second attention layer has corresponding values in the last row: 57:0.24, 60:0.78, 61:1.04. notice that the heuristic is only triggered when the target vertex is at positions 52,55,58,67, the target query vertex *must* appear at position 67. hence, the heuristic is indeed copying the value of the target query vertex (but not by actually computing the position of the target query vertex).
+
+
+training with ReLU instead of GeLU, the output of the nonlinearity cannot be negative. but the network still seems to learn a negative off-diagonal A matrix for the 2nd attention layer. it seems to be encoding the index of the matching vertex as having a value close to zero, whereas all other indices have relatively larger positive values. thus, multiplying the input with the A matrix with a negative off-diagonal will produce negative values unless the input is close to zero. this could be due to the residual connections since if the index of the matching vertices were encoded as positive values, they would compete with the positive values from the residual connections.
+
+adding the linear and dropout layers to the feedforward component, i ran training for 2160 epochs (saved to 'checkpoints_2layer_noprojv/epoch2160.pt').
+
+the model with a dense feedforward layer is much more difficult to interpret.
+let f(x) be the output of the first attention and FF layers. we want to see if some information about x can be decoded from f(x). for any function g: X -> C, we say g is *linearly decodable* from f(x) if:
+  there exists an A, b, and lookup table M, such that for all x in X, M(A*f(x) + b) = g(x)
+
+so for any two x,y in X such that g(x) = g(y), we have A*f(x) + b = A*f(y) + b, or A*f(x) = A*f(y), or A*(f(x) - f(y)) = 0. thus, f(x) - f(y) is in Null(A). can we say anything about nullity(A) or rank(A)? i dont think so, because you could have x and y such that g(x) != g(y) but A*f(x) = k*A*f(y) for some constant k. so the rank could be small than the number of classes.
+
+suppose we take all x in X such that g(x) = c for some c. A*f(x) + b is the same across all such x, and so
+1/n * \sum_x (A*f(x) + b) = A*(1/n \sum_x f(x)) + b
+
+since 1/n \sum_x f(x) in Null(A), then for any y such that g(y) = c, f(y) - 1/n \sum_x f(x) = 0
+
+let f(x) be the output of the first attention layer without residual connections. so x + f(x) is the output of the first attention layer with residuals. g(x + f(x)) is the output of the FF layer without residuals.
+  so x + f(x) + g(x + f(x)) is the output of the FF layer with residuals, and is the input to the second attention layer. f(x) is actually the first attention matrix multiplied by the input: f(x) = M*x. so the input to the second attention matrix is actually: x + M*x + g(x + M*x)
+  let A be the A second matrix as defined above. then the second attention matrix is computed as (x + M*x + g(x + M*x)) * A * (x + M*x + g(x + M*x))^T. we only care about the last row of the second attention matrix, so we only want to compute:
+  (x[-1,:] + M[-1,:]*x + g(x + M*x)[-1,:]) * A * (x + M*x + g(x + M*x))^T
+  so the question is how is position information encoded in the vector x[-1,:] + M[-1,:]*x + g(x + M*x)[-1,:]? well x is the sum of the token 1-hot vector and the position 1-hot vector: x = t + p, so we're interested in the sum:
+  t[-1,:] + p[-1,:] + M[-1,:]*t + M[-1,:]*p + g(t + p + M*t + M*p)[-1,:]
+  = t[-1,:] + p[-1,:] + M[-1,:]*t + M[-1,:]*p + g(t + p + M*t + M*p)[-1,:]
+
+since the last linear layer seems to be close to the negative identity for the dense FF model, lets try training the same model but without the last linear layer (in 'checkpoints_2layer_noprojv_nolinear/epoch*').
+
+========
+
+Trying to decipher more precisely how the attention-only model is encoding the solution. specifically, how does it avoid the issue with residual connections causing the output of the second attention matrix to compute with the original token encoding. For the ReLU attention-only model, the QK matrix (in the computation of the first attention matrix) seems to help solve this: QK[-1,-1] is very negative, whereas QK[-2,-2], QK[-3,-3], QK[-4,-4], QK[-5,-5], QK[-6,-6] are closer to 0, and QK[-7,-7] is relatively positive. so the diagonal elements corresponding to the special token positions are pushed close to zero after the softmax.
+
+why is QK[-7,-7] so large? it seems to come from the position encoding (x[-7,:]*A)[65] is 53, whereas x[-7,65] is 1, so their product is 53. the reason why (x[-7,:]*A)[65] is so large is due to the A[65,65] being 48.70.
+
+for the dense FF 2-layer transformer, we found a matrix and bias vector that (for some inputs) transforms the intermediate x (after the FF layer) into a 1-hot vector of positions. Call this matrix M and bias b_M. So if x were transformed using M and b_M, to continue processing the second attention layer, we first would need to undo M:
+x*M + b+M -> 1-hot positions of matching vertices
+
+previously:
+Q = x*P_q^T + b_q
+K = x*P_k^T + b_k
+QK = (x*P_q^T + b_q)*(x*P_k^T + b_k)^T = (x*U_q^T)*(x*U_k^T)^T = x*(U_q^T*U_k)*x^T = x*A*x^T
+
+but now:
+Q = (x - b_M)*(M^T)^-1*P_q^T + b_q = x*(M^T)^-1*P_q^T - b_M*(M^T)^-1*P_q^T + b_q
+K = (x - b_M)*(M^T)^-1*P_k^T + b_k = x*(M^T)^-1*P_k^T - b_M*(M^T)^-1*P_k^T + b_k
+QK = (x*(M^T)^-1*P_q^T - b_M*(M^T)^-1*P_q^T + b_q)*(x*(M^T)^-1*P_k^T - b_M*(M^T)^-1*P_k^T + b_k)^T
+   = (x*V_q^T)*(x*V_k)^T = x*(V_q^T*V_k)*x^T
+   where V_q is a matrix containing P_q*M^-1 with an extra column of -b_M*(M^T)^-1*P_q^T + b_q
+   and V_k is a matrix containing P_k*M^-1 with an extra column of -b_M*(M^T)^-1*P_k^T + b_k
+
+tfm_params = {k:v for k,v in self.model.named_parameters()}
+P_k = tfm_params['transformers.1.attn.proj_k.weight']
+b_k = tfm_params['transformers.1.attn.proj_k.bias']
+P_q = tfm_params['transformers.1.attn.proj_q.weight']
+b_q = tfm_params['transformers.1.attn.proj_q.bias']
+decoder_params = {k:v for k,v in self.decoder.named_parameters()}
+M = decoder_params['weight']
+b_M = decoder_params['bias']
+V_k = torch.cat((torch.linalg.solve(M,P_k,left=False), (b_k - torch.matmul(torch.linalg.solve(M,b_M),P_k.transpose(0,1))).unsqueeze(1)),1)
+V_q = torch.cat((torch.linalg.solve(M,P_q,left=False), (b_q - torch.matmul(torch.linalg.solve(M,b_M),P_q.transpose(0,1))).unsqueeze(1)),1)
+A = torch.matmul(V_q.transpose(-2,-1),V_k)
+input_prime = torch.cat((input, torch.ones((24,1))), 1)
+QK = torch.matmul(torch.matmul(input_prime, A), input_prime.transpose(-2,-1)) / math.sqrt(72)
+
+
+Looking into model trained with shortest path objective. The following is the first test input where there are more valid edges than "best" edges and the last vertex is not among the valid edges.
+[22, 21, 17, 14, 21, 17,  5, 21, 17,  2, 21,  5, 12, 21, 14,  5, 21,  2, 12, 23, 17, 12, 20, 17]
+
+incorrect:
+[22, 21,  2, 14, 21, 18,  2, 21,  7, 16, 21, 13, 18, 21, 14,  7, 23, 13, 16, 20, 13, 18,  2, 14]
+[22, 22, 22, 21,  6,  3, 21, 17,  6, 21, 17,  3, 21, 17,  2, 21,  3,  2, 23, 17,  2, 20, 17,  6]
+[21,  1, 18, 21, 13,  7, 21,  4, 18, 21,  7,  1, 21,  7,  4, 21,  7,  3, 23, 13,  1, 20, 13,  7]
+[22, 22, 22, 22, 22, 22, 21,  8, 18, 21,  8, 13, 21, 18, 13, 21, 13,  1, 23,  8,  1, 20,  8, 18]
+[22, 22, 22, 21,  9, 16, 21, 19,  3, 21, 19,  5, 21, 14, 19, 21,  3,  9, 23, 14, 16, 20, 14, 19]
+[22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 21, 16,  2, 21, 16, 17, 21, 17,  7, 23, 16,  7, 20, 16]
+[22, 22, 21, 11,  2, 21, 11, 14, 21, 16,  9, 21,  9, 11, 21,  2,  8, 23, 16, 14, 20, 16,  9, 11]
+[22, 21, 16,  2, 21, 16,  4, 21,  9, 16, 21,  9,  2, 21,  9, 13, 21,  2, 11, 23,  9, 11, 20,  9]
+[21, 10,  3, 21,  3, 15, 21,  3,  5, 21,  6, 10, 21,  6,  5, 21, 15,  5, 23, 10,  5, 20, 10,  3]
+[21, 16, 11, 21, 11,  3, 21,  6, 16, 21,  6, 15, 21,  2,  6, 21,  2, 11, 23, 16,  3, 20, 16, 11]
+[22, 22, 22, 21, 17, 19, 21, 17,  5, 21, 17, 12, 21,  5, 12, 21, 19,  5, 23, 17, 12, 20, 17, 19]
+[22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 21, 10, 17, 21, 10,  4, 21,  4,  7, 23, 10,  7, 20, 10]
+
+
+new graph generation procedure that more efficiently generates graphs with higher lookahead: first generate a "fork" graph, where from the start vertex, there are two paths of length k, and the goal is at the end of one of the two paths. then for the remaining vertices, select parent vertices randomly from the existing vertices in the graph. k is the lookahead, so if lookahead == 1, the goal is connected to the start vertex (1-hop). if the lookahead == 0, there is only one valid edge from the start vertex.
+
+generating 100k examples, the histogram of lookaheads looks like:
+0:0.20, 1:0.26, 2:0.27, 3:0.27
+
+
+
+[22, 21,  7,  1, 21,  6,  8, 21,  6,  7, 21,  1, 12, 21,  8, 14, 21, 14, 18, 23,  6, 18, 20,  6]
+
+[ 0,  1,  2,  3,  4,  5,  6,  7,  8,  9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]
+[22, 21,  5, 19, 21, 11,  5, 21, 10,  3, 21,  4, 10, 21,  9,  4, 21,  9, 11, 23,  9,  3, 20,  9]
+ 9 ->  4 -> 10 ->  3
+ 9 -> 11 ->  5 -> 19
+
+1st attention layer is sparse but the significant elements don't follow any discernable pattern.
+2nd attention layer has a strong positive diagonal in the top left 24x24 portion of the A matrix. this is a matching operation
+ - the attention matrix is copying row 9 into row 21 (corresponding to the edge 10->3)
+ - after the attention layer, the intermediate result is in position 12 and is sparse, with high activation at both 4 and 10 (though slightly more at 10)
+3rd attention layer has a strong positive diagonal immediately below the main diagonal in the bottom-right portion of the A matrix. this is a decrement position operation
+ - for the input, at the beginning of this layer, the intermediate result is stored in position 12 and is sparse, with high activation at both 4 and 10 (though slightly more at 10)
+4th attention layer has weak positive values in the diagonals immediately above and below the main diagonal in the bottom-right 24x24 portion of the A matrix. some of these values seem to be redundant with the 3rd attention layer, where it decrements position by one (at indices 51,59,60,62,63,66). the values in the other off-diagonal corresponds to indices where position is incremented by one (at indices 61 and 64). one index (68) is a decrement operation but is not redundant in the 3rd attention layer.
+ - for the input, at the beginning of this layer, the intermediate result is stored in position 21 with high activation at 3 (the goal) and slightly less high at 10. row 12 has high activation at 10 and slightly less high at 4
+ - the attention matrix copies mostly from 12 but also a bit from 11,17,21, and a even less from 8,9.
+ - after the attention layer, the intermediate result is in position 21 and is sparse, with high activation at 10 (and slightly less high at 3)
+5th attention layer has weak positive values in the diagonals immediately above and below the main diagonal in the bottom-right 24x24 portion of the matrix, indicating that it is incrementing or decrementing positions (depending on the index)
+ - for the input, at the beginning of this layer, row 12 contains
+ - the activation matrix copies row 15 into row 15, and row 12 into row 21 (corresponding to the edge 4->10)
+ - why is row 12 selected to copy into 21? the dot product of (input'[21,:]*A) and input'[12,:] is particularly large at indices 56,59,60. row 12 of the input has high activation at 4,10,41,55,56,59,60. why is (input'[21,:]*A) large at 56,59,60? (input'[21,:]*A) is large at 56 because A[56,56] and A[57,56] are large. (input'[21,:]*A) is large at 59 because A[60,59] is large. (input'[21,:]*A) is large at 60 because A[60,60] is large. so this layer is doing a backwards step.
+ - after the attention layer, row 21 has high activation at 10; row 15 has high activation at 4 (and slightly less high activation at 9)
+6th attention layer has a weak negative diagonal in the top left 24x24 portion of the A matrix. this is a matching operation where the matched tokens are represented by having small magnitudes (i.e. negative/inverse encoding). it turns out the bottom-right 24x24 portion of the A matrix contains very weak positive diagonal immediately below the main diagonal, indicating that this matrix is doing a decrement position operation but only for some indices.
+ - row 21 has high activation at 10; row 15 has high activation at 4 (and slightly less high activation at 9)
+ - the attention matrix copies from row 15 to row 21 (corresponding to the 9->4 edge)
+ - after the attention layer, row 21 has high activation at 4
+ - in the FF layer, for the parts of the input that are positive after the first linear layer, we can describe the behavior of the FF layer by simply multiplying the two linear layers. doing so for this layer, we find that the FF layer has a fairly strong positive diagonal, and so it seems like an identity operation. some diagonal elements have not as large magnitude, and most off-diagonal elements have non-negligible magnitude too.
+7th attention layer is sparse but the significant elements don't follow any discernable pattern.
+ - in the FF layer, the product of the two linear weight matrices is also similar to the identity, but there are some significant off-diagonal elements (so perhaps its better described as a permutation that is similar but not the same as the identity). notably, it seems that for the token 4, the largest contribution comes from row 33 of the input.
+ - for this input, the attention matrix copies from row 21 to row 21, 22, and 23. before the attention layer, row 21 has high activation at 4
+ - after the attention layer, row 21 and 23 has high activation at 4
+8th attention layer is sparse but the significant elements don't follow any discernable pattern.
+ - at the beginning of the attention layer, row 23 has high activation at 4
+ - the computed attention matrix just copies from 21 into all other rows, whose argmax is 4 (the correct answer)
+ - interestingly, the elements of the Q*K^T matrix are so negative that they essentially ignore the decoder mask
+
+can FF layers implement matching? it seems the model is using row 21 to store intermediate results before layer 8; where does it store information about intermediate vertices in other layers?
+
+results from trace_circuit.py:
+attention layer 0: identity
+attention layer 1: token matching
+attention layer 2: step backwards
+attention layer 3: step backwards for some positions, identity for others
+attention layer 4: step backwards
+attention layer 5: step backwards
+attention layer 6: copy from row 21 to 23
+attention layer 7: copy from row 21 to 23
+
+this seems to rely on the heuristic that the goal vertex is in position 21. what about an input where this is not the case?
+
+[ 0,  1,  2,  3,  4,  5,  6,  7,  8,  9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]
+[21, 14,  2, 21, 14, 12, 21,  2, 12, 21,  2, 10, 21, 12,  6, 21, 12, 10, 23, 14, 10, 20, 14,  2]
+
+attention layer 0: identity
+attention layer 1: copy from row 19 to 21 (seems to be specific to token 20)
+attention layer 2: step backwards
+attention layer 3: identity
+attention layer 4: copy from row 20 to 21 (seems to be specific to position 21)
+attention layer 5: copy from row 20 to 21 (seems to be specific to position 21)
+attention layer 6: copy from row 21 to 23
+attention layer 7: copy from row 21 to 23
+
+the model here is finding the goal vertex and copying it. what if the lookahead is > 1?
+
+[ 0,  1,  2,  3,  4,  5,  6,  7,  8,  9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]
+[22, 22, 22, 21, 14,  3, 21, 14,  6, 21, 18, 14, 21,  3,  1, 21,  6, 16, 23, 18,  1, 20, 18, 14]
+
+attention layer 0: identity
+attention layer 1: token matching
+attention layer 2: step backwards (this copies the representation of 1 from row 20 to 21)
+attention layer 3: step backwards for some positions, identity for others
+attention layer 4: step backwards
+attention layer 5: step backwards for some positions, identity for others
+attention layer 6: copy from 21 to 23
+attention layer 7: copy from 21 to 23
+
+interesting, so here it uses the first backwards step to copy the goal vertex representation from position 20 to 21, and then it continues to keep the intermediate result in position 21 and continue with the backwards search.
+
+
+[ 0,  1,  2,  3,  4,  5,  6,  7,  8,  9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47]
+[46, 45,  3, 19, 45, 18, 39, 45, 36, 15, 45, 24, 42, 45, 37,  3, 45, 37, 36, 45, 23, 32, 45,  8, 24, 45, 19, 30, 45, 15, 23, 45, 39, 40, 45, 40, 34, 45, 30, 18, 45, 32,  8, 47, 37, 34, 44, 37]
+ 37 -> 3 -> 19 -> 30 -> 18 -> 39 -> 40 -> 34
+ 37 -> 36 -> 15 -> 23 -> 32 -> 8 -> 24 -> 42
+
+last layer (attention layer 4) copies row 32 to 47, but row 47 has strong activation of token 3 before and after this layer. row 32 has strong activation at 3,36.
+attention layer 3 copies 2,18,26,35,38,46 into row 47.
+before attention layer 3, row 47 has high activation at (28),(58),(85),(91),95
+  row 2 has high activation at 3,63,72,84,91 -> positions of 3,24,34,47
+  row 18 has high activation at 36,37,45,71,72,91 -> positions of 8,24,47
+  row 26 has high activation at 3,45,63,72,84,91 -> positions of 3,24,34,47
+  row 35 has high activation at 18,39,40,45,48,72,76,80,83 -> positions of 46,24,45,39,40 (seems to be encoding vertices reachable to 40)
+  row 38 has high activation at 3,58,71,74,91 -> positions of 45,8,19,47
+  row 46 has high activation at 3,45,62,63,71,72 -> positions of 37,3,8,24
+attention layer 1:
+  copies row 26 into 38 with weight 0.995 -> step backward
+  copies rows 38,43 into row 5 with weights 0.83,0.14 respectively -> step backward (mostly)
+  copies row 2 into 26 with weight 0.873 -> step backward
+  copies row 14 into 2 with weight 0.467 -> step backward (mostly)
+  copies row 32 into 5 with weight 0.928 -> step backward
+  copies row 35 into 45 with weight 0.800 -> step backward
+attention layer 2:
+  copies row 32 into 45 -> step backward
+  copies row 38 into 32 -> step backward
+at the beginning of attention layer 3: row 45 contains vertices reachable to 34 in 3 steps, and row 38 contains vertices reachable to 30 in 3 steps (including 37 and 3), and row 32 contains vertices reachable to 39. this is possible because it's using the set merge algorithm for the first 3 layers (so the number of reachable vertices goes from 1, 2, to 4). in attention layer 3, row 38 is copied into 0,47. and row 45 is copied into 0,11,12,41,42. why is row 38 copied into 47 here? because:
+  Attention layer 3 is copying row 38 into row 47 with weight 0.10488934069871902 because:
+    Row 38 at index 58 has value 1.3306366205215454
+    Row 47 at index 46 has value -3.5128743648529053, and A[46,58]=-0.4384665787220001
+    Row 47 at index 88 has value -0.955220639705658, and A[88,58]=-0.7076801061630249
+    Row 38 at index 91 has value 1.253493309020996
+    Row 47 at index 46 has value -3.5128743648529053, and A[46,91]=-0.44504329562187195
+    Row 47 at index 85 has value 0.5910719633102417, and A[85,91]=1.015777587890625
+    Row 47 at index 88 has value -0.955220639705658, and A[88,91]=-0.8286808729171753
+    Row 47 at index 96 has value 1.0, and A[96,91]=0.7197601199150085
+  -> this looks like a heuristic.
+
+
+example of lookahead = 6:
+[ 0,  1,  2,  3,  4,  5,  6,  7,  8,  9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47]
+[46, 46, 46, 46, 46, 46, 46, 45, 31, 39, 45, 42,  4, 45, 21,  7, 45, 19, 20, 45, 13, 22, 45,  7, 42, 45, 20, 21, 45, 17, 19, 45, 17, 31, 45, 10, 14, 45, 39, 10, 45, 14, 13, 47, 17,  4, 44, 17]
+17 -> 31 -> 39 -> 10 -> 14 -> 13 -> 22
+17 -> 19 -> 20 -> 21 -> 7 -> 42 -> 4
+
+model correctly predicts 19.
+attention layer 4 copies row 45 to 47. (row 45 is the goal vertex)
+attention layer 3 copies rows 38,39 into 45. (these rows correspond to the edge 39 -> 10) row 38 has high activation for 31 and 39 which are reachable from 39 with 1 step, but also has high activation at 20 (which is on the other branch). row 39 has high activation for 10,14,19,20,31 (31 is 2 steps behind 10, 14 is 1 step ahead of 10, but 19 and 20 are on the other branch)
