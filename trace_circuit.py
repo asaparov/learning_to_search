@@ -308,7 +308,6 @@ if __name__ == "__main__":
 	position_dim = 48
 	embedding_dim = 96
 
-
 	min_path_length = 2
 	lookahead_steps = None
 	distance_from_start = None

@@ -1,5 +1,6 @@
 from random import sample, randrange, choice, shuffle, seed, uniform
-from os.path import isfile
+from os import listdir, makedirs
+from os.path import isfile, isdir
 from sys import stdout
 import pickle
 import numpy as np
@@ -247,10 +248,10 @@ def evaluate_model(model, max_input_size, min_path_length=2, distance_from_start
 	#MAX_FREQ_PER_BUCKET = 0.30
 	while total_predictions < num_samples:
 		while True:
-			num_vertices = randrange(min_vertices, 19)
+			num_vertices = randrange(min_vertices, (max_input_size - 5) // 3)
 			if lookahead_steps != None:
-				num_vertices = max(num_vertices, min(lookahead_steps * 2 + 1 + randrange(0, 3), 19))
-			g, start, end, paths = generate_example(num_vertices, 4, max_input_size - 5, get_shortest_paths=False, lookahead=lookahead_steps)
+				num_vertices = max(num_vertices, min(lookahead_steps * 2 + 1 + randrange(0, 3), (max_input_size - 5) // 3))
+			g, start, end, paths = generate_example(num_vertices, 4, (max_input_size - 5) // 3, get_shortest_paths=False, lookahead=lookahead_steps)
 			if paths != None and min([len(path) for path in paths]) > min_path_length:
 				break
 
@@ -370,28 +371,29 @@ def unique(x):
 			y.append(e)
 	return y
 
-if __name__ == "__main__":
-	seed(1)
-	torch.manual_seed(1)
-	np.random.seed(1)
+def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidden_dim, bidirectional, absolute_pos_emb, learnable_token_emb, toeplitz_attn):
+	seed(seed_value)
+	torch.manual_seed(seed_value)
+	np.random.seed(seed_value)
 
-	max_input_size = 64
 	QUERY_PREFIX_TOKEN = max_input_size - 1
 	PADDING_TOKEN = max_input_size - 2
 	EDGE_PREFIX_TOKEN = max_input_size - 3
 	PATH_PREFIX_TOKEN = max_input_size - 4
-	dataset_size = 10000000
 	num_generated = 0
 	inputs = np.empty((dataset_size, max_input_size), dtype=np.int64)
 	outputs = np.empty(dataset_size, dtype=np.int64)
 	lookahead_step_histogram = [0] * max_input_size
 	path_length_histogram = [0] * max_input_size
-	MAX_FREQS_PER_BUCKET = [0.12, 0.12, 0.12, 0.13, 0.13, 0.13, 0.13, 0.13, 0.0]
+	MAX_FREQS_PER_BUCKET = [0] * max_input_size
+	for i in range(max_lookahead + 1):
+		MAX_FREQS_PER_BUCKET[i] = 1/(max_lookahead+1)
+	MAX_FREQS_PER_BUCKET[max_lookahead] += 0.05
 	#path_lengths = [0] * max_input_size
 	#total_path_lengths = 0
 	#MAX_PATH_LENGTH_BUCKET = 0.4
 	valid_outputs = []
-	train_filename = 'useful_path_results/train{}.pkl'.format(dataset_size)
+	train_filename = 'useful_path_results/train{}_inputsize{}_maxlookahead{}_seed{}.pkl'.format(dataset_size, max_input_size, max_lookahead, seed_value)
 	if isfile(train_filename):
 		# check if we've already generated the training data
 		print("Loading training data from '{}'...".format(train_filename))
@@ -402,11 +404,10 @@ if __name__ == "__main__":
 		# we haven't generated the training data yet, so generate it here
 		while num_generated < dataset_size:
 			while True:
-				#g, start, end, paths = generate_example(randrange(3, 7), 4, max_input_size - 5)
-				lookahead = choice([i for i in range(len(MAX_FREQS_PER_BUCKET)) if num_generated == 0 or lookahead_step_histogram[i] / num_generated < MAX_FREQS_PER_BUCKET[i]])
-				num_vertices = randrange(6, 19)
-				num_vertices = max(num_vertices, min(lookahead * 2 + 1 + randrange(0, 3), 19))
-				g, start, end, paths = generate_example(num_vertices, 4, max_input_size - 5, lookahead=lookahead)
+				lookahead = choice([i for i in range(max_lookahead + 1) if num_generated == 0 or lookahead_step_histogram[i] / num_generated < MAX_FREQS_PER_BUCKET[i]])
+				num_vertices = randrange(6, (max_input_size-5) // 3)
+				num_vertices = max(num_vertices, min(lookahead * 2 + 1 + randrange(0, 3), (max_input_size-5) // 3))
+				g, start, end, paths = generate_example(num_vertices, 4, (max_input_size - 5) // 3, lookahead=lookahead)
 				if paths != None and min([len(path) for path in paths]) > 1:
 					break
 
@@ -491,16 +492,27 @@ if __name__ == "__main__":
 	train_data = DummyDataset(inputs, outputs, device)
 	train_loader = DataLoader(train_data, batch_size=1024, shuffle=True)
 
+	# compute the checkpoint filenames and try to resume from the last one
+	filename = 'useful_path_results/checkpoints_{}layer_inputsize{}_maxlookahead{}_seed{}_train{}'.format(nlayers, max_input_size, max_lookahead, seed_value, dataset_size)
+	if bidirectional:
+		filename += '_nomask'
+	if not absolute_pos_emb:
+		filename += '_noAPE'
+	if learnable_token_emb:
+		filename += '_learntokemb'
+	if toeplitz_attn:
+		filename += '_toeplitz'
+	if isdir(filename):
+		existing_epochs = [int(ckpt[(ckpt.rfind('epoch') + len('epoch')):-len('.pt')]) for ckpt in listdir(filename) if ckpt.startswith('epoch')]
+	else:
+		existing_epochs = []
+		makedirs(filename)
+
 	ntoken = max_input_size
-	d_model = 32
 	nhead = 1
-	d_hid = 64
-	nlayers = 5
-	#class_num = 32
+	d_hid = max_input_size + hidden_dim
 	dropout = 0
-	#model = TransformerModel(ntoken, d_model, nhead, d_hid, nlayers, class_num, dropout)
-	from sys import argv
-	if len(argv) == 1:
+	if len(existing_epochs) == 0:
 		model = Transformer(
 				layers=nlayers,
 				pad_idx=PADDING_TOKEN,
@@ -510,28 +522,19 @@ if __name__ == "__main__":
 				dims=max(max_input_size,d_hid),
 				rate=1,
 				dropout=dropout,
-				bidirectional=True,
-				absolute_pos_emb=True,
-				learn_token_emb=False,
-				diagonal_attn=False)
+				bidirectional=bidirectional,
+				absolute_pos_emb=absolute_pos_emb,
+				learn_token_emb=learnable_token_emb,
+				diagonal_attn=toeplitz_attn)
 		epoch = 0
 		model.to(device)
 	else:
-		filepath = argv[1]
-		epoch = int(filepath[(filepath.rfind('epoch') + len('epoch')):-len('.pt')]) + 1
-		model = torch.load(argv[1], map_location=device)
-	'''model = GPT2LMHeadModel(GPT2Config(
-				vocab_size_or_config_json_file=ntoken,
-				n_positions=max_input_size,
-				n_ctx=max_input_size,
-				n_embd=32,
-				n_layer=2,
-				n_head=2,
-				layer_norm_epsilon=1e-5,
-				initializer_range=0.02))'''
+		last_epoch = max(existing_epochs)
+		epoch = last_epoch + 1
+		model = torch.load(filename + '/epoch{}.pt'.format(last_epoch), map_location=device)
 
 	loss_func = CrossEntropyLoss(ignore_index=PADDING_TOKEN, reduction='mean')
-	optimizer = SophiaG((p for p in model.parameters() if p.requires_grad), lr=1.0e-3)
+	optimizer = SophiaG((p for p in model.parameters() if p.requires_grad), lr=1.0e-4)
 
 	log_interval = 1
 	eval_interval = 1
@@ -559,12 +562,11 @@ if __name__ == "__main__":
 			optimizer.step()
 
 		if epoch % save_interval == 0:
-			filename = 'useful_path_results/checkpoints_5layer_64inputlen_relu_nomask_lookaheadnormalized6_train10M/epoch{}.pt'.format(epoch)
-			if len(argv) <= 1 or filename != argv[1]:
-				print('saving to "{}".'.format(filename))
-				torch.save(model, filename)
-				print('done saving model.')
-				stdout.flush()
+			ckpt_filename = filename + '/epoch{}.pt'.format(epoch)
+			print('saving to "{}".'.format(ckpt_filename))
+			torch.save(model, ckpt_filename)
+			print('done saving model.')
+			stdout.flush()
 
 		if epoch % log_interval == 0:
 			print("epoch = {}, loss = {}".format(epoch, epoch_loss))
@@ -581,3 +583,40 @@ if __name__ == "__main__":
 			stdout.flush()
 
 		epoch += 1
+
+if __name__ == "__main__":
+	import argparse
+	def parse_bool_arg(v):
+		if isinstance(v, bool):
+			return v
+		elif v.lower() in ('yes', 'true', 'y', 't', '1'):
+			return True
+		elif v.lower() in ('no', 'false', 'n', 'f', '0'):
+			return False
+		else:
+			raise argparse.ArgumentTypeError('Boolean value expected.')
+
+	parser = argparse.ArgumentParser()
+	parser.add_argument("--max-input-size", type=int)
+	parser.add_argument("--dataset-size", type=int)
+	parser.add_argument("--max-lookahead", type=int)
+	parser.add_argument("--nlayers", type=int)
+	parser.add_argument("--hidden-dim", type=int)
+	parser.add_argument("--seed", type=int, default=1)
+	parser.add_argument("--bidirectional", type=parse_bool_arg, required=True, metavar="'y/n'")
+	parser.add_argument("--absolute-pos-emb", type=parse_bool_arg, required=True, metavar="'y/n'")
+	parser.add_argument("--learn-tok-emb", type=parse_bool_arg, required=True, metavar="'y/n'")
+	parser.add_argument("--toeplitz-attn", type=parse_bool_arg, required=True, metavar="'y/n'")
+	args = parser.parse_args()
+
+	train(
+		max_input_size=args.max_input_size,
+		dataset_size=args.dataset_size,
+		max_lookahead=args.max_lookahead,
+		seed_value=args.seed,
+		nlayers=args.nlayers,
+		hidden_dim=args.hidden_dim,
+		bidirectional=args.bidirectional,
+		absolute_pos_emb=args.absolute_pos_emb,
+		learnable_token_emb=args.learn_tok_emb,
+		toeplitz_attn=args.toeplitz_attn)
