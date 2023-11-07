@@ -165,7 +165,8 @@ class TransformerTracer:
 				ff_parameters.append((None, None, None, None))
 			#print(x[-1,:])
 		attn_inputs.append(x)
-		prediction = torch.argmax(x[-1,:]).tolist()
+		token_dim = self.model.token_embedding.shape[0]
+		prediction = torch.argmax(x[-1,:token_dim]).tolist()
 
 		# work backwards and identify which inputs contributed most to the output
 		representations = [(n-1,prediction,True)]
@@ -195,20 +196,14 @@ class TransformerTracer:
 			new_representations = []
 			visited_row_copies = []
 			def add_representation(row, sign):
-				if not sign:
-					return
 				for new_element in torch.nonzero(attn_input[row] > 0.5 * torch.max(attn_input[row])).tolist():
 					new_element = new_element[0]
 					if (row,new_element,sign) not in new_representations:
-						if row == 12:
-							import pdb; pdb.set_trace()
 						new_representations.append((row,new_element,sign))
 			def add_representation_with_element(row, element, sign):
-				if not sign:
-					return
 				if (row,element,sign) not in new_representations:
 					new_representations.append((row,element,sign))
-			#import pdb; pdb.set_trace()
+			import pdb; pdb.set_trace()
 			for row, element, sign in representations:
 				for j in range(n):
 					if not attn_matrices[i][row,j] > 0.10:
@@ -221,25 +216,29 @@ class TransformerTracer:
 						continue
 					visited_row_copies.append((row,j))
 					#add_representation(j,sign)
+					if sign == True and element not in torch.nonzero(attn_input[row,:] > 0.4 * torch.max(attn_input[row,:])):
+						add_representation_with_element(j,element,sign)
+					if sign == False and element not in torch.nonzero(attn_input[row,:] < 0.4 * torch.min(attn_input[row,:])):
+						add_representation_with_element(j,element,sign)
 					if not quiet:
 						print('Attention layer {} is copying row {} into row {} with weight {} because:'.format(i,j,row,attn_matrices[i][row,j]))
 					# determine why row j is being copied from
 					attn_input_prime = torch.cat((attn_input, torch.ones((n,1))), 1)
 					right_products = torch.matmul(attn_input_prime[row,:], A_matrices[i]) * attn_input_prime[j,:]
 					step_conditions = []
-					for right_index in torch.nonzero(right_products > torch.max(right_products) - 1.0).tolist():
+					for right_index in torch.nonzero(right_products[:-1] > torch.max(right_products[:-1]) - 1.0).tolist():
 						right_index = right_index[0]
 						if attn_input_prime[j,right_index] > 0.0:
 							add_representation_with_element(j,right_index,True)
 							right_sign = True
 						else:
-						#	add_representation_with_element(j,right_index,False)
+							add_representation_with_element(j,right_index,False)
 							right_sign = False
 						left_products = attn_input_prime[row,:] * A_matrices[i][:,right_index].reshape(1,-1)[0]
-						if len(torch.nonzero(left_products > torch.max(left_products) - 1.0)) > 10:
-							continue
 						if not quiet:
 							print('  Row {} at index {} has value {}'.format(j, right_index, attn_input_prime[j,right_index]))
+						if len(torch.nonzero(left_products > torch.max(left_products) - 1.0)) > 10:
+							continue
 						for left_index in torch.nonzero(left_products > torch.max(left_products) - 1.0).tolist():
 							left_index = left_index[0]
 							if not quiet:
@@ -274,6 +273,8 @@ class TransformerTracer:
 					else:
 						print('  In row {}, value at index {} is small.'.format(row,element))
 
+		return prediction
+
 
 if __name__ == "__main__":
 	seed(1)
@@ -300,16 +301,17 @@ if __name__ == "__main__":
 	#input = [22, 22, 22, 21, 14,  3, 21, 14,  6, 21, 18, 14, 21,  3,  1, 21,  6, 16, 23, 18,  1, 20, 18, 14]
 	#input = [46, 45,  3, 19, 45, 18, 39, 45, 36, 15, 45, 24, 42, 45, 37,  3, 45, 37, 36, 45, 23, 32, 45,  8, 24, 45, 19, 30, 45, 15, 23, 45, 39, 40, 45, 40, 34, 45, 30, 18, 45, 32,  8, 47, 37, 34, 44, 37]
 	#input = [46, 46, 46, 46, 46, 46, 46, 45, 31, 39, 45, 42,  4, 45, 21,  7, 45, 19, 20, 45, 13, 22, 45,  7, 42, 45, 20, 21, 45, 17, 19, 45, 17, 31, 45, 10, 14, 45, 39, 10, 45, 14, 13, 47, 17,  4, 44, 17]
-	#input = torch.LongTensor(input).to(device)
-	#tracer.trace(input, quiet=False)
-	#import pdb; pdb.set_trace()
+	input = [62, 62, 62, 62, 62, 61, 15,  8, 61, 11, 18, 61,  9,  5, 61, 19, 14, 61, 19, 17, 61,  1, 11, 61,  6,  7, 61, 10,  3, 61,  2,  1, 61, 13, 10, 61, 12,  4, 61, 17, 16, 61,  7, 12, 61, 14,  2, 61,  3,  9, 61, 16, 15, 61, 18,  6, 61,  8, 13, 63, 19,  5, 60, 19]
+	input = torch.LongTensor(input).to(device)
+	prediction = tracer.trace(input, quiet=False)
+	import pdb; pdb.set_trace()
 
-	token_dim = 48
-	position_dim = 48
-	embedding_dim = 96
+	token_dim = tfm_model.token_embedding.shape[0]
+	position_dim = (tfm_model.positional_embedding.shape[0] if tfm_model.positional_embedding != None else 0)
+	embedding_dim = tfm_model.token_embedding.shape[1] + position_dim
 
 	min_path_length = 2
-	lookahead_steps = None
+	lookahead_steps = 9
 	distance_from_start = None
 	distance_from_end = None
 
@@ -322,7 +324,10 @@ if __name__ == "__main__":
 	total_predictions = 0
 	while total_predictions < num_samples:
 		while True:
-			g, start, end, paths = generate_example(randrange(min_vertices, 14), 4, position_dim - 5, get_shortest_paths=False, lookahead=lookahead_steps)
+			num_vertices = randrange(min_vertices, (position_dim - 5) // 3)
+			if lookahead_steps != None:
+				num_vertices = max(num_vertices, min(lookahead_steps * 2 + 1 + randrange(0, 3), (position_dim - 5) // 3))
+			g, start, end, paths = generate_example(num_vertices, 4, (position_dim - 5) // 3, get_shortest_paths=False, lookahead=lookahead_steps)
 			if paths != None and min([len(path) for path in paths]) > min_path_length:
 				break
 
@@ -374,7 +379,7 @@ if __name__ == "__main__":
 
 			input = [PADDING_TOKEN] * (position_dim - len(partial_path)) + partial_path
 			input = torch.LongTensor(input).to(device)
-			tracer.trace(input)
+			prediction = tracer.trace(input)
 			total_predictions += 1
 
 

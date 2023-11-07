@@ -29,7 +29,7 @@ def perturb_vertex_ids(input, fix_index, num_examples, max_input_size):
 		out_labels[i] = out[i,fix_index+1]
 	return out, out_labels
 
-def run_model(model, input, max_input_size):
+def run_model(model, input, max_input_size, num_perturbations=2**14):
 	if len(input) > max_input_size:
 		raise ValueError("Input length must be at most 'max_input_size'.")
 	device = next(model.parameters()).device
@@ -43,7 +43,7 @@ def run_model(model, input, max_input_size):
 	padded_input = torch.LongTensor(padded_input).to(device)
 	print("running model on input")
 	print(padded_input)
-	perturbed_input, perturbed_output = perturb_vertex_ids(padded_input, 14, 2**14, max_input_size)
+	perturbed_input, perturbed_output = perturb_vertex_ids(padded_input, 14, num_perturbations, max_input_size)
 	predictions, _ = model(perturbed_input)
 	import pdb; pdb.set_trace()
 	if len(predictions.shape) == 3:
@@ -56,9 +56,9 @@ def run_model(model, input, max_input_size):
 		print(predictions)
 		print("prediction: {}\n".format(torch.argmax(predictions)))
 
-seed(2)
-torch.manual_seed(2)
-np.random.seed(2)
+seed(1)
+torch.manual_seed(1)
+np.random.seed(1)
 
 if True or not torch.cuda.is_available():
 	print("ERROR: CUDA device is not available.")
@@ -76,8 +76,10 @@ if os.path.isfile(argv[1]):
 	#run_model(model, [22, 21,  5, 19, 21, 11,  5, 21, 10,  3, 21,  4, 10, 21,  9,  4, 21,  9, 11, 23,  9,  3, 20,  9], max_input_size=24)
 	#run_model(model, [22, 22, 22, 22, 22, 22, 22, 21, 1,  2, 21,  1,  4, 21,  2,  3, 21, 4,  5, 23,  1,  3, 20, 1], max_input_size=24)
 	#run_model(model, [46, 45,  3, 19, 45, 18, 39, 45, 36, 15, 45, 24, 42, 45, 37,  3, 45, 37, 36, 45, 23, 32, 45,  8, 24, 45, 19, 30, 45, 15, 23, 45, 39, 40, 45, 40, 34, 45, 30, 18, 45, 32,  8, 47, 37, 34, 44, 37], max_input_size=48)
+	#run_model(model, [62, 62, 62, 62, 62, 61, 12, 18, 61, 27,  9, 61, 43, 34, 61, 34, 48, 61, 46,  5, 61, 47, 27, 61, 26, 39, 61, 16,  4, 61,  5, 16, 61, 39, 19, 61, 48, 47, 61, 18, 59, 61,  4, 57, 61, 57, 12, 61, 14, 26, 61, 14, 58, 61, 19, 43, 61, 58, 46, 63, 14,  9, 60, 14], max_input_size=64, num_perturbations=1)
 
-	evaluate_model(model, max_input_size=48, min_path_length=2, distance_from_start=None, distance_from_end=None, lookahead_steps=7, print_progress=True)
+	max_input_size = model.token_embedding.shape[0]
+	evaluate_model(model, max_input_size=max_input_size, min_path_length=2, distance_from_start=None, distance_from_end=None, lookahead_steps=9, print_progress=True)
 
 elif os.path.isdir(argv[1]):
 	import matplotlib
