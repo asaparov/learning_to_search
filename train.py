@@ -534,7 +534,7 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 		model = torch.load(filename + '/epoch{}.pt'.format(last_epoch), map_location=device)
 
 	loss_func = CrossEntropyLoss(ignore_index=PADDING_TOKEN, reduction='mean')
-	optimizer = SophiaG((p for p in model.parameters() if p.requires_grad), lr=1.0e-4)
+	optimizer = SophiaG((p for p in model.parameters() if p.requires_grad), lr=1.0e-4, weight_decay=0.1)
 
 	log_interval = 1
 	eval_interval = 1

@@ -56,9 +56,9 @@ def run_model(model, input, max_input_size, num_perturbations=2**14):
 		print(predictions)
 		print("prediction: {}\n".format(torch.argmax(predictions)))
 
-seed(1)
-torch.manual_seed(1)
-np.random.seed(1)
+seed(2)
+torch.manual_seed(2)
+np.random.seed(2)
 
 if True or not torch.cuda.is_available():
 	print("ERROR: CUDA device is not available.")
@@ -79,7 +79,7 @@ if os.path.isfile(argv[1]):
 	#run_model(model, [62, 62, 62, 62, 62, 61, 12, 18, 61, 27,  9, 61, 43, 34, 61, 34, 48, 61, 46,  5, 61, 47, 27, 61, 26, 39, 61, 16,  4, 61,  5, 16, 61, 39, 19, 61, 48, 47, 61, 18, 59, 61,  4, 57, 61, 57, 12, 61, 14, 26, 61, 14, 58, 61, 19, 43, 61, 58, 46, 63, 14,  9, 60, 14], max_input_size=64, num_perturbations=1)
 
 	max_input_size = model.token_embedding.shape[0]
-	evaluate_model(model, max_input_size=max_input_size, min_path_length=2, distance_from_start=None, distance_from_end=None, lookahead_steps=9, print_progress=True)
+	evaluate_model(model, max_input_size=max_input_size, min_path_length=2, distance_from_start=None, distance_from_end=None, lookahead_steps=7, print_progress=True)
 
 elif os.path.isdir(argv[1]):
 	import matplotlib
