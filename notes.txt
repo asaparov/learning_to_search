@@ -585,6 +585,65 @@ interestingly, if we change only the goal vertex in the input from 4 to 5, the i
 layer 4 copies rows 27,28,33,48 into 63
   the reason for this is because 189 is small at all these rows
   these correspond to tokens 10,3,13,3 respectively, which are all on the correct path (and importantly, in the latter portion of the path)
-layer 3 copies 61 into 5,8,11,14,...
+layer 3 copies 61 into 5,8,11,14,..., and 6,51,52 into 27, and 6,45,63 into 28, and 40,51 into 33, and 6 into 48
   the input to layer 3 has many rows where 189 is small (e.g. 5,8,11,14,... mostly corresponding to placeholder tokens)
   the reason 61 was copied was that A[187,62] is large
+  the reason why 6,40,45,51,52,63 are copied is because they have large activation at 191
+
+following the pathway where 17 is large, they seem to be localized to the beginning of the fork 19 -> 17 (only activating vertices 19,17,16,15). so then how does the network know that this path eventually leads to the goal 5?
+ -> well in attention layer 4, rows 27,28,33,48 have large activation at 17. they are copied because they have small activation at 189. the rows correspond to vertices 10,3,13 which are the on the middle-to-latter portion of the correct path to the goal. why is 17 copied into these rows? why are these the only rows with low activation at 189 at the input to attention layer 4? for example, why do the rows corresponding to vertices 6,7,18 (on the other side of the fork from 10,3,13) not have low activation at 189? these rows are 24,55,25,42,10,54.
+ -> FF layer 3 actually causes rows 24,55,25,42,10,54 to have high activation at 189 (specifically its second linear layer). this FF layer seems to copy activation from element 79 into 189, and copy low activation at 62 into high activation at 189. before FF layer 3, rows 27,28,33,48 are not the only ones with low activation at 189. it seems that it is changing other rows to have higher activation at 189.
+  - doing perturbation analysis on FF layer 3, increasing element 79 to 2.5 causes the largest increase in 189, which suggests that if the input at 79 is low, then 189 will be low. but this is not sufficient, as many other rows also have low activation at 79. decreasing element 60 to -2.5 causes the largest increase in 189, which suggests that if the input at 60 is high, then 189 will be low. but again this is not sufficient, as many other rows have high activation at 60. but these two effects together almost perfectly produces low activation at 189. specifically, the input rows where activation 79 is less than -1.0 and activation 60 is greater than 1.3 are: 27,28,33,48,63. row 63 element 79 is -4.8, and element 60 is 1.7, but then why does it have low activation at 189 after FF layer 3? well perturbing the input row 63 at element 94 to have value -3.5 causes a large decrease in the activation at 189. and so a large value at 94 will cause a larger activation at 189. in fact, row 63 has the largest activation at 94.
+  - so it seems FF layer 3 is performing a set intersection operation: the input rows with activation at 79 < -1.0, activation at 60 > 1.3, and activation at 94 < 0.7 will become the output rows with low activation at 189. the question how is, what are these input sets and where do they come from? see further below for deeper exploration into this.
+ -> attention layer 3 copies 17 from rows 6,51,52,40,19,39 into 27,28,33,48 due to the high activation at 191 at rows 6,51,52,40,19,39 (these rows correspond to the vertices 15,16,17 which are in the beginning part of the correct path), and low activation at 189 in rows 27,28,33,48.
+  - attention layer 3 is also copying row 61 into 24,55,25,42,10,54 (and every other row except 12,13,27,28,33,48,49,63). why? it seems to be due to multiple conditions. for rows 24,55,25 (and others) the activation at 145 in these rows is large, and the activation at 45 in row 61 is large.
+ -> is FF layer 2 altering the representation at 191? the activation at 191 in row 51 (for example) is increased quite a lot at FF layer 2. but even before, there is moderate activation at 191.
+
+how do we "undo" the transformation at the FF layer?
+what is the derivative of [A2^T]_i * f(A1^T * x + b1) + b2_i w.r.t. x?
+  d/dx([A2^T]_i * f(A1^T * x + b1) + b2_i)
+  = [A2^T]_i * d/dx(f(u)) where u = A1^T * x + b1
+  = [A2^T]_i * df(u)/du * du/dx
+  = [A2^T]_i * df(u)/du * A1^T
+  f : R^n -> R^n, where f(u)_i = u_i if u_i > 0, else 0. df(u)/du is a matrix where [df(u)/du]_ij = df(u)_i/du_j = 1 if i = j and u_i > 0, else [df(u)/du]_ij = 0
+i think something like this:
+  torch.matmul(torch.matmul(ff_parameters[2][1][:,51], torch.diag(1.0 * (self.model.transformers[2].ff[0](self.model.transformers[2].ln_ff(ff_inputs[2][51,:])) > 0.0))), ff_parameters[2][0].T)
+which can be approximated by the difference formula:
+  diff = (self.model.transformers[2].ff(self.model.transformers[2].ln_ff(ff_inputs[2][51,:] + 1.0e-4*torch.eye(192))) - self.model.transformers[2].ff(self.model.transformers[2].ln_ff(ff_inputs[2][51,:])))[:,191] / 1.0e-4
+another approach which might be better is a perturbation test; something like:
+  self.model.transformers[2].ff(self.model.transformers[2].ln_ff(ff_inputs[2][51,:].repeat(193,1).fill_diagonal_(0.0)))[:,191]
+
+ -> the high activation at 191 of rows 6,51,52,40,19,39 at the beginning of attention layer 3 is due to:
+  - row 51 has high activation at 60 and low activation at 188,189
+  - rows 6,52,40,19,39 has high activation at 191
+ -> attention layer 3 copies row 39 into 6 (the representation of vertex 17 is copied into that of vertex 15 due to the backwards set union step)
+  - copies row 39 into 52 (again the representation of vertex 17 is copied into that of vertex 15)
+  - copies row 19 into 40 (the representation of vertex 17 is copied into that of vertex 16)
+  - copies row 62 into 19 (the representation of the path prefix token into that of vertex 17) because 19 has low activation at 79 and 62 has high activation at 60 (the path prefix token)
+  - copies row 62 into 39 (the representation of the path prefix token into that of vertex 17) because 39 has low activation at 79 and 62 has high activation at 60 (the path prefix token)
+ -> attention layer 2 copies row 57 into 27 (the representation of vertex 8 into that of vertex 10 due to the backwards set union step)
+  - copies row 33 into 28 (the representation of vertex 13 into that of vertex 3)
+  - copies row 6 into 33 (the representation of vertex 15 into that of vertex 13)
+  - copies row 33 into 48 (the representation of vertex 13 into that of vertex 3)
+  - at this point, rows 27,28,33,48,57,33 have low activation at 189 (along with many other rows)
+ -> attention layer 1 copies row 51 into 6 (the representation of vertex 16 into vertex 15 due to the backwards step)
+  - copies row 33 into 27 (the representation of vertex 13 into that of vertex 10)
+  - copies row 6 into 57 (the representation of vertex 15 into that of vertex 8)
+  - copies row 57 into 33 (the representation of vertex 8 into that of vertex 13)
+  - copies row 27 into 28 (the representation of vertex 10 into that of vertex 3)
+  - copies row 27 into 48 (the representation of vertex 10 into that of vertex 3)
+  - at this point, rows 27,28,33,48,57,33,6,51 have low activation at 189 (along with many other rows)
+ -> FF layer 0 seems to provide all indices with low activation at 189 via the bias term of the second linear layer
+
+ -> going back to how FF layer 3 is performing a set intersection operation: the input rows with activation at 79 < -1.0, activation at 60 > 1.3, and activation at 94 < 0.7 will become the output rows with low activation at 189. the question how is, what are these input sets and where do they come from?
+  - we can follow rows 27,28,33,48. attention layer 3 performs the following copies: 6,51,52 -> 27, 6,45,63 -> 28, 40,51 -> 33, 6 -> 48. these copies are performed because rows 27,28,33,48 have low activation at 189, whereas the source rows have high activation at 191. the tokens with high activation at 191 are the goal vertex, the source vertex, and all vertices reachable from the source vertex with 3 hops (along both paths). the tokens with activation at 79 < -1.0 is the same set, except without the goal vertex. the tokens with activation at 60 > 1.3 are 19,10,3,13, plus a bunch of placeholder tokens. it seems the set of vertices with low activation at 189 is fairly broad, spanning both paths:
+  - the set of vertices with activation at 189 < -1.86: 19,2,16,1,11,8,18,13,6,10,7,3,9,4,5
+  - the set of vertices with activation at 189 < -2.25: 3,4,9,11,18,19 (it's possible the subsequent computation is dominated by the signal at row 28, corresponding to vertex 3)
+  - but interestingly, other vertices in this set seem to copy exclusively from row 61 in this attention layer. the last three vertices in the other path are 6,7,12. 6 appears in rows 24,55; 7 appears in 25,42; 12 appears in 36,43. all of these rows copy exclusively from row 61. why? for rows 24,55,25,36,43, this is due to high activation at 145 at these rows and high activation at 45 at row 61. the rows with activation at 145 > 1.2 are the start vertex and the last 4 vertices on the wrong path, except the very last vertex.
+ -> how different does this look when we switch the goal vertex to the other path? it seems the computation from this point to the end is the same. the vertices with large activation at 60 in the input to FF layer 3 are those that are near the end of the correct path (as well as the placeholder tokens). attention layer 3 copies row 61 into rows 27,28,33,48 (corresponding to the vertices near the end of the other, now incorrect path).
+  -
+
+so the reconstructed algorithm is as follows:
+attention layer 0 does matching (positive for non-placeholder tokens and negative for placeholder tokens)
+attention layer 1 and 2 do backwards steps
+attention layer 3 copies vertices reachable from the starting vertex (i.e. with large activation at 191) into rows 61 and 63
