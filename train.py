@@ -87,8 +87,8 @@ def generate_graph(num_vertices, max_num_parents, max_vertex_id):
 	shuffle(vertices)
 	return vertices
 
-def generate_graph_with_lookahead(num_vertices, max_num_parents, max_vertex_id, lookahead):
-	num_vertices = max(num_vertices, 1 + 2 * lookahead)
+def generate_graph_with_lookahead(num_vertices, max_num_parents, max_vertex_id, lookahead, num_paths):
+	num_vertices = max(2, num_vertices, 1 + num_paths * lookahead)
 
 	vertices = []
 	for i in range(num_vertices):
@@ -101,13 +101,15 @@ def generate_graph_with_lookahead(num_vertices, max_num_parents, max_vertex_id, 
 		vertices[i].children.append(vertices[1 + i])
 	index = 1 + lookahead
 	if lookahead != 0:
-		vertices[1 + lookahead].parents.append(vertices[0])
-		vertices[0].children.append(vertices[1 + lookahead])
-		other_branch_length = lookahead + randrange(min(2, num_vertices - index - lookahead + 1))
-		for i in range(1, other_branch_length):
-			vertices[1 + lookahead + i].parents.append(vertices[lookahead + i])
-			vertices[lookahead + i].children.append(vertices[1 + lookahead + i])
-		index += other_branch_length
+		for j in range(num_paths - 1):
+			vertices[index].parents.append(vertices[0])
+			vertices[0].children.append(vertices[index])
+			index += 1
+			other_branch_length = lookahead + randrange(min(2, num_vertices - index - (num_paths - j - 1) * lookahead + 2))
+			for i in range(1, other_branch_length):
+				vertices[index].parents.append(vertices[index - 1])
+				vertices[index - 1].children.append(vertices[index])
+				index += 1
 
 	num_prefix_vertices = randrange(num_vertices - index + 1)
 	prev_vertex = vertices[0]
@@ -147,7 +149,7 @@ def generate_graph_with_lookahead(num_vertices, max_num_parents, max_vertex_id, 
 	shuffle(vertices)
 	return vertices, start, end
 
-def generate_example(num_vertices, max_num_parents, max_vertex_id, get_shortest_paths=True, lookahead=None):
+def generate_example(num_vertices, max_num_parents, max_vertex_id, get_shortest_paths=True, lookahead=None, num_paths=None):
 	if lookahead == None:
 		graph = generate_graph(num_vertices, max_num_parents, max_vertex_id)
 
@@ -158,7 +160,7 @@ def generate_example(num_vertices, max_num_parents, max_vertex_id, get_shortest_
 			if end != start:
 				break
 	else:
-		graph, start, end = generate_graph_with_lookahead(num_vertices, max_num_parents, max_vertex_id, lookahead)
+		graph, start, end = generate_graph_with_lookahead(num_vertices, max_num_parents, max_vertex_id, lookahead, num_paths)
 		if graph == None:
 			return None, None, None, None
 
@@ -225,12 +227,12 @@ def generate_example(num_vertices, max_num_parents, max_vertex_id, get_shortest_
 def binomial_confidence_int(p, n):
 	return 1.96 * np.sqrt(p * (1.0 - p) / n)
 
-def evaluate_model(model, max_input_size, min_path_length=2, distance_from_start=None, distance_from_end=None, lookahead_steps=None, print_progress=False):
+def evaluate_model(model, max_input_size, min_path_length=2, distance_from_start=None, distance_from_end=None, lookahead_steps=None, num_paths_at_fork=None, print_progress=False):
 	device = next(model.parameters()).device
-	QUERY_PREFIX_TOKEN = max_input_size - 1
-	PADDING_TOKEN = max_input_size - 2
-	EDGE_PREFIX_TOKEN = max_input_size - 3
-	PATH_PREFIX_TOKEN = max_input_size - 4
+	QUERY_PREFIX_TOKEN = (max_input_size-5) // 3 + 4
+	PADDING_TOKEN = (max_input_size-5) // 3 + 3
+	EDGE_PREFIX_TOKEN = (max_input_size-5) // 3 + 2
+	PATH_PREFIX_TOKEN = (max_input_size-5) // 3 + 1
 
 	min_vertices = max(3, min_path_length)
 
@@ -250,8 +252,18 @@ def evaluate_model(model, max_input_size, min_path_length=2, distance_from_start
 		while True:
 			num_vertices = randrange(min_vertices, (max_input_size - 5) // 3)
 			if lookahead_steps != None:
-				num_vertices = max(num_vertices, min(lookahead_steps * 2 + 1 + randrange(0, 3), (max_input_size - 5) // 3))
-			g, start, end, paths = generate_example(num_vertices, 4, (max_input_size - 5) // 3, get_shortest_paths=False, lookahead=lookahead_steps)
+				# first compute the maximum number of paths we can fit with the given lookahead
+				if lookahead_steps == 0:
+					num_paths = randrange(1, 3)
+				elif num_paths_at_fork != None:
+					num_paths = num_paths_at_fork
+				else:
+					max_num_paths = ((max_input_size - 5) // 3 - 1) // lookahead_steps
+					num_paths = randrange(2, max_num_paths + 1)
+				num_vertices = min(lookahead_steps * num_paths + 1 + randrange(0, 6), (max_input_size - 5) // 3)
+			else:
+				num_paths = None
+			g, start, end, paths = generate_example(num_vertices, 4, (max_input_size - 5) // 3, get_shortest_paths=False, lookahead=lookahead_steps, num_paths=num_paths)
 			if paths != None and min([len(path) for path in paths]) > min_path_length:
 				break
 
@@ -371,15 +383,12 @@ def unique(x):
 			y.append(e)
 	return y
 
-def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidden_dim, bidirectional, absolute_pos_emb, learnable_token_emb, toeplitz_attn):
-	seed(seed_value)
-	torch.manual_seed(seed_value)
-	np.random.seed(seed_value)
+def generate_training_set(max_input_size, dataset_size, max_lookahead, quiet=False):
+	QUERY_PREFIX_TOKEN = (max_input_size-5) // 3 + 4
+	PADDING_TOKEN = (max_input_size-5) // 3 + 3
+	EDGE_PREFIX_TOKEN = (max_input_size-5) // 3 + 2
+	PATH_PREFIX_TOKEN = (max_input_size-5) // 3 + 1
 
-	QUERY_PREFIX_TOKEN = max_input_size - 1
-	PADDING_TOKEN = max_input_size - 2
-	EDGE_PREFIX_TOKEN = max_input_size - 3
-	PATH_PREFIX_TOKEN = max_input_size - 4
 	num_generated = 0
 	inputs = np.empty((dataset_size, max_input_size), dtype=np.int64)
 	outputs = np.empty(dataset_size, dtype=np.int64)
@@ -393,93 +402,108 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 	#total_path_lengths = 0
 	#MAX_PATH_LENGTH_BUCKET = 0.4
 	valid_outputs = []
-	train_filename = 'useful_path_results/train{}_inputsize{}_maxlookahead{}_seed{}.pkl'.format(dataset_size, max_input_size, max_lookahead, seed_value)
-	if isfile(train_filename):
-		# check if we've already generated the training data
-		print("Loading training data from '{}'...".format(train_filename))
-		stdout.flush()
-		with open(train_filename, 'rb') as f:
-			inputs, outputs, valid_outputs = pickle.load(f)
-	else:
-		# we haven't generated the training data yet, so generate it here
-		while num_generated < dataset_size:
-			while True:
-				lookahead = choice([i for i in range(max_lookahead + 1) if num_generated == 0 or lookahead_step_histogram[i] / num_generated < MAX_FREQS_PER_BUCKET[i]])
-				num_vertices = randrange(6, (max_input_size-5) // 3)
-				num_vertices = max(num_vertices, min(lookahead * 2 + 1 + randrange(0, 3), (max_input_size-5) // 3))
-				g, start, end, paths = generate_example(num_vertices, 4, (max_input_size - 5) // 3, lookahead=lookahead)
-				if paths != None and min([len(path) for path in paths]) > 1:
-					break
 
-			edges = []
-			for vertex in g:
-				for child in vertex.children:
-					edges.append((vertex.id, child.id))
-			shuffle(edges)
+	while num_generated < dataset_size:
+		while True:
+			lookahead = choice([i for i in range(max_lookahead + 1) if num_generated == 0 or lookahead_step_histogram[i] / num_generated < MAX_FREQS_PER_BUCKET[i]])
+			if lookahead == 0:
+				num_paths = randrange(1, 3)
+			else:
+				max_num_paths = ((max_input_size - 5) // 3 - 1) // lookahead
+				num_paths = randrange(2, max_num_paths + 1)
+			num_vertices = min(lookahead * num_paths + 1 + randrange(0, 6), (max_input_size-5) // 3)
+			g, start, end, paths = generate_example(num_vertices, 4, (max_input_size - 5) // 3, lookahead=lookahead, num_paths=num_paths)
+			if paths != None and min([len(path) for path in paths]) > 1:
+				break
 
-			prefix = []
-			for source, target in edges:
-				prefix.extend([EDGE_PREFIX_TOKEN, source, target])
-			prefix.extend([QUERY_PREFIX_TOKEN, start.id, end.id, PATH_PREFIX_TOKEN])
+		edges = []
+		for vertex in g:
+			for child in vertex.children:
+				edges.append((vertex.id, child.id))
+		shuffle(edges)
 
-			for path in paths:
-				if len(path) == 1:
+		prefix = []
+		for source, target in edges:
+			prefix.extend([EDGE_PREFIX_TOKEN, source, target])
+		prefix.extend([QUERY_PREFIX_TOKEN, start.id, end.id, PATH_PREFIX_TOKEN])
+
+		for path in paths:
+			if len(path) == 1:
+				continue
+			#if total_path_lengths != 0 and path_lengths[len(path)] / total_path_lengths >= MAX_PATH_LENGTH_BUCKET:
+			#	continue
+			#path_lengths[len(path)] += 1
+			#total_path_lengths += 1
+			example = list(prefix)
+			for j in range(1, len(path)):
+				example.append(path[j - 1].id)
+				if len(example) > max_input_size:
+					#print('WARNING: Generated example is too long.')
 					continue
-				#if total_path_lengths != 0 and path_lengths[len(path)] / total_path_lengths >= MAX_PATH_LENGTH_BUCKET:
-				#	continue
-				#path_lengths[len(path)] += 1
-				#total_path_lengths += 1
-				example = list(prefix)
-				for j in range(1, len(path)):
-					example.append(path[j - 1].id)
-					if len(example) > max_input_size:
-						#print('WARNING: Generated example is too long.')
-						continue
 
-					def has_path(start, end):
-						stack = [start]
-						visited = set()
-						while len(stack) != 0:
-							v = stack.pop()
-							if v == end:
-								return True
-							for child in v.children:
-								if child not in visited:
-									visited.add(child)
-									stack.append(child)
-						return False
+				def has_path(start, end):
+					stack = [start]
+					visited = set()
+					while len(stack) != 0:
+						v = stack.pop()
+						if v == end:
+							return True
+						for child in v.children:
+							if child not in visited:
+								visited.add(child)
+								stack.append(child)
+					return False
 
-					lookahead_steps = lookahead_depth(path[j-1], path[j], end)
-					useful_steps = [v for v in path[j-1].children if has_path(v, end)]
+				lookahead_steps = lookahead_depth(path[j-1], path[j], end)
+				useful_steps = [v for v in path[j-1].children if has_path(v, end)]
 
-					if num_generated != 0 and lookahead_step_histogram[lookahead_steps] / num_generated >= MAX_FREQS_PER_BUCKET[lookahead_steps]:
-						continue
-					lookahead_step_histogram[lookahead_steps] += 1
-					path_length_histogram[j] += 1
+				if num_generated != 0 and lookahead_step_histogram[lookahead_steps] / num_generated >= MAX_FREQS_PER_BUCKET[lookahead_steps]:
+					continue
+				lookahead_step_histogram[lookahead_steps] += 1
+				path_length_histogram[j] += 1
 
-					inputs[num_generated,(max_input_size-len(example)):] = example
-					inputs[num_generated,:(max_input_size-len(example))] = PADDING_TOKEN
-					outputs[num_generated] = choice(useful_steps).id #path[j].id #choice([v.id for v in path[j - 1].children])
-					valid_outputs.append([v.id for v in useful_steps]) #unique([other_path[j].id for other_path in paths if other_path[:j-1] == path[:j-1]])) #[v.id for v in path[j - 1].children])
-					num_generated += 1
-					if num_generated == dataset_size:
-						break
+				inputs[num_generated,(max_input_size-len(example)):] = example
+				inputs[num_generated,:(max_input_size-len(example))] = PADDING_TOKEN
+				outputs[num_generated] = choice(useful_steps).id #path[j].id #choice([v.id for v in path[j - 1].children])
+				valid_outputs.append([v.id for v in useful_steps]) #unique([other_path[j].id for other_path in paths if other_path[:j-1] == path[:j-1]])) #[v.id for v in path[j - 1].children])
+				num_generated += 1
 				if num_generated == dataset_size:
 					break
+			if num_generated == dataset_size:
+				break
 
-			if num_generated % 1000 == 0 or num_generated >= dataset_size:
-				print("{} examples generated.".format(num_generated))
-				#print("Path length histogram:")
-				#print(', '.join(['%d:%.2f' % (i, path_lengths[i] / total_path_lengths + 1e-9) for i in range(len(path_lengths)) if path_lengths[i] != 0]))
-				print("Lookahead steps histogram:")
-				print(', '.join(['%d:%.2f' % (i, lookahead_step_histogram[i] / num_generated + 1e-9) for i in range(len(lookahead_step_histogram)) if lookahead_step_histogram[i] != 0]))
-				print("Path length histogram:")
-				print(', '.join(['%d:%.2f' % (i, path_length_histogram[i] / num_generated + 1e-9) for i in range(len(path_length_histogram)) if path_length_histogram[i] != 0]))
-				stdout.flush()
+		if not quiet and (num_generated % 1000 == 0 or num_generated >= dataset_size):
+			print("{} examples generated.".format(num_generated))
+			#print("Path length histogram:")
+			#print(', '.join(['%d:%.2f' % (i, path_lengths[i] / total_path_lengths + 1e-9) for i in range(len(path_lengths)) if path_lengths[i] != 0]))
+			print("Lookahead steps histogram:")
+			print(', '.join(['%d:%.2f' % (i, lookahead_step_histogram[i] / num_generated + 1e-9) for i in range(len(lookahead_step_histogram)) if lookahead_step_histogram[i] != 0]))
+			print("Path length histogram:")
+			print(', '.join(['%d:%.2f' % (i, path_length_histogram[i] / num_generated + 1e-9) for i in range(len(path_length_histogram)) if path_length_histogram[i] != 0]))
+			stdout.flush()
 
-		# save the generated training data to file
-		with open(train_filename, 'wb') as f:
-			pickle.dump((inputs, outputs, valid_outputs), f)
+	return inputs, outputs, valid_outputs
+
+def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidden_dim, bidirectional, absolute_pos_emb, learnable_token_emb, toeplitz_attn):
+	seed(seed_value)
+	torch.manual_seed(seed_value)
+	np.random.seed(seed_value)
+
+	if dataset_size != -1:
+		train_filename = 'useful_path_results/train{}_inputsize{}_maxlookahead{}_seed{}.pkl'.format(dataset_size, max_input_size, max_lookahead, seed_value)
+		if isfile(train_filename):
+			# check if we've already generated the training data
+			print("Loading training data from '{}'...".format(train_filename))
+			stdout.flush()
+			with open(train_filename, 'rb') as f:
+				inputs, outputs, valid_outputs = pickle.load(f)
+		else:
+			# we haven't generated the training data yet, so generate it here
+			inputs, outputs, valid_outputs = generate_training_set(max_input_size, dataset_size, max_lookahead)
+
+			# save the generated training data to file
+			with open(train_filename, 'wb') as f:
+				pickle.dump((inputs, outputs, valid_outputs), f)
 
 	if not torch.cuda.is_available():
 		print("ERROR: CUDA device is not available.")
@@ -489,11 +513,13 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 	else:
 		device = torch.device('cuda')
 
-	train_data = DummyDataset(inputs, outputs, device)
-	train_loader = DataLoader(train_data, batch_size=1024, shuffle=True)
+	BATCH_SIZE = 2048
+	if dataset_size != -1:
+		train_data = DummyDataset(inputs, outputs, device)
+		train_loader = DataLoader(train_data, batch_size=BATCH_SIZE, shuffle=True)
 
 	# compute the checkpoint filenames and try to resume from the last one
-	filename = 'useful_path_results/checkpoints_{}layer_inputsize{}_maxlookahead{}_seed{}_train{}'.format(nlayers, max_input_size, max_lookahead, seed_value, dataset_size)
+	filename = 'useful_path_results/checkpoints_{}layer_inputsize{}_maxlookahead{}_seed{}_train{}'.format(nlayers, max_input_size, max_lookahead, seed_value, dataset_size if dataset_size != -1 else 'streaming')
 	if bidirectional:
 		filename += '_nomask'
 	if not absolute_pos_emb:
@@ -508,18 +534,19 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 		existing_epochs = []
 		makedirs(filename)
 
-	ntoken = max_input_size
+	ntoken = (max_input_size-5) // 3 + 5
 	nhead = 1
-	d_hid = max_input_size + hidden_dim
+	d_hid = ntoken + hidden_dim
 	dropout = 0
+	PADDING_TOKEN = (max_input_size-5) // 3 + 3
 	if len(existing_epochs) == 0:
 		model = Transformer(
 				layers=nlayers,
 				pad_idx=PADDING_TOKEN,
-				words=max_input_size,
+				words=ntoken,
 				seq_len=max_input_size,
 				heads=nhead,
-				dims=max(max_input_size,d_hid),
+				dims=max(ntoken,d_hid),
 				rate=1,
 				dropout=dropout,
 				bidirectional=bidirectional,
@@ -542,6 +569,12 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 
 	while True:
 		epoch_loss = 0.0
+		if dataset_size == -1:
+			STREAMING_BLOCK_SIZE = 65536
+			inputs, outputs, valid_outputs = generate_training_set(max_input_size, STREAMING_BLOCK_SIZE, max_lookahead, quiet=True)
+			train_data = DummyDataset(inputs, outputs, device)
+			train_loader = DataLoader(train_data, batch_size=BATCH_SIZE, shuffle=True)
+
 		for idx, batch in enumerate(train_loader):
 			model.train()
 			optimizer.zero_grad()
@@ -549,13 +582,7 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 			input, output = batch
 
 			logits = model(input)
-			regularization = None
-			for p in model.parameters():
-				if regularization == None:
-					regularization = p.norm(1)
-				else:
-					regularization = regularization + p.norm(1)
-			loss_val = loss_func(logits[:, -1, :], output) #+ 1.0 * regularization / sum([len(p) for p in model.parameters()])
+			loss_val = loss_func(logits[:, -1, :], output)
 			epoch_loss += loss_val.item()
 
 			loss_val.backward()
@@ -575,7 +602,10 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 		if epoch % eval_interval == 0:
 			evaluate_model(model, max_input_size)
 
-			training_indices = torch.randint(dataset_size, (400,))
+			if dataset_size == -1:
+				training_indices = torch.randint(STREAMING_BLOCK_SIZE, (400,))
+			else:
+				training_indices = torch.randint(dataset_size, (400,))
 			logits, _ = model(LongTensor(inputs[training_indices, :]).to(device))
 			predictions = torch.argmax(logits[:, -1, :], 1)
 			training_acc = sum([predictions[i] in valid_outputs[training_indices[i]] for i in range(400)]) / 400
