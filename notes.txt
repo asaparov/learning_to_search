@@ -640,8 +640,26 @@ another approach which might be better is a perturbation test; something like:
   - the set of vertices with activation at 189 < -1.86: 19,2,16,1,11,8,18,13,6,10,7,3,9,4,5
   - the set of vertices with activation at 189 < -2.25: 3,4,9,11,18,19 (it's possible the subsequent computation is dominated by the signal at row 28, corresponding to vertex 3)
   - but interestingly, other vertices in this set seem to copy exclusively from row 61 in this attention layer. the last three vertices in the other path are 6,7,12. 6 appears in rows 24,55; 7 appears in 25,42; 12 appears in 36,43. all of these rows copy exclusively from row 61. why? for rows 24,55,25,36,43, this is due to high activation at 145 at these rows and high activation at 45 at row 61. the rows with activation at 145 > 1.2 are the start vertex and the last 4 vertices on the wrong path, except the very last vertex.
- -> how different does this look when we switch the goal vertex to the other path? it seems the computation from this point to the end is the same. the vertices with large activation at 60 in the input to FF layer 3 are those that are near the end of the correct path (as well as the placeholder tokens). attention layer 3 copies row 61 into rows 27,28,33,48 (corresponding to the vertices near the end of the other, now incorrect path).
-  -
+  - FF layer 2 doesn't seem to change the representation of element 145 across rows. looking at rows 28,33,48, attention layer 2 copies row 33 into 28; 6 into 33; and 33 into 48. rows 33,6 correspond to vertices 13,15.
+ -> how different does this look when we switch the goal vertex to the other path? it seems the computation from this point to the end is the same. the vertices with large activation at 60 in the input to FF layer 3 are in rows 24,25,42,54,55 which correspond to vertices near the end of the correct path (as well as the placeholder tokens). attention layer 3 copies row 61 into rows 27,28,33,48 (corresponding to the vertices near the end of the other, now incorrect path).
+  - in attention layer 3, row 24 copies from rows 21,30,31,63
+   - row 25 copies from 21
+   - row 42 copies from 21,54
+   - row 54 copies from 45,46,61
+   - row 55 copies from 30
+  - these rows correspond to vertices near the beginning of the current path (plus the goal vertex at 61)
+  - for the following rows, the source is determined by a decrement operation: 25,54. the input rows with large activation at 60 are 21,30,45, which correspond to the first three vertices in the correct path, not including the start vertex.
+  - the rows 27,28,33,48 (corresponding to the latter vertices on the other path) are copied from row 61. the reason for this is because those rows have very low activation at 189. but note that rows 21,30,31,54,45,46 have similarly low activation at 189.
+  - FF layer 2 seems not to change the representation much for element 60 at rows 21,30,45.
+  - attention layer 2 performs the following copies: row 21 copies from 45; row 30 copies from 16; and row 45 copies from 62. 45,16,62 corresponds to vertex 14 (the first vertex along the correct path not including the start vertex) and the path prefix token. the rows with high activation at 60 correspond to most placeholder tokens, and vertices 14,17,19, which are the first vertices along each path plus the start vertex.
+  - FF layer 1 also seems not to change the representation much for element 60 at rows 45,16,62.
+  - attention layer 1 copies row 15 into rows 45,16; and copies many rows into 62 (all corresponding to vertices randomly spread across both paths). the input rows to attention layer 1 with high activation at 16 include some special tokens (including both the query prefix token and the path prefix token) as well as rows corresponding to vertex 19.
+  - FF layer 0 seems to be the source of high activation at 60 for many rows, as only row 60 has high activation at 60 before this layer. from perturbation analysis, setting elements 60,61 to high activation (1.8) causes element 60 to have much lower activation in the output. so very low activation at both 60,61 causes high activation at 60 in the output of this FF layer.
+  - attention layer 0 copies rows 60,62,63 into row 15, which correspond to the start vertex, the query prefix token, and path prefix token.
+
+ - interestingly, in attention layer 3, the rows with small activation at 145 is the same regardless of the goal vertex. it always seems to encode one path but not the other. but 145 isn't used when the goal vertex is 4. rather it seems to rely on the activation at 188 being low (in addition to the activation at 189 being low). in fact, the set of vertices with low activation at 188 is almost exactly the correct path. however, this is not different when the goal is switched (it encodes the incorrect path instead). is the difference in 61's representation of 45? YES
+ - FF layer 2 seems to alter the representation at row 61, and its not clear exactly what its doing. it seems to depend non-trivially on multiple elements of the input.
+ - attention layer 2 copies row 42 into 61. after attention layer 2, row 61 stores all vertices reachable from the goal vertex within 3 steps.
 
 so the reconstructed algorithm is as follows:
 attention layer 0 does matching (positive for non-placeholder tokens and negative for placeholder tokens)
