@@ -1,4 +1,4 @@
-from random import sample, randrange, choice, shuffle, seed, uniform
+from random import sample, randrange, choice, shuffle, seed, uniform, getstate, setstate
 from os import listdir, makedirs
 from os.path import isfile, isdir
 from sys import stdout
@@ -558,7 +558,21 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 	else:
 		last_epoch = max(existing_epochs)
 		epoch = last_epoch + 1
-		model = torch.load(filename + '/epoch{}.pt'.format(last_epoch), map_location=device)
+		loaded_obj = torch.load(filename + '/epoch{}.pt'.format(last_epoch), map_location=device)
+		if type(loaded_obj) is tuple:
+			model, random_state, np_random_state, torch_random_state = loaded_obj
+			setstate(random_state)
+			np.random.set_state(np_random_state)
+			torch.set_rng_state(torch_random_state.cpu())
+		else:
+			model = loaded_obj
+			print("WARNING: loaded checkpoint does not have PRNG state data; resetting random seed...")
+			from time import time
+			seed_value = int(time())
+			print("New random seed: " + str(seed_value))
+			seed(seed_value)
+			torch.manual_seed(seed_value)
+			np.random.seed(seed_value)
 
 	loss_func = CrossEntropyLoss(ignore_index=PADDING_TOKEN, reduction='mean')
 	optimizer = SophiaG((p for p in model.parameters() if p.requires_grad), lr=1.0e-4, weight_decay=0.1)
@@ -567,11 +581,52 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 	eval_interval = 1
 	save_interval = 1
 
+	if dataset_size == -1:
+		# if we are doing streaming training, start the data generator thread
+		from threading import Thread, Lock, Condition
+		cv = Condition(Lock())
+		running = True
+		generated_data = []
+		STREAMING_BLOCK_SIZE = 65536
+
+		def generate_data():
+			seed(seed_value)
+			torch.manual_seed(seed_value)
+			np.random.seed(seed_value)
+
+			while running:
+				# wait until we need to generate data
+				cv.acquire()
+				while running and len(generated_data) > 1:
+					cv.wait()
+				cv.release()
+				if not running:
+					break
+
+				inputs, outputs, valid_outputs = generate_training_set(max_input_size, STREAMING_BLOCK_SIZE, max_lookahead, quiet=True)
+				cv.acquire()
+				generated_data.append((inputs, outputs, valid_outputs))
+				cv.notify()
+				cv.release()
+
+		data_generator = Thread(target=generate_data)
+		data_generator.start()
+
 	while True:
 		epoch_loss = 0.0
 		if dataset_size == -1:
-			STREAMING_BLOCK_SIZE = 65536
-			inputs, outputs, valid_outputs = generate_training_set(max_input_size, STREAMING_BLOCK_SIZE, max_lookahead, quiet=True)
+			# wait until there is data available
+			cv.acquire()
+			while running and len(generated_data) == 0:
+				cv.wait()
+			if not running:
+				cv.release()
+				break
+			inputs, outputs, valid_outputs = generated_data[0]
+			del generated_data[0]
+			cv.notify()
+			cv.release()
+
 			train_data = DummyDataset(inputs, outputs, device)
 			train_loader = DataLoader(train_data, batch_size=BATCH_SIZE, shuffle=True)
 
@@ -591,7 +646,7 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 		if epoch % save_interval == 0:
 			ckpt_filename = filename + '/epoch{}.pt'.format(epoch)
 			print('saving to "{}".'.format(ckpt_filename))
-			torch.save(model, ckpt_filename)
+			torch.save((model,getstate(),np.random.get_state(),torch.get_rng_state()), ckpt_filename)
 			print('done saving model.')
 			stdout.flush()
 
