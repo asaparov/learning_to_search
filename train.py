@@ -1,5 +1,5 @@
 from random import sample, randrange, choice, shuffle, seed, uniform, getstate, setstate
-from os import listdir, makedirs
+from os import listdir, makedirs, rename, remove
 from os.path import isfile, isdir
 from sys import stdout
 import pickle
@@ -227,7 +227,7 @@ def generate_example(num_vertices, max_num_parents, max_vertex_id, get_shortest_
 def binomial_confidence_int(p, n):
 	return 1.96 * np.sqrt(p * (1.0 - p) / n)
 
-def evaluate_model(model, max_input_size, min_path_length=2, distance_from_start=None, distance_from_end=None, lookahead_steps=None, num_paths_at_fork=None, print_progress=False):
+def evaluate_model(model, max_input_size, min_path_length=2, distance_from_start=None, distance_from_end=None, lookahead_steps=None, num_paths_at_fork=None, print_progress=False, num_samples=1000):
 	device = next(model.parameters()).device
 	QUERY_PREFIX_TOKEN = (max_input_size-5) // 3 + 4
 	PADDING_TOKEN = (max_input_size-5) // 3 + 3
@@ -245,7 +245,8 @@ def evaluate_model(model, max_input_size, min_path_length=2, distance_from_start
 	useful_edge_counts = []
 	valid_edge_counts = []
 	graph_size_counts = []
-	num_samples = 1000
+	loss_func = CrossEntropyLoss(reduction='mean')
+	loss = 0.0
 	#distances_from_end = [0] * max_input_size
 	#MAX_FREQ_PER_BUCKET = 0.30
 	while total_predictions < num_samples:
@@ -336,7 +337,7 @@ def evaluate_model(model, max_input_size, min_path_length=2, distance_from_start
 			#import pdb; pdb.set_trace()
 			#if len(best_next_steps) < len(useful_next_steps) and next(partial_path[i+2] for i in range(len(partial_path) - 2) if partial_path[i] == QUERY_PREFIX_TOKEN) not in valid_next_steps:
 			#	import pdb; pdb.set_trace()
-			if len(valid_next_steps) == 1 or len(best_next_steps) != 1:
+			if len(valid_next_steps) == 1 or len(best_next_steps) != 1 or len(useful_next_steps) != 1:
 				continue
 			predictions, _ = model(input)
 			predictions = predictions[-1, :]
@@ -352,6 +353,9 @@ def evaluate_model(model, max_input_size, min_path_length=2, distance_from_start
 				valid_predictions += 1
 			else:
 				pass
+			target = torch.zeros(len(predictions))
+			target[useful_next_steps] = 1.0 / len(predictions)
+			loss += loss_func(predictions, target.to(device))
 			total_predictions += 1
 
 		if (print_progress and total_predictions != 0) or total_predictions >= num_samples:
@@ -362,6 +366,7 @@ def evaluate_model(model, max_input_size, min_path_length=2, distance_from_start
 
 	print("average number of best edges = %.2f, useful edges = %.2f, valid edges = %.2f, vertices = %.2f" % (np.mean(best_edge_counts), np.mean(useful_edge_counts), np.mean(valid_edge_counts), np.mean(graph_size_counts)))
 	stdout.flush()
+	return useful_acc, loss / total_predictions
 
 class DummyDataset(Dataset):
 	def __init__(self, inputs, outputs, device, x_type=LongTensor, y_type=LongTensor):
@@ -489,20 +494,21 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 	torch.manual_seed(seed_value)
 	np.random.seed(seed_value)
 
+	train_filename = 'train{}_inputsize{}_maxlookahead{}_seed{}.pkl'.format(dataset_size, max_input_size, max_lookahead, seed_value)
 	if dataset_size != -1:
-		train_filename = 'useful_path_results/train{}_inputsize{}_maxlookahead{}_seed{}.pkl'.format(dataset_size, max_input_size, max_lookahead, seed_value)
-		if isfile(train_filename):
+		train_path = 'useful_path_results/' + train_filename
+		if isfile(train_path):
 			# check if we've already generated the training data
-			print("Loading training data from '{}'...".format(train_filename))
+			print("Loading training data from '{}'...".format(train_path))
 			stdout.flush()
-			with open(train_filename, 'rb') as f:
+			with open(train_path, 'rb') as f:
 				inputs, outputs, valid_outputs = pickle.load(f)
 		else:
 			# we haven't generated the training data yet, so generate it here
 			inputs, outputs, valid_outputs = generate_training_set(max_input_size, dataset_size, max_lookahead)
 
 			# save the generated training data to file
-			with open(train_filename, 'wb') as f:
+			with open(train_path, 'wb') as f:
 				pickle.dump((inputs, outputs, valid_outputs), f)
 
 	if not torch.cuda.is_available():
@@ -513,7 +519,7 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 	else:
 		device = torch.device('cuda')
 
-	BATCH_SIZE = 2048
+	BATCH_SIZE = 4096
 	if dataset_size != -1:
 		train_data = DummyDataset(inputs, outputs, device)
 		train_loader = DataLoader(train_data, batch_size=BATCH_SIZE, shuffle=True)
@@ -582,50 +588,54 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 	save_interval = 1
 
 	if dataset_size == -1:
-		# if we are doing streaming training, start the data generator thread
-		from threading import Thread, Lock, Condition
-		cv = Condition(Lock())
-		running = True
-		generated_data = []
-		STREAMING_BLOCK_SIZE = 65536
+		# if we are doing streaming training, start the data generator process
+		from multiprocessing import Process
+		from time import sleep
+		STREAMING_BLOCK_SIZE = 262144
 
-		def generate_data():
-			seed(seed_value)
-			torch.manual_seed(seed_value)
-			np.random.seed(seed_value)
+		def generate_data(epoch, random_state, np_random_state, torch_random_state):
+			setstate(random_state)
+			np.random.set_state(np_random_state)
+			torch.set_rng_state(torch_random_state)
+			generated_filenames = []
 
-			while running:
+			while True:
 				# wait until we need to generate data
-				cv.acquire()
-				while running and len(generated_data) > 1:
-					cv.wait()
-				cv.release()
-				if not running:
-					break
+				while True:
+					filenames = listdir(filename)
+					generated_filenames = [file for file in generated_filenames if file in filenames]
+					if len(generated_filenames) <= 2:
+						break
+					sleep(0.05)
 
 				inputs, outputs, valid_outputs = generate_training_set(max_input_size, STREAMING_BLOCK_SIZE, max_lookahead, quiet=True)
-				cv.acquire()
-				generated_data.append((inputs, outputs, valid_outputs))
-				cv.notify()
-				cv.release()
+				with open(filename + '/streaming_temp.pkl', 'wb') as f:
+					pickle.dump((inputs, outputs, valid_outputs), f)
+				generated_filename = train_filename[-4] + '_epoch' + str(epoch) + '.pkl'
+				epoch += 1
+				rename(filename + '/streaming_temp.pkl', filename + '/' + generated_filename)
+				generated_filenames.append(generated_filename)
 
-		data_generator = Thread(target=generate_data)
+		# make sure there aren't existing files that could cause deadlocks before starting the data generation child process
+		to_remove = [file for file in listdir(filename) if file.startswith(train_filename[-4] + '_epoch')]
+		for existing_file in to_remove:
+			remove(filename + '/' + existing_file)
+		data_generator = Process(target=generate_data, args=(epoch,getstate(),np.random.get_state(),torch.get_rng_state()))
 		data_generator.start()
 
 	while True:
 		epoch_loss = 0.0
 		if dataset_size == -1:
 			# wait until there is data available
-			cv.acquire()
-			while running and len(generated_data) == 0:
-				cv.wait()
-			if not running:
-				cv.release()
-				break
-			inputs, outputs, valid_outputs = generated_data[0]
-			del generated_data[0]
-			cv.notify()
-			cv.release()
+			while True:
+				filenames = listdir(filename)
+				input_filename = train_filename[-4] + '_epoch' + str(epoch) + '.pkl'
+				if input_filename in filenames:
+					break
+				sleep(0.05)
+			with open(filename + '/' + input_filename, 'rb') as f:
+				inputs, outputs, valid_outputs = pickle.load(f)
+			remove(filename + '/' + input_filename)
 
 			train_data = DummyDataset(inputs, outputs, device)
 			train_loader = DataLoader(train_data, batch_size=BATCH_SIZE, shuffle=True)

@@ -78,8 +78,8 @@ if os.path.isfile(argv[1]):
 	#run_model(model, [46, 45,  3, 19, 45, 18, 39, 45, 36, 15, 45, 24, 42, 45, 37,  3, 45, 37, 36, 45, 23, 32, 45,  8, 24, 45, 19, 30, 45, 15, 23, 45, 39, 40, 45, 40, 34, 45, 30, 18, 45, 32,  8, 47, 37, 34, 44, 37], max_input_size=48)
 	#run_model(model, [62, 62, 62, 62, 62, 61, 12, 18, 61, 27,  9, 61, 43, 34, 61, 34, 48, 61, 46,  5, 61, 47, 27, 61, 26, 39, 61, 16,  4, 61,  5, 16, 61, 39, 19, 61, 48, 47, 61, 18, 59, 61,  4, 57, 61, 57, 12, 61, 14, 26, 61, 14, 58, 61, 19, 43, 61, 58, 46, 63, 14,  9, 60, 14], max_input_size=64, num_perturbations=1)
 
-	max_input_size = model.token_embedding.shape[0]
-	evaluate_model(model, max_input_size=max_input_size, min_path_length=2, distance_from_start=None, distance_from_end=None, lookahead_steps=7, print_progress=True)
+	max_input_size = (model.token_embedding.shape[0] - 5) * 3 + 5
+	evaluate_model(model, max_input_size=max_input_size, min_path_length=2, distance_from_start=None, distance_from_end=None, lookahead_steps=9, print_progress=True)
 
 elif os.path.isdir(argv[1]):
 	import matplotlib
