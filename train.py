@@ -227,8 +227,7 @@ def generate_example(num_vertices, max_num_parents, max_vertex_id, get_shortest_
 def binomial_confidence_int(p, n):
 	return 1.96 * np.sqrt(p * (1.0 - p) / n)
 
-def evaluate_model(model, max_input_size, min_path_length=2, distance_from_start=None, distance_from_end=None, lookahead_steps=None, num_paths_at_fork=None, print_progress=False, num_samples=1000):
-	device = next(model.parameters()).device
+def generate_eval_data(max_input_size, min_path_length=2, distance_from_start=None, distance_from_end=None, lookahead_steps=None, num_paths_at_fork=None, num_samples=1000):
 	QUERY_PREFIX_TOKEN = (max_input_size-5) // 3 + 4
 	PADDING_TOKEN = (max_input_size-5) // 3 + 3
 	EDGE_PREFIX_TOKEN = (max_input_size-5) // 3 + 2
@@ -236,7 +235,6 @@ def evaluate_model(model, max_input_size, min_path_length=2, distance_from_start
 
 	min_vertices = max(3, min_path_length)
 
-	model.eval()
 	total_predictions = 0
 	best_predictions = 0
 	useful_predictions = 0
@@ -245,8 +243,8 @@ def evaluate_model(model, max_input_size, min_path_length=2, distance_from_start
 	useful_edge_counts = []
 	valid_edge_counts = []
 	graph_size_counts = []
-	loss_func = CrossEntropyLoss(reduction='mean')
-	loss = 0.0
+	inputs = np.empty((num_samples, max_input_size), dtype=np.int64)
+	outputs = np.empty(num_samples, dtype=np.int64)
 	#distances_from_end = [0] * max_input_size
 	#MAX_FREQ_PER_BUCKET = 0.30
 	while total_predictions < num_samples:
@@ -313,60 +311,41 @@ def evaluate_model(model, max_input_size, min_path_length=2, distance_from_start
 		for partial_path, best_next_steps, useful_next_steps in aggregated_paths:
 			if len(best_next_steps) == 0:
 				continue
-			# TODO: this is for testing; why is the model not learning to generalize to this distribution? is it learning some spurious correlation?
-			#new_current_vertex = choice([v for v in g if len(v.children) != 0])
-			#partial_path[-1] = new_current_vertex.id
 			current_vertex = next(v for v in g if v.id == partial_path[-1])
 			valid_next_steps = [child.id for child in current_vertex.children]
 
 			best_next_vertex = next(v for v in g if v.id == best_next_steps[0])
 			if lookahead_steps != None and lookahead_depth(current_vertex, best_next_vertex, end) != lookahead_steps:
 				continue
-			#if lookahead_depth(current_vertex, best_next_vertex, end) != 1:
-			#	continue
-
-			# replace once vertex with the reserved vertex
-			#best_vertex_id = choice(best_next_steps)
-			#best_next_steps = [(b if b != best_vertex_id else RESERVED_INDICES[0]) for b in best_next_steps]
-			#useful_next_steps = [(b if b != best_vertex_id else RESERVED_INDICES[0]) for b in useful_next_steps]
-			#valid_next_steps = [(b if b != best_vertex_id else RESERVED_INDICES[0]) for b in valid_next_steps]
-			#partial_path = [(b if b != best_vertex_id else RESERVED_INDICES[0]) for b in partial_path]
 
 			input = [PADDING_TOKEN] * (max_input_size - len(partial_path)) + partial_path
-			input = LongTensor(input).to(device)
-			#import pdb; pdb.set_trace()
-			#if len(best_next_steps) < len(useful_next_steps) and next(partial_path[i+2] for i in range(len(partial_path) - 2) if partial_path[i] == QUERY_PREFIX_TOKEN) not in valid_next_steps:
-			#	import pdb; pdb.set_trace()
 			if len(valid_next_steps) == 1 or len(best_next_steps) != 1 or len(useful_next_steps) != 1:
 				continue
-			predictions, _ = model(input)
-			predictions = predictions[-1, :]
-			best_edge_counts.append(len(best_next_steps))
-			useful_edge_counts.append(len(useful_next_steps))
-			valid_edge_counts.append(len(current_vertex.children))
-			graph_size_counts.append(len(g))
-			if torch.argmax(predictions) in best_next_steps:
-				best_predictions += 1
-			if torch.argmax(predictions) in useful_next_steps:
-				useful_predictions += 1
-			if torch.argmax(predictions) in valid_next_steps:
-				valid_predictions += 1
-			else:
-				pass
-			target = torch.zeros(len(predictions))
-			target[useful_next_steps] = 1.0 / len(predictions)
-			loss += loss_func(predictions, target.to(device))
+			inputs[total_predictions,:] = input
+			outputs[total_predictions] = useful_next_steps[0]
 			total_predictions += 1
+			if total_predictions == num_samples:
+				break
 
-		if (print_progress and total_predictions != 0) or total_predictions >= num_samples:
-			best_acc = best_predictions / total_predictions
-			useful_acc = useful_predictions / total_predictions
-			valid_acc = valid_predictions / total_predictions
-			print("test accuracy: n = %d, best = %.2f±%.2f, useful = %.2f±%.2f, valid = %.2f±%.2f" % (total_predictions, best_acc, binomial_confidence_int(best_acc, total_predictions), useful_acc, binomial_confidence_int(best_acc, total_predictions), valid_acc, binomial_confidence_int(valid_acc, total_predictions)))
+	return inputs, outputs
 
-	print("average number of best edges = %.2f, useful edges = %.2f, valid edges = %.2f, vertices = %.2f" % (np.mean(best_edge_counts), np.mean(useful_edge_counts), np.mean(valid_edge_counts), np.mean(graph_size_counts)))
-	stdout.flush()
-	return useful_acc, loss / total_predictions
+def evaluate_model(model, inputs, outputs):
+	device = next(model.parameters()).device
+	inputs = torch.tensor(inputs)
+	outputs = torch.tensor(outputs)
+	inputs = inputs.to(device)
+	outputs = outputs.to(device)
+	max_input_size = inputs.shape[1]
+
+	model.eval()
+	loss_func = CrossEntropyLoss(reduction='mean')
+	logits = model(inputs)
+	logits = logits[0]
+	loss = loss_func(logits[:, -1, :], outputs).item()
+
+	predictions = torch.argmax(logits[:, -1, :], 1)
+	acc = sum(predictions == outputs) / len(predictions)
+	return acc, loss
 
 class DummyDataset(Dataset):
 	def __init__(self, inputs, outputs, device, x_type=LongTensor, y_type=LongTensor):
@@ -388,13 +367,14 @@ def unique(x):
 			y.append(e)
 	return y
 
-def generate_training_set(max_input_size, dataset_size, max_lookahead, quiet=False):
+def generate_training_set(max_input_size, dataset_size, max_lookahead, reserved_inputs, quiet=False):
 	QUERY_PREFIX_TOKEN = (max_input_size-5) // 3 + 4
 	PADDING_TOKEN = (max_input_size-5) // 3 + 3
 	EDGE_PREFIX_TOKEN = (max_input_size-5) // 3 + 2
 	PATH_PREFIX_TOKEN = (max_input_size-5) // 3 + 1
 
 	num_generated = 0
+	num_collisions = 0
 	inputs = np.empty((dataset_size, max_input_size), dtype=np.int64)
 	outputs = np.empty(dataset_size, dtype=np.int64)
 	lookahead_step_histogram = [0] * max_input_size
@@ -462,6 +442,11 @@ def generate_training_set(max_input_size, dataset_size, max_lookahead, quiet=Fal
 				lookahead_steps = lookahead_depth(path[j-1], path[j], end)
 				useful_steps = [v for v in path[j-1].children if has_path(v, end)]
 
+				# check if this input is reserved
+				if tuple(example) in reserved_inputs:
+					num_collisions += 1
+					continue
+
 				if num_generated != 0 and lookahead_step_histogram[lookahead_steps] / num_generated >= MAX_FREQS_PER_BUCKET[lookahead_steps]:
 					continue
 				lookahead_step_histogram[lookahead_steps] += 1
@@ -487,7 +472,7 @@ def generate_training_set(max_input_size, dataset_size, max_lookahead, quiet=Fal
 			print(', '.join(['%d:%.2f' % (i, path_length_histogram[i] / num_generated + 1e-9) for i in range(len(path_length_histogram)) if path_length_histogram[i] != 0]))
 			stdout.flush()
 
-	return inputs, outputs, valid_outputs
+	return inputs, outputs, valid_outputs, num_collisions
 
 def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidden_dim, bidirectional, absolute_pos_emb, learnable_token_emb, toeplitz_attn):
 	seed(seed_value)
@@ -594,10 +579,20 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 		STREAMING_BLOCK_SIZE = 262144
 
 		def generate_data(epoch, random_state, np_random_state, torch_random_state):
-			setstate(random_state)
-			np.random.set_state(np_random_state)
-			torch.set_rng_state(torch_random_state)
+			# first reserve some data for OOD testing
+			max_lookahead = ((max_input_size - 5) // 3) // 2
+			reserved_inputs = set()
+			for lookahead in list(range(1, max_lookahead + 1)) + [None]:
+				setstate(random_state)
+				np.random.set_state(np_random_state)
+				torch.set_rng_state(torch_random_state)
+
+				inputs,outputs = generate_eval_data(max_input_size, min_path_length=2, distance_from_start=None, distance_from_end=None, lookahead_steps=lookahead, num_paths_at_fork=None, num_samples=10000)
+				for i in range(inputs.shape[0]):
+					reserved_inputs.add(tuple([x for x in inputs[i,:] if x != PADDING_TOKEN]))
+
 			generated_filenames = []
+			total_collisions = 0
 
 			while True:
 				# wait until we need to generate data
@@ -608,7 +603,11 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 						break
 					sleep(0.05)
 
-				inputs, outputs, valid_outputs = generate_training_set(max_input_size, STREAMING_BLOCK_SIZE, max_lookahead, quiet=True)
+				inputs, outputs, valid_outputs, num_collisions = generate_training_set(max_input_size, STREAMING_BLOCK_SIZE, max_lookahead, reserved_inputs, quiet=True)
+				if num_collisions != 0:
+					total_collisions += num_collisions
+					print('Total number of training examples generated that are in the test set: ' + str(total_collisions))
+					stdout.flush()
 				with open(filename + '/streaming_temp.pkl', 'wb') as f:
 					pickle.dump((inputs, outputs, valid_outputs), f)
 				generated_filename = train_filename[-4] + '_epoch' + str(epoch) + '.pkl'
@@ -622,6 +621,9 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 			remove(filename + '/' + existing_file)
 		data_generator = Process(target=generate_data, args=(epoch,getstate(),np.random.get_state(),torch.get_rng_state()))
 		data_generator.start()
+
+	# generate test data
+	eval_inputs,eval_outputs = generate_eval_data(max_input_size)
 
 	while True:
 		epoch_loss = 0.0
@@ -661,11 +663,13 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 			stdout.flush()
 
 		if epoch % log_interval == 0:
-			print("epoch = {}, loss = {}".format(epoch, epoch_loss))
+			print("epoch = {}, training loss = {}".format(epoch, epoch_loss))
 			stdout.flush()
 
 		if epoch % eval_interval == 0:
-			evaluate_model(model, max_input_size)
+			test_acc,test_loss = evaluate_model(model, eval_inputs, eval_outputs)
+			print("test accuracy = %.2f±%.2f, test loss = %f" % (test_acc, binomial_confidence_int(test_acc, 1000), test_loss))
+			stdout.flush()
 
 			if dataset_size == -1:
 				training_indices = torch.randint(STREAMING_BLOCK_SIZE, (400,))
