@@ -345,7 +345,7 @@ def evaluate_model(model, inputs, outputs):
 
 	predictions = torch.argmax(logits[:, -1, :], 1)
 	acc = sum(predictions == outputs) / len(predictions)
-	return acc, loss
+	return acc.item(), loss
 
 class DummyDataset(Dataset):
 	def __init__(self, inputs, outputs, device, x_type=LongTensor, y_type=LongTensor):
@@ -580,7 +580,7 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 
 		def generate_data(epoch, random_state, np_random_state, torch_random_state):
 			# first reserve some data for OOD testing
-			max_lookahead = ((max_input_size - 5) // 3) // 2
+			max_lookahead = ((max_input_size - 5) // 3 - 1) // 2
 			reserved_inputs = set()
 			for lookahead in list(range(1, max_lookahead + 1)) + [None]:
 				setstate(random_state)

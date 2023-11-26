@@ -118,4 +118,4 @@ def plot_loss_vs_data(ckpt_directory, delta_log_examples, max_lookahead, streami
 	plt.clf()
 
 from sys import argv
-plot_loss_vs_data(argv[1], 0.2, 10, int(argv[2]))
+plot_loss_vs_data(argv[1], 0.5, 10, int(argv[2]))
