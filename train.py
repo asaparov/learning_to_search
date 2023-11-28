@@ -577,8 +577,9 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 		from multiprocessing import Process
 		from time import sleep
 		STREAMING_BLOCK_SIZE = 262144
+		NUM_DATA_WORKERS = 8
 
-		def generate_data(epoch, random_state, np_random_state, torch_random_state):
+		def generate_data(worker_id, epoch, random_state, np_random_state, torch_random_state):
 			# first reserve some data for OOD testing
 			max_lookahead = ((max_input_size - 5) // 3 - 1) // 2
 			reserved_inputs = set()
@@ -594,12 +595,24 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 			generated_filenames = []
 			total_collisions = 0
 
+			for i in range(worker_id):
+				new_seed = randrange(2**24)
+				seed(new_seed)
+				torch.manual_seed(new_seed)
+				np.random.seed(new_seed)
+
+			# compute the next epoch assigned to this worker
+			next_epoch = (epoch // NUM_DATA_WORKERS) * NUM_DATA_WORKERS + worker_id
+			if next_epoch < epoch:
+				next_epoch += NUM_DATA_WORKERS
+			epoch = next_epoch
+
 			while True:
 				# wait until we need to generate data
 				while True:
 					filenames = listdir(filename)
 					generated_filenames = [file for file in generated_filenames if file in filenames]
-					if len(generated_filenames) <= 2:
+					if len(generated_filenames) <= NUM_DATA_WORKERS:
 						break
 					sleep(0.05)
 
@@ -608,19 +621,23 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 					total_collisions += num_collisions
 					print('Total number of training examples generated that are in the test set: ' + str(total_collisions))
 					stdout.flush()
-				with open(filename + '/streaming_temp.pkl', 'wb') as f:
+				temp_filename = filename + '/streaming_temp' + str(worker_id) + '.pkl'
+				with open(temp_filename, 'wb') as f:
 					pickle.dump((inputs, outputs, valid_outputs), f)
 				generated_filename = train_filename[-4] + '_epoch' + str(epoch) + '.pkl'
-				epoch += 1
-				rename(filename + '/streaming_temp.pkl', filename + '/' + generated_filename)
+				epoch += NUM_DATA_WORKERS
+				rename(temp_filename, filename + '/' + generated_filename)
 				generated_filenames.append(generated_filename)
 
 		# make sure there aren't existing files that could cause deadlocks before starting the data generation child process
 		to_remove = [file for file in listdir(filename) if file.startswith(train_filename[-4] + '_epoch')]
 		for existing_file in to_remove:
 			remove(filename + '/' + existing_file)
-		data_generator = Process(target=generate_data, args=(epoch,getstate(),np.random.get_state(),torch.get_rng_state()))
-		data_generator.start()
+		data_generators = []
+		for i in range(NUM_DATA_WORKERS):
+			worker = Process(target=generate_data, args=(i,epoch,getstate(),np.random.get_state(),torch.get_rng_state()))
+			data_generators.append(worker)
+			worker.start()
 
 	# generate test data
 	eval_inputs,eval_outputs = generate_eval_data(max_input_size)
