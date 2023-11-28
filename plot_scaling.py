@@ -1,4 +1,4 @@
-from random import seed, shuffle, randrange
+from random import seed, shuffle, randrange, getstate, setstate
 import numpy as np
 import torch
 from train import evaluate_model
@@ -38,6 +38,19 @@ for c in rcParams["axes.prop_cycle"]:
 	colors.append(c['color'])
 
 def plot_loss_vs_data(ckpt_directory, delta_log_examples, max_lookahead, streaming_block_size):
+	# generate test data
+	random_state = getstate()
+	np_random_state = np.random.get_state()
+	torch_random_state = torch.get_rng_state()
+	test_sets = {}
+	for lookahead in list(range(1, max_lookahead + 1)) + [None]:
+		setstate(random_state)
+		np.random.set_state(np_random_state)
+		torch.set_rng_state(torch_random_state)
+
+		inputs,outputs = generate_eval_data(max_input_size, min_path_length=2, distance_from_start=None, distance_from_end=None, lookahead_steps=lookahead, num_paths_at_fork=None, num_samples=10000)
+		test_sets[lookahead] = (inputs,outputs)
+
 	filenames = [file for file in listdir(ckpt_directory) if file.startswith('epoch') and file.endswith('.pt')]
 	max_epoch = None
 	for file in filenames:
@@ -76,13 +89,14 @@ def plot_loss_vs_data(ckpt_directory, delta_log_examples, max_lookahead, streami
 		else:
 			model = loaded_obj
 
-		max_input_size = (model.token_embedding.shape[0] - 5) * 3 + 5
-		_, loss = evaluate_model(model, max_input_size=max_input_size, min_path_length=2, distance_from_start=None, distance_from_end=None, lookahead_steps=None, print_progress=False)
+		eval_inputs,eval_outputs = test_sets[None]
+		_,loss = evaluate_model(model, eval_inputs, eval_outputs)
 		losses[index,0] = loss
 		for lookahead in range(1, max_lookahead + 1):
 			print('lookahead = ' + str(lookahead))
 			stdout.flush()
-			_, loss = evaluate_model(model, max_input_size=max_input_size, min_path_length=2, distance_from_start=None, distance_from_end=None, lookahead_steps=lookahead, print_progress=False)
+			eval_inputs,eval_outputs = test_sets[lookahead]
+			_,loss = evaluate_model(model, eval_inputs, eval_outputs)
 			losses[index,lookahead] = loss
 		log_example_list[index] = log(actual_epoch * streaming_block_size)
 		print('Test losses: ' + str(losses[index,:]))
