@@ -577,7 +577,7 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 		from multiprocessing import Process
 		from time import sleep
 		STREAMING_BLOCK_SIZE = 262144
-		NUM_DATA_WORKERS = 8
+		NUM_DATA_WORKERS = 32
 
 		def generate_data(worker_id, epoch, random_state, np_random_state, torch_random_state):
 			# first reserve some data for OOD testing
@@ -643,6 +643,8 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 	eval_inputs,eval_outputs = generate_eval_data(max_input_size)
 
 	while True:
+		#import time
+		#time1 = time.perf_counter()
 		epoch_loss = 0.0
 		if dataset_size == -1:
 			# wait until there is data available
@@ -652,12 +654,18 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 				if input_filename in filenames:
 					break
 				sleep(0.05)
+			#time2 = time.perf_counter()
+			#print('[MAIN] Time waiting for data availability: {}s'.format(time2 - time1))
+			#stdout.flush()
 			with open(filename + '/' + input_filename, 'rb') as f:
 				inputs, outputs, valid_outputs = pickle.load(f)
 			remove(filename + '/' + input_filename)
 
 			train_data = DummyDataset(inputs, outputs, device)
 			train_loader = DataLoader(train_data, batch_size=BATCH_SIZE, shuffle=True)
+			#time3 = time.perf_counter()
+			#print('[MAIN] Time to load data: {}s'.format(time3 - time2))
+			#stdout.flush()
 
 		for idx, batch in enumerate(train_loader):
 			model.train()
@@ -672,12 +680,20 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 			loss_val.backward()
 			optimizer.step()
 
+		#time4 = time.perf_counter()
+		#print('[MAIN] Time to train: {}s'.format(time4 - time3))
+		#stdout.flush()
+
 		if epoch % save_interval == 0:
 			ckpt_filename = filename + '/epoch{}.pt'.format(epoch)
 			print('saving to "{}".'.format(ckpt_filename))
 			torch.save((model,getstate(),np.random.get_state(),torch.get_rng_state()), ckpt_filename)
 			print('done saving model.')
 			stdout.flush()
+
+			#time5 = time.perf_counter()
+			#print('[MAIN] Time to save model: {}s'.format(time5 - time4))
+			#stdout.flush()
 
 		if epoch % log_interval == 0:
 			print("epoch = {}, training loss = {}".format(epoch, epoch_loss))
@@ -697,7 +713,13 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 			training_acc = sum([predictions[i] in valid_outputs[training_indices[i]] for i in range(400)]) / 400
 			print("training accuracy: %.2f±%.2f" % (training_acc, binomial_confidence_int(training_acc, 400)))
 			stdout.flush()
+			#time6 = time.perf_counter()
+			#print('[MAIN] Time to evaluate model: {}s'.format(time6 - time5))
+			#stdout.flush()
 
+		#time7 = time.perf_counter()
+		#print('[MAIN] Total time for epoch: {}s'.format(time7 - time1))
+		#stdout.flush()
 		epoch += 1
 
 if __name__ == "__main__":

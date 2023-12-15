@@ -1,7 +1,7 @@
 from random import seed, shuffle, randrange, getstate, setstate
 import numpy as np
 import torch
-from train import evaluate_model
+from train import evaluate_model, generate_eval_data
 from os.path import isfile
 from os import listdir
 from math import exp, log
@@ -38,7 +38,16 @@ for c in rcParams["axes.prop_cycle"]:
 	colors.append(c['color'])
 
 def plot_loss_vs_data(ckpt_directory, delta_log_examples, max_lookahead, streaming_block_size):
+	suffix = ckpt_directory[ckpt_directory.index('inputsize')+len('inputsize'):]
+	max_input_size = int(suffix[:suffix.index('_')])
+
+	suffix = ckpt_directory[ckpt_directory.index('seed')+len('seed'):]
+	training_seed = int(suffix[:suffix.index('_')])
+
 	# generate test data
+	seed(training_seed)
+	torch.manual_seed(training_seed)
+	np.random.seed(training_seed)
 	random_state = getstate()
 	np_random_state = np.random.get_state()
 	torch_random_state = torch.get_rng_state()
@@ -124,7 +133,7 @@ def plot_loss_vs_data(ckpt_directory, delta_log_examples, max_lookahead, streami
 		ax.plot(np.exp(log_example_list), losses[:,lookahead], color=lighten_color(colors[1], 0.7*alpha + 0.4), label=str(lookahead), linewidth=0.5)
 	ax.legend(loc='lower left', ncol=2)
 	plt.xlim(60000, max_examples * 1.1)
-	plt.ylim(0.000001, 0.1)
+	plt.ylim(0.0001, 10.0)
 	plt.xlabel('examples seen')
 	plt.ylabel('loss')
 	plt.grid(True)
@@ -132,4 +141,4 @@ def plot_loss_vs_data(ckpt_directory, delta_log_examples, max_lookahead, streami
 	plt.clf()
 
 from sys import argv
-plot_loss_vs_data(argv[1], 0.5, 10, int(argv[2]))
+plot_loss_vs_data(argv[1], 0.3, int(argv[2]), int(argv[3]))
