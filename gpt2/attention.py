@@ -82,32 +82,64 @@ def toeplitz(c, r):
     i, j = torch.ones(*shape).nonzero().T
     return vals[j-i].reshape(*shape)
 
-class DiagonalLinear(nn.Module):
-    def __init__(self, in_features: int, out_features: int, bias: bool = True, device=None, dtype=None):
+class BlockToeplitz(nn.Module):
+    def __init__(self, in_features_left: int, in_features_mid: int, in_features_right: int, out_features_left: int, out_features_mid: int, out_features_right: int, bias: bool = True, device=None, dtype=None):
         factory_kwargs = {'device':device, 'dtype':dtype}
         super().__init__()
-        self.in_features = in_features
-        self.out_features = out_features
-        self.diagonals = nn.parameter.Parameter(torch.empty(out_features + in_features - 1, **factory_kwargs))
+        self.in_features_left = in_features_left
+        self.out_features_left = out_features_left
+        self.in_features_right = in_features_right
+        self.out_features_right = out_features_right
+        self.in_features_mid = in_features_mid
+        self.out_features_mid = out_features_mid
+        self.diagonals_LL = nn.parameter.Parameter(torch.empty(self.out_features_left + self.in_features_left - 1, **factory_kwargs))
+        self.diagonals_LM = nn.parameter.Parameter(torch.empty(self.out_features_left + self.in_features_mid - 1, **factory_kwargs))
+        self.diagonals_LR = nn.parameter.Parameter(torch.empty(self.out_features_left + self.in_features_right - 1, **factory_kwargs))
+        self.diagonals_ML = nn.parameter.Parameter(torch.empty(self.out_features_mid + self.in_features_left - 1, **factory_kwargs))
+        self.diagonals_MM = nn.parameter.Parameter(torch.empty(self.out_features_mid + self.in_features_mid - 1, **factory_kwargs))
+        self.diagonals_MR = nn.parameter.Parameter(torch.empty(self.out_features_mid + self.in_features_right - 1, **factory_kwargs))
+        self.diagonals_RL = nn.parameter.Parameter(torch.empty(self.out_features_right + self.in_features_left - 1, **factory_kwargs))
+        self.diagonals_RM = nn.parameter.Parameter(torch.empty(self.out_features_right + self.in_features_mid - 1, **factory_kwargs))
+        self.diagonals_RR = nn.parameter.Parameter(torch.empty(self.out_features_right + self.in_features_right - 1, **factory_kwargs))
         if bias:
-            self.bias = nn.parameter.Parameter(torch.empty(out_features, **factory_kwargs))
+            self.bias = nn.parameter.Parameter(torch.empty(out_features_left + out_features_mid + out_features_right, **factory_kwargs))
         else:
             self.register_parameter('bias', None)
         self.reset_parameters()
 
     def reset_parameters(self) -> None:
-        nn.init.uniform_(self.diagonals, -math.sqrt(5), math.sqrt(5))
+        nn.init.uniform_(self.diagonals_LL, -math.sqrt(5), math.sqrt(5))
+        nn.init.uniform_(self.diagonals_LM, -math.sqrt(5), math.sqrt(5))
+        nn.init.uniform_(self.diagonals_LR, -math.sqrt(5), math.sqrt(5))
+        nn.init.uniform_(self.diagonals_ML, -math.sqrt(5), math.sqrt(5))
+        nn.init.uniform_(self.diagonals_MM, -math.sqrt(5), math.sqrt(5))
+        nn.init.uniform_(self.diagonals_MR, -math.sqrt(5), math.sqrt(5))
+        nn.init.uniform_(self.diagonals_RL, -math.sqrt(5), math.sqrt(5))
+        nn.init.uniform_(self.diagonals_RM, -math.sqrt(5), math.sqrt(5))
+        nn.init.uniform_(self.diagonals_RR, -math.sqrt(5), math.sqrt(5))
         if self.bias is not None:
-            fan_in = self.in_features
+            fan_in = self.in_features_left + self.in_features_mid + self.in_features_right
             bound = 1 / math.sqrt(fan_in) if fan_in > 0 else 0
             nn.init.uniform_(self.bias, -bound, bound)
 
     def forward(self, input: torch.Tensor) -> torch.Tensor:
-        weight = toeplitz(self.diagonals[:self.out_features-1], self.diagonals[self.out_features-1:])
+        weight_LL = toeplitz(self.diagonals_LL[:self.out_features_left-1], self.diagonals_LL[self.out_features_left-1:])
+        weight_LM = toeplitz(self.diagonals_LM[:self.out_features_left-1], self.diagonals_LM[self.out_features_left-1:])
+        weight_LR = toeplitz(self.diagonals_LR[:self.out_features_left-1], self.diagonals_LR[self.out_features_left-1:])
+        weight_ML = toeplitz(self.diagonals_ML[:self.out_features_mid-1], self.diagonals_ML[self.out_features_mid-1:])
+        weight_MM = toeplitz(self.diagonals_MM[:self.out_features_mid-1], self.diagonals_MM[self.out_features_mid-1:])
+        weight_MR = toeplitz(self.diagonals_MR[:self.out_features_mid-1], self.diagonals_MR[self.out_features_mid-1:])
+        weight_RL = toeplitz(self.diagonals_RL[:self.out_features_right-1], self.diagonals_RL[self.out_features_right-1:])
+        weight_RM = toeplitz(self.diagonals_RM[:self.out_features_right-1], self.diagonals_RM[self.out_features_right-1:])
+        weight_RR = toeplitz(self.diagonals_RR[:self.out_features_right-1], self.diagonals_RR[self.out_features_right-1:])
+        weight_L = torch.cat((weight_LL, weight_LM, weight_LR), dim=1)
+        weight_M = torch.cat((weight_ML, weight_MM, weight_MR), dim=1)
+        weight_R = torch.cat((weight_RL, weight_RM, weight_RR), dim=1)
+        weight = torch.cat((weight_L, weight_M, weight_R))
         return nn.functional.linear(input, weight, self.bias)
 
     def extra_repr(self) -> str:
-        return f'in_features={self.in_features}, out_features={self.out_features}, bias={self.bias is not None}'
+        return f'in_features_left={self.in_features_left}, in_features_mid={self.in_features_mid}, in_features_right={self.in_features_right}, out_features_left={self.out_features_left}, out_features_mid={self.out_features_mid}, out_features_right={self.out_features_right}, bias={self.bias is not None}'
 
 
 class AttentionLayer(nn.Module):
@@ -124,11 +156,11 @@ class AttentionLayer(nn.Module):
     output 2 (*)    float           (..., past_len + kv_len, dims)
     ===========================================================================
     """
-    def __init__(self, heads: int, dims: int, dropout: float = 0.1, sparse_v: bool = False, linear: bool = True, diagonal: bool = False):
+    def __init__(self, heads: int, dims: int, token_dims: int, pos_dims: int, dropout: float = 0.1, sparse_v: bool = False, linear: bool = True, diagonal: bool = False):
         super().__init__()
         self.attn = MultiHeadAttention(heads, dropout)
         if diagonal:
-            self.proj_q = DiagonalLinear(dims, dims)
+            self.proj_q = BlockToeplitz(token_dims, dims - token_dims - pos_dims, pos_dims, token_dims, dims - token_dims - pos_dims, pos_dims)
             self.proj_k = None
         else:
             self.proj_q = nn.Linear(dims, dims)
