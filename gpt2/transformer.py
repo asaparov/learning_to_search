@@ -21,6 +21,8 @@ class TransformerLayer(nn.Module):
     def __init__(self,
                  heads: int,
                  dims: int,
+                 token_dims: int,
+                 pos_dims: int,
                  rate: int,
                  dropout: float = 0.1,
                  feedforward: bool = True,
@@ -28,7 +30,7 @@ class TransformerLayer(nn.Module):
                  linear: bool = True,
                  diagonal: bool = False):
         super().__init__()
-        self.attn = AttentionLayer(heads, dims, dropout, sparse_v, linear, diagonal)
+        self.attn = AttentionLayer(heads, dims, token_dims, pos_dims, dropout, sparse_v, linear, diagonal)
         self.ln_attn = LayerNorm(dims)
         if feedforward:
             self.ff = PositionwiseFeedForward(dims, rate, dropout)
@@ -109,11 +111,16 @@ class Transformer(nn.Module):
             self.positional_embedding = None
         self.dropout_embedding = nn.Dropout(dropout)
 
-        embedding_dim = dims
         if absolute_pos_emb:
-            embedding_dim += seq_len
+            embedding_dim = dims + seq_len
+            token_dim = words
+            position_dim = seq_len
+        else:
+            embedding_dim = dims
+            token_dim = words
+            position_dim = 0
         self.transformers = nn.ModuleList([
-            TransformerLayer(heads, embedding_dim, rate, dropout, l != layers - 1, True, False, diagonal_attn)
+            TransformerLayer(heads, embedding_dim, token_dim, position_dim, rate, dropout, l != layers - 1, True, False, diagonal_attn)
             for l in range(layers)])
         self.ln_head = LayerNorm(embedding_dim)
 
