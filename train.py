@@ -232,7 +232,8 @@ def generate_eval_data(max_input_size, min_path_length=2, distance_from_start=No
 	PADDING_TOKEN = (max_input_size-5) // 3 + 3
 	EDGE_PREFIX_TOKEN = (max_input_size-5) // 3 + 2
 	PATH_PREFIX_TOKEN = (max_input_size-5) // 3 + 1
-	MAX_PATH_LENGTH = (max_input_size-7) // 4
+	MAX_PATH_LENGTH = max_input_size - (((((max_input_size - 5) // 3 - 1) // 2) * 2 + 1) * 3 + 4)
+	assert(MAX_PATH_LENGTH > 0)
 
 	min_vertices = max(3, min_path_length)
 
@@ -279,6 +280,8 @@ def generate_eval_data(max_input_size, min_path_length=2, distance_from_start=No
 				continue
 			for j in range(1, len(path)):
 				if add_padding:
+					if j > MAX_PATH_LENGTH:
+						break
 					example = prefix + ([EDGE_PREFIX_TOKEN] * (MAX_PATH_LENGTH - j)) + [v.id for v in path[:j]]
 				else:
 					example = prefix + [v.id for v in path[:j]]
@@ -375,7 +378,8 @@ def generate_training_set(max_input_size, dataset_size, max_lookahead, reserved_
 	PADDING_TOKEN = (max_input_size-5) // 3 + 3
 	EDGE_PREFIX_TOKEN = (max_input_size-5) // 3 + 2
 	PATH_PREFIX_TOKEN = (max_input_size-5) // 3 + 1
-	MAX_PATH_LENGTH = (max_input_size-7) // 4
+	MAX_PATH_LENGTH = max_input_size - (((((max_input_size - 5) // 3 - 1) // 2) * 2 + 1) * 3 + 4)
+	assert(MAX_PATH_LENGTH > 0)
 
 	num_generated = 0
 	num_collisions = 0
@@ -425,6 +429,8 @@ def generate_training_set(max_input_size, dataset_size, max_lookahead, reserved_
 			#total_path_lengths += 1
 			for j in range(1, len(path)):
 				if add_padding:
+					if j > MAX_PATH_LENGTH:
+						break
 					example = prefix + ([EDGE_PREFIX_TOKEN] * (MAX_PATH_LENGTH - j)) + [v.id for v in path[:j]]
 				else:
 					example = prefix + [v.id for v in path[:j]]
@@ -650,7 +656,7 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 			worker.start()
 
 	# generate test data
-	eval_inputs,eval_outputs = generate_eval_data(max_input_size)
+	eval_inputs,eval_outputs = generate_eval_data(max_input_size, add_padding=add_padding)
 
 	while True:
 		#import time
