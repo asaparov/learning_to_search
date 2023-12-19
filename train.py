@@ -227,11 +227,12 @@ def generate_example(num_vertices, max_num_parents, max_vertex_id, get_shortest_
 def binomial_confidence_int(p, n):
 	return 1.96 * np.sqrt(p * (1.0 - p) / n)
 
-def generate_eval_data(max_input_size, min_path_length=2, distance_from_start=None, distance_from_end=None, lookahead_steps=None, num_paths_at_fork=None, num_samples=1000):
+def generate_eval_data(max_input_size, min_path_length=2, distance_from_start=None, distance_from_end=None, lookahead_steps=None, num_paths_at_fork=None, num_samples=1000, add_padding=False):
 	QUERY_PREFIX_TOKEN = (max_input_size-5) // 3 + 4
 	PADDING_TOKEN = (max_input_size-5) // 3 + 3
 	EDGE_PREFIX_TOKEN = (max_input_size-5) // 3 + 2
 	PATH_PREFIX_TOKEN = (max_input_size-5) // 3 + 1
+	MAX_PATH_LENGTH = (max_input_size-7) // 4
 
 	min_vertices = max(3, min_path_length)
 
@@ -276,9 +277,11 @@ def generate_eval_data(max_input_size, min_path_length=2, distance_from_start=No
 		for path in paths:
 			if len(path) == 1:
 				continue
-			example = list(prefix)
 			for j in range(1, len(path)):
-				example.append(path[j - 1].id)
+				if add_padding:
+					example = prefix + ([EDGE_PREFIX_TOKEN] * (MAX_PATH_LENGTH - j)) + [v.id for v in path[:j]]
+				else:
+					example = prefix + [v.id for v in path[:j]]
 				if len(example) > max_input_size:
 					continue
 				shortest_path_length = min([len(p) for p in paths if path[:j] == p[:j]])
@@ -367,11 +370,12 @@ def unique(x):
 			y.append(e)
 	return y
 
-def generate_training_set(max_input_size, dataset_size, max_lookahead, reserved_inputs, quiet=False):
+def generate_training_set(max_input_size, dataset_size, max_lookahead, reserved_inputs, add_padding, quiet=False):
 	QUERY_PREFIX_TOKEN = (max_input_size-5) // 3 + 4
 	PADDING_TOKEN = (max_input_size-5) // 3 + 3
 	EDGE_PREFIX_TOKEN = (max_input_size-5) // 3 + 2
 	PATH_PREFIX_TOKEN = (max_input_size-5) // 3 + 1
+	MAX_PATH_LENGTH = (max_input_size-7) // 4
 
 	num_generated = 0
 	num_collisions = 0
@@ -419,9 +423,11 @@ def generate_training_set(max_input_size, dataset_size, max_lookahead, reserved_
 			#	continue
 			#path_lengths[len(path)] += 1
 			#total_path_lengths += 1
-			example = list(prefix)
 			for j in range(1, len(path)):
-				example.append(path[j - 1].id)
+				if add_padding:
+					example = prefix + ([EDGE_PREFIX_TOKEN] * (MAX_PATH_LENGTH - j)) + [v.id for v in path[:j]]
+				else:
+					example = prefix + [v.id for v in path[:j]]
 				if len(example) > max_input_size:
 					#print('WARNING: Generated example is too long.')
 					continue
@@ -474,12 +480,12 @@ def generate_training_set(max_input_size, dataset_size, max_lookahead, reserved_
 
 	return inputs, outputs, valid_outputs, num_collisions
 
-def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidden_dim, bidirectional, absolute_pos_emb, learnable_token_emb, toeplitz_attn):
+def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidden_dim, bidirectional, absolute_pos_emb, learnable_token_emb, toeplitz_attn, toeplitz_reg, add_padding):
 	seed(seed_value)
 	torch.manual_seed(seed_value)
 	np.random.seed(seed_value)
 
-	train_filename = 'train{}_inputsize{}_maxlookahead{}_seed{}.pkl'.format(dataset_size, max_input_size, max_lookahead, seed_value)
+	train_filename = 'train{}_inputsize{}_maxlookahead{}_{}seed{}.pkl'.format(dataset_size, max_input_size, max_lookahead, 'padded_' if add_padding else '', seed_value)
 	if dataset_size != -1:
 		train_path = 'useful_path_results/' + train_filename
 		if isfile(train_path):
@@ -490,7 +496,7 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 				inputs, outputs, valid_outputs = pickle.load(f)
 		else:
 			# we haven't generated the training data yet, so generate it here
-			inputs, outputs, valid_outputs = generate_training_set(max_input_size, dataset_size, max_lookahead)
+			inputs, outputs, valid_outputs = generate_training_set(max_input_size, dataset_size, max_lookahead, add_padding)
 
 			# save the generated training data to file
 			with open(train_path, 'wb') as f:
@@ -519,6 +525,10 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 		filename += '_learntokemb'
 	if toeplitz_attn:
 		filename += '_toeplitz'
+	if toeplitz_reg != 0.0:
+		filename += '_toeplitz' + str(toeplitz_reg)
+	if add_padding:
+		filename += '_padded'
 	if isdir(filename):
 		existing_epochs = [int(ckpt[(ckpt.rfind('epoch') + len('epoch')):-len('.pt')]) for ckpt in listdir(filename) if ckpt.startswith('epoch')]
 	else:
@@ -588,7 +598,7 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 				np.random.set_state(np_random_state)
 				torch.set_rng_state(torch_random_state)
 
-				inputs,outputs = generate_eval_data(max_input_size, min_path_length=2, distance_from_start=None, distance_from_end=None, lookahead_steps=lookahead, num_paths_at_fork=None, num_samples=10000)
+				inputs,outputs = generate_eval_data(max_input_size, min_path_length=2, distance_from_start=None, distance_from_end=None, lookahead_steps=lookahead, num_paths_at_fork=None, num_samples=10000, add_padding=add_padding)
 				for i in range(inputs.shape[0]):
 					reserved_inputs.add(tuple([x for x in inputs[i,:] if x != PADDING_TOKEN]))
 
@@ -616,10 +626,10 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 						break
 					sleep(0.05)
 
-				inputs, outputs, valid_outputs, num_collisions = generate_training_set(max_input_size, STREAMING_BLOCK_SIZE, max_lookahead, reserved_inputs, quiet=True)
+				inputs, outputs, valid_outputs, num_collisions = generate_training_set(max_input_size, STREAMING_BLOCK_SIZE, max_lookahead, reserved_inputs, add_padding, quiet=True)
 				if num_collisions != 0:
 					total_collisions += num_collisions
-					print('Total number of training examples generated that are in the test set: ' + str(total_collisions))
+					print('[DATA GENERATOR {}] Total number of training examples generated that are in the test set: {}'.format(worker_id, total_collisions))
 					stdout.flush()
 				temp_filename = filename + '/streaming_temp' + str(worker_id) + '.pkl'
 				with open(temp_filename, 'wb') as f:
@@ -675,6 +685,26 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 
 			logits = model(input)
 			loss_val = loss_func(logits[:, -1, :], output)
+			if toeplitz_reg != 0.0:
+				def compute_toeplitz_regularization(m):
+					regularization = 0.0
+					for i in range(-A.size(0) + 1, A.size(1)):
+						regularization += torch.var(torch.diagonal(A, diagonal=i), correction=0)
+					return regularization
+
+				for transformer in model.transformers:
+					P_q = transformer.attn.proj_q.parameters()[0]
+					P_k = transformer.attn_proj_k.parameters()[0]
+					A = torch.matmul(P_q.transpose(-2,-1),P_k)
+					loss_val += toepiltz_reg * compute_toeplitz_regularization(A[:ntoken,:ntoken])
+					loss_val += toepiltz_reg * compute_toeplitz_regularization(A[:ntoken,ntoken:d_hid])
+					loss_val += toepiltz_reg * compute_toeplitz_regularization(A[:ntoken,d_hid:])
+					loss_val += toepiltz_reg * compute_toeplitz_regularization(A[ntoken:d_hid,:ntoken])
+					loss_val += toepiltz_reg * compute_toeplitz_regularization(A[ntoken:d_hid,ntoken:d_hid])
+					loss_val += toepiltz_reg * compute_toeplitz_regularization(A[ntoken:d_hid,d_hid:])
+					loss_val += toepiltz_reg * compute_toeplitz_regularization(A[d_hid:,:ntoken])
+					loss_val += toepiltz_reg * compute_toeplitz_regularization(A[d_hid:,ntoken:d_hid])
+					loss_val += toepiltz_reg * compute_toeplitz_regularization(A[d_hid:,d_hid:])
 			epoch_loss += loss_val.item()
 
 			loss_val.backward()
@@ -745,6 +775,8 @@ if __name__ == "__main__":
 	parser.add_argument("--absolute-pos-emb", type=parse_bool_arg, required=True, metavar="'y/n'")
 	parser.add_argument("--learn-tok-emb", type=parse_bool_arg, required=True, metavar="'y/n'")
 	parser.add_argument("--toeplitz-attn", type=parse_bool_arg, required=True, metavar="'y/n'")
+	parser.add_argument("--toeplitz-reg", type=float, required=True, default=0.0)
+	parser.add_argument("--add-padding", type=parse_bool_arg, required=True, metavar="'y/n'")
 	args = parser.parse_args()
 
 	train(
@@ -757,4 +789,6 @@ if __name__ == "__main__":
 		bidirectional=args.bidirectional,
 		absolute_pos_emb=args.absolute_pos_emb,
 		learnable_token_emb=args.learn_tok_emb,
-		toeplitz_attn=args.toeplitz_attn)
+		toeplitz_attn=args.toeplitz_attn,
+		toeplitz_reg=args.toeplitz_reg,
+		add_padding=args.add_padding)
