@@ -695,22 +695,22 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 				def compute_toeplitz_regularization(m):
 					regularization = 0.0
 					for i in range(-A.size(0) + 1, A.size(1)):
-						regularization += torch.var(torch.diagonal(A, diagonal=i), correction=0)
+						regularization += torch.var(torch.diagonal(A, offset=i), correction=0)
 					return regularization
 
 				for transformer in model.transformers:
-					P_q = transformer.attn.proj_q.parameters()[0]
-					P_k = transformer.attn_proj_k.parameters()[0]
+					P_q = next(v for k,v in transformer.attn.proj_q.named_parameters() if k == 'weight')
+					P_k = next(v for k,v in transformer.attn.proj_k.named_parameters() if k == 'weight')
 					A = torch.matmul(P_q.transpose(-2,-1),P_k)
-					loss_val += toepiltz_reg * compute_toeplitz_regularization(A[:ntoken,:ntoken])
-					loss_val += toepiltz_reg * compute_toeplitz_regularization(A[:ntoken,ntoken:d_hid])
-					loss_val += toepiltz_reg * compute_toeplitz_regularization(A[:ntoken,d_hid:])
-					loss_val += toepiltz_reg * compute_toeplitz_regularization(A[ntoken:d_hid,:ntoken])
-					loss_val += toepiltz_reg * compute_toeplitz_regularization(A[ntoken:d_hid,ntoken:d_hid])
-					loss_val += toepiltz_reg * compute_toeplitz_regularization(A[ntoken:d_hid,d_hid:])
-					loss_val += toepiltz_reg * compute_toeplitz_regularization(A[d_hid:,:ntoken])
-					loss_val += toepiltz_reg * compute_toeplitz_regularization(A[d_hid:,ntoken:d_hid])
-					loss_val += toepiltz_reg * compute_toeplitz_regularization(A[d_hid:,d_hid:])
+					loss_val += toeplitz_reg * compute_toeplitz_regularization(A[:ntoken,:ntoken])
+					loss_val += toeplitz_reg * compute_toeplitz_regularization(A[:ntoken,ntoken:d_hid])
+					loss_val += toeplitz_reg * compute_toeplitz_regularization(A[:ntoken,d_hid:])
+					loss_val += toeplitz_reg * compute_toeplitz_regularization(A[ntoken:d_hid,:ntoken])
+					loss_val += toeplitz_reg * compute_toeplitz_regularization(A[ntoken:d_hid,ntoken:d_hid])
+					loss_val += toeplitz_reg * compute_toeplitz_regularization(A[ntoken:d_hid,d_hid:])
+					loss_val += toeplitz_reg * compute_toeplitz_regularization(A[d_hid:,:ntoken])
+					loss_val += toeplitz_reg * compute_toeplitz_regularization(A[d_hid:,ntoken:d_hid])
+					loss_val += toeplitz_reg * compute_toeplitz_regularization(A[d_hid:,d_hid:])
 			epoch_loss += loss_val.item()
 
 			loss_val.backward()
