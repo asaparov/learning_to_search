@@ -227,13 +227,11 @@ def generate_example(num_vertices, max_num_parents, max_vertex_id, get_shortest_
 def binomial_confidence_int(p, n):
 	return 1.96 * np.sqrt(p * (1.0 - p) / n)
 
-def generate_eval_data(max_input_size, min_path_length=2, distance_from_start=None, distance_from_end=None, lookahead_steps=None, num_paths_at_fork=None, num_samples=1000, add_padding=False):
+def generate_eval_data(max_input_size, min_path_length=2, distance_from_start=None, distance_from_end=None, lookahead_steps=None, num_paths_at_fork=None, num_samples=1000):
 	QUERY_PREFIX_TOKEN = (max_input_size-5) // 3 + 4
 	PADDING_TOKEN = (max_input_size-5) // 3 + 3
 	EDGE_PREFIX_TOKEN = (max_input_size-5) // 3 + 2
 	PATH_PREFIX_TOKEN = (max_input_size-5) // 3 + 1
-	MAX_PATH_LENGTH = max_input_size - (((((max_input_size - 5) // 3 - 1) // 2) * 2 + 1) * 3 + 4)
-	assert(MAX_PATH_LENGTH > 0)
 
 	min_vertices = max(3, min_path_length)
 
@@ -279,12 +277,7 @@ def generate_eval_data(max_input_size, min_path_length=2, distance_from_start=No
 			if len(path) == 1:
 				continue
 			for j in range(1, len(path)):
-				if add_padding:
-					if j > MAX_PATH_LENGTH:
-						break
-					example = prefix + ([EDGE_PREFIX_TOKEN] * (MAX_PATH_LENGTH - j)) + [v.id for v in path[:j]]
-				else:
-					example = prefix + [v.id for v in path[:j]]
+				example = prefix + [v.id for v in path[:j]]
 				if len(example) > max_input_size:
 					continue
 				shortest_path_length = min([len(p) for p in paths if path[:j] == p[:j]])
@@ -373,13 +366,11 @@ def unique(x):
 			y.append(e)
 	return y
 
-def generate_training_set(max_input_size, dataset_size, max_lookahead, reserved_inputs, add_padding, quiet=False):
+def generate_training_set(max_input_size, dataset_size, max_lookahead, reserved_inputs, distance_from_start, quiet=False):
 	QUERY_PREFIX_TOKEN = (max_input_size-5) // 3 + 4
 	PADDING_TOKEN = (max_input_size-5) // 3 + 3
 	EDGE_PREFIX_TOKEN = (max_input_size-5) // 3 + 2
 	PATH_PREFIX_TOKEN = (max_input_size-5) // 3 + 1
-	MAX_PATH_LENGTH = max_input_size - (((((max_input_size - 5) // 3 - 1) // 2) * 2 + 1) * 3 + 4)
-	assert(MAX_PATH_LENGTH > 0)
 
 	num_generated = 0
 	num_collisions = 0
@@ -428,12 +419,9 @@ def generate_training_set(max_input_size, dataset_size, max_lookahead, reserved_
 			#path_lengths[len(path)] += 1
 			#total_path_lengths += 1
 			for j in range(1, len(path)):
-				if add_padding:
-					if j > MAX_PATH_LENGTH:
-						break
-					example = prefix + ([EDGE_PREFIX_TOKEN] * (MAX_PATH_LENGTH - j)) + [v.id for v in path[:j]]
-				else:
-					example = prefix + [v.id for v in path[:j]]
+				if distance_from_start != None and j != distance_from_start:
+					continue
+				example = prefix + [v.id for v in path[:j]]
 				if len(example) > max_input_size:
 					#print('WARNING: Generated example is too long.')
 					continue
@@ -502,7 +490,7 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 				inputs, outputs, valid_outputs = pickle.load(f)
 		else:
 			# we haven't generated the training data yet, so generate it here
-			inputs, outputs, valid_outputs = generate_training_set(max_input_size, dataset_size, max_lookahead, add_padding)
+			inputs, outputs, valid_outputs = generate_training_set(max_input_size, dataset_size, max_lookahead, 1 if add_padding else None)
 
 			# save the generated training data to file
 			with open(train_path, 'wb') as f:
@@ -599,12 +587,13 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 			# first reserve some data for OOD testing
 			max_lookahead = ((max_input_size - 5) // 3 - 1) // 2
 			reserved_inputs = set()
+			dist_from_start = 1 if add_padding else None
 			for lookahead in list(range(1, max_lookahead + 1)) + [None]:
 				setstate(random_state)
 				np.random.set_state(np_random_state)
 				torch.set_rng_state(torch_random_state)
 
-				inputs,outputs = generate_eval_data(max_input_size, min_path_length=2, distance_from_start=None, distance_from_end=None, lookahead_steps=lookahead, num_paths_at_fork=None, num_samples=10000, add_padding=add_padding)
+				inputs,outputs = generate_eval_data(max_input_size, min_path_length=2, distance_from_start=dist_from_start, distance_from_end=None, lookahead_steps=lookahead, num_paths_at_fork=None, num_samples=10000)
 				for i in range(inputs.shape[0]):
 					reserved_inputs.add(tuple([x for x in inputs[i,:] if x != PADDING_TOKEN]))
 
@@ -632,7 +621,7 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 						break
 					sleep(0.05)
 
-				inputs, outputs, valid_outputs, num_collisions = generate_training_set(max_input_size, STREAMING_BLOCK_SIZE, max_lookahead, reserved_inputs, add_padding, quiet=True)
+				inputs, outputs, valid_outputs, num_collisions = generate_training_set(max_input_size, STREAMING_BLOCK_SIZE, max_lookahead, reserved_inputs, dist_from_start, quiet=True)
 				if num_collisions != 0:
 					total_collisions += num_collisions
 					print('[DATA GENERATOR {}] Total number of training examples generated that are in the test set: {}'.format(worker_id, total_collisions))
@@ -656,7 +645,7 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 			worker.start()
 
 	# generate test data
-	eval_inputs,eval_outputs = generate_eval_data(max_input_size, add_padding=add_padding)
+	eval_inputs,eval_outputs = generate_eval_data(max_input_size, distance_from_start=(1 if add_padding else None))
 
 	while True:
 		#import time
@@ -695,7 +684,7 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 				def compute_toeplitz_regularization(m):
 					regularization = 0.0
 					for i in range(-A.size(0) + 1, A.size(1)):
-						regularization += torch.var(torch.diagonal(A, offset=i), correction=0)
+						regularization += torch.var(torch.diagonal(A, offset=i), unbiased=False)
 					return regularization
 
 				for transformer in model.transformers:
