@@ -1,4 +1,4 @@
-from random import sample, randrange, choice, shuffle, seed, uniform, getstate, setstate
+from random import sample, randrange, choice, shuffle, seed, uniform, getstate, setstate, Random
 from os import listdir, makedirs, rename, remove
 from os.path import isfile, isdir
 from sys import stdout
@@ -338,8 +338,7 @@ def evaluate_model(model, inputs, outputs):
 
 	model.eval()
 	loss_func = CrossEntropyLoss(reduction='mean')
-	logits = model(inputs)
-	logits = logits[0]
+	logits, _ = model(inputs)
 	loss = loss_func(logits[:, -1, :], outputs).item()
 
 	predictions = torch.argmax(logits[:, -1, :], 1)
@@ -478,6 +477,28 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 	seed(seed_value)
 	torch.manual_seed(seed_value)
 	np.random.seed(seed_value)
+	PADDING_TOKEN = (max_input_size-5) // 3 + 3
+
+	# first reserve some data for OOD testing
+	random_state = getstate()
+	np_random_state = np.random.get_state()
+	torch_random_state = torch.get_rng_state()
+
+	max_lookahead = ((max_input_size - 5) // 3 - 1) // 2
+	reserved_inputs = set()
+	dist_from_start = 1 if add_padding else None
+	for lookahead in list(range(1, max_lookahead + 1)) + [None]:
+		setstate(random_state)
+		np.random.set_state(np_random_state)
+		torch.set_rng_state(torch_random_state)
+
+		print('Reserving OOD test data for lookahead = {}'.format(lookahead))
+		stdout.flush()
+		inputs,outputs = generate_eval_data(max_input_size, min_path_length=2, distance_from_start=dist_from_start, distance_from_end=None, lookahead_steps=lookahead, num_paths_at_fork=None, num_samples=10000)
+		for i in range(inputs.shape[0]):
+			reserved_inputs.add(tuple([x for x in inputs[i,:] if x != PADDING_TOKEN]))
+		if lookahead == None:
+			eval_inputs, eval_outputs = inputs, outputs
 
 	train_filename = 'train{}_inputsize{}_maxlookahead{}_{}seed{}.pkl'.format(dataset_size, max_input_size, max_lookahead, 'padded_' if add_padding else '', seed_value)
 	if dataset_size != -1:
@@ -490,7 +511,7 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 				inputs, outputs, valid_outputs = pickle.load(f)
 		else:
 			# we haven't generated the training data yet, so generate it here
-			inputs, outputs, valid_outputs = generate_training_set(max_input_size, dataset_size, max_lookahead, 1 if add_padding else None)
+			inputs, outputs, valid_outputs = generate_training_set(max_input_size, dataset_size, max_lookahead, reserved_inputs, 1 if add_padding else None)
 
 			# save the generated training data to file
 			with open(train_path, 'wb') as f:
@@ -533,7 +554,6 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 	nhead = 1
 	d_hid = ntoken + hidden_dim
 	dropout = 0
-	PADDING_TOKEN = (max_input_size-5) // 3 + 3
 	if len(existing_epochs) == 0:
 		model = Transformer(
 				layers=nlayers,
@@ -554,20 +574,10 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 		last_epoch = max(existing_epochs)
 		epoch = last_epoch + 1
 		loaded_obj = torch.load(filename + '/epoch{}.pt'.format(last_epoch), map_location=device)
-		if type(loaded_obj) is tuple:
-			model, random_state, np_random_state, torch_random_state = loaded_obj
-			setstate(random_state)
-			np.random.set_state(np_random_state)
-			torch.set_rng_state(torch_random_state.cpu())
-		else:
-			model = loaded_obj
-			print("WARNING: loaded checkpoint does not have PRNG state data; resetting random seed...")
-			from time import time
-			seed_value = int(time())
-			print("New random seed: " + str(seed_value))
-			seed(seed_value)
-			torch.manual_seed(seed_value)
-			np.random.seed(seed_value)
+		model, random_state, np_random_state, torch_random_state = loaded_obj
+		setstate(random_state)
+		np.random.set_state(np_random_state)
+		torch.set_rng_state(torch_random_state.cpu())
 
 	loss_func = CrossEntropyLoss(ignore_index=PADDING_TOKEN, reduction='mean')
 	optimizer = SophiaG((p for p in model.parameters() if p.requires_grad), lr=1.0e-4, weight_decay=0.1)
@@ -577,106 +587,71 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 	save_interval = 1
 
 	if dataset_size == -1:
-		# if we are doing streaming training, start the data generator process
-		from multiprocessing import Process
-		from time import sleep
-		STREAMING_BLOCK_SIZE = 262144
+		# we are doing streaming training, so use an IterableDataset
+		from itertools import cycle
+		from threading import Lock
+		STREAMING_BLOCK_SIZE = 2 ** 18
 		NUM_DATA_WORKERS = 32
+		seed_generator = Random(seed_value)
+		seed_generator_lock = Lock()
+		seed_values = []
 
-		def generate_data(worker_id, epoch, random_state, np_random_state, torch_random_state):
-			# first reserve some data for OOD testing
-			max_lookahead = ((max_input_size - 5) // 3 - 1) // 2
-			reserved_inputs = set()
-			dist_from_start = 1 if add_padding else None
-			for lookahead in list(range(1, max_lookahead + 1)) + [None]:
-				setstate(random_state)
-				np.random.set_state(np_random_state)
-				torch.set_rng_state(torch_random_state)
+		def get_seed(index):
+			if index < len(seed_values):
+				return seed_values[index]
+			seed_generator_lock.acquire()
+			while index >= len(seed_values):
+				seed_values.append(seed_generator.randrange(2 ** 32))
+			seed_generator_lock.release()
+			return seed_values[index]
 
-				inputs,outputs = generate_eval_data(max_input_size, min_path_length=2, distance_from_start=dist_from_start, distance_from_end=None, lookahead_steps=lookahead, num_paths_at_fork=None, num_samples=10000)
-				for i in range(inputs.shape[0]):
-					reserved_inputs.add(tuple([x for x in inputs[i,:] if x != PADDING_TOKEN]))
+		total_collisions = 0
+		collisions_lock = Lock()
 
-			generated_filenames = []
-			total_collisions = 0
+		class StreamingDataset(torch.utils.data.IterableDataset):
+			def __init__(self, offset):
+				super(StreamingDataset).__init__()
+				self.offset = offset
 
-			for i in range(worker_id):
-				new_seed = randrange(2**24)
-				seed(new_seed)
-				torch.manual_seed(new_seed)
-				np.random.seed(new_seed)
-
-			# compute the next epoch assigned to this worker
-			next_epoch = (epoch // NUM_DATA_WORKERS) * NUM_DATA_WORKERS + worker_id
-			if next_epoch < epoch:
-				next_epoch += NUM_DATA_WORKERS
-			epoch = next_epoch
-
-			while True:
-				# wait until we need to generate data
+			def process_data(self, start):
+				current = start
 				while True:
-					filenames = listdir(filename)
-					generated_filenames = [file for file in generated_filenames if file in filenames]
-					if len(generated_filenames) <= NUM_DATA_WORKERS:
-						break
-					sleep(0.05)
+					new_seed = get_seed(current)
+					seed(new_seed)
+					torch.manual_seed(new_seed)
+					np.random.seed(new_seed)
 
-				inputs, outputs, valid_outputs, num_collisions = generate_training_set(max_input_size, STREAMING_BLOCK_SIZE, max_lookahead, reserved_inputs, dist_from_start, quiet=True)
-				if num_collisions != 0:
-					total_collisions += num_collisions
-					print('[DATA GENERATOR {}] Total number of training examples generated that are in the test set: {}'.format(worker_id, total_collisions))
-					stdout.flush()
-				temp_filename = filename + '/streaming_temp' + str(worker_id) + '.pkl'
-				with open(temp_filename, 'wb') as f:
-					pickle.dump((inputs, outputs, valid_outputs), f)
-				generated_filename = train_filename[-4] + '_epoch' + str(epoch) + '.pkl'
-				epoch += NUM_DATA_WORKERS
-				rename(temp_filename, filename + '/' + generated_filename)
-				generated_filenames.append(generated_filename)
+					inputs, outputs, valid_outputs, num_collisions = generate_training_set(max_input_size, BATCH_SIZE, max_lookahead, reserved_inputs, dist_from_start, quiet=True)
+					if num_collisions != 0:
+						collisions_lock.acquire()
+						total_collisions += num_collisions
+						collisions_lock.release()
+						print('Total number of training examples generated that are in the test set: {}'.format(worker_id, total_collisions))
+						stdout.flush()
 
-		# make sure there aren't existing files that could cause deadlocks before starting the data generation child process
-		to_remove = [file for file in listdir(filename) if file.startswith(train_filename[-4] + '_epoch')]
-		for existing_file in to_remove:
-			remove(filename + '/' + existing_file)
-		data_generators = []
-		for i in range(NUM_DATA_WORKERS):
-			worker = Process(target=generate_data, args=(i,epoch,getstate(),np.random.get_state(),torch.get_rng_state()))
-			data_generators.append(worker)
-			worker.start()
+					yield inputs, outputs
+					current += NUM_DATA_WORKERS
 
-	# generate test data
-	eval_inputs,eval_outputs = generate_eval_data(max_input_size, distance_from_start=(1 if add_padding else None))
+			def __iter__(self):
+				worker_info = torch.utils.data.get_worker_info()
+				worker_id = worker_info.id
+				return cycle(self.process_data(self.offset + worker_id))
+
+		iterable_dataset = StreamingDataset(epoch * STREAMING_BLOCK_SIZE // BATCH_SIZE)
+		train_loader = DataLoader(iterable_dataset, batch_size=None, num_workers=NUM_DATA_WORKERS, pin_memory=True)
 
 	while True:
 		#import time
 		#time1 = time.perf_counter()
 		epoch_loss = 0.0
-		if dataset_size == -1:
-			# wait until there is data available
-			while True:
-				filenames = listdir(filename)
-				input_filename = train_filename[-4] + '_epoch' + str(epoch) + '.pkl'
-				if input_filename in filenames:
-					break
-				sleep(0.05)
-			#time2 = time.perf_counter()
-			#print('[MAIN] Time waiting for data availability: {}s'.format(time2 - time1))
-			#stdout.flush()
-			with open(filename + '/' + input_filename, 'rb') as f:
-				inputs, outputs, valid_outputs = pickle.load(f)
-			remove(filename + '/' + input_filename)
-
-			train_data = DummyDataset(inputs, outputs, device)
-			train_loader = DataLoader(train_data, batch_size=BATCH_SIZE, shuffle=True)
-			#time3 = time.perf_counter()
-			#print('[MAIN] Time to load data: {}s'.format(time3 - time2))
-			#stdout.flush()
-
+		num_batches = 0
 		for idx, batch in enumerate(train_loader):
 			model.train()
 			optimizer.zero_grad()
 
 			input, output = batch
+			input = input.to(device, non_blocking=True)
+			output = output.to(device, non_blocking=True)
 
 			logits = model(input)
 			loss_val = loss_func(logits[:, -1, :], output)
@@ -705,47 +680,48 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 			loss_val.backward()
 			optimizer.step()
 
-		#time4 = time.perf_counter()
-		#print('[MAIN] Time to train: {}s'.format(time4 - time3))
-		#stdout.flush()
+			num_batches += 1
+			if dataset_size == -1 and num_batches == STREAMING_BLOCK_SIZE // BATCH_SIZE:
+				#time4 = time.perf_counter()
+				#print('[MAIN] Time to train: {}s'.format(time4 - time3))
+				#stdout.flush()
 
-		if epoch % save_interval == 0:
-			ckpt_filename = filename + '/epoch{}.pt'.format(epoch)
-			print('saving to "{}".'.format(ckpt_filename))
-			torch.save((model,getstate(),np.random.get_state(),torch.get_rng_state()), ckpt_filename)
-			print('done saving model.')
-			stdout.flush()
+				if epoch % save_interval == 0:
+					ckpt_filename = filename + '/epoch{}.pt'.format(epoch)
+					print('saving to "{}".'.format(ckpt_filename))
+					torch.save((model,getstate(),np.random.get_state(),torch.get_rng_state()), ckpt_filename)
+					print('done saving model.')
+					stdout.flush()
 
-			#time5 = time.perf_counter()
-			#print('[MAIN] Time to save model: {}s'.format(time5 - time4))
-			#stdout.flush()
+					#time5 = time.perf_counter()
+					#print('[MAIN] Time to save model: {}s'.format(time5 - time4))
+					#stdout.flush()
 
-		if epoch % log_interval == 0:
-			print("epoch = {}, training loss = {}".format(epoch, epoch_loss))
-			stdout.flush()
+				if epoch % log_interval == 0:
+					print("epoch = {}, training loss = {}".format(epoch, epoch_loss))
+					stdout.flush()
 
-		if epoch % eval_interval == 0:
-			test_acc,test_loss = evaluate_model(model, eval_inputs, eval_outputs)
-			print("test accuracy = %.2f±%.2f, test loss = %f" % (test_acc, binomial_confidence_int(test_acc, 1000), test_loss))
-			stdout.flush()
+				if epoch % eval_interval == 0:
+					model.eval()
+					logits, _ = model(input)
+					training_acc = torch.sum(torch.argmax(logits[:,-1,:],dim=1) == output).item() / output.size(0)
+					print("training accuracy: %.2f±%.2f" % (training_acc, binomial_confidence_int(training_acc, output.size(0))))
+					del input, output
+					stdout.flush()
 
-			if dataset_size == -1:
-				training_indices = torch.randint(STREAMING_BLOCK_SIZE, (400,))
-			else:
-				training_indices = torch.randint(dataset_size, (400,))
-			logits, _ = model(LongTensor(inputs[training_indices, :]).to(device))
-			predictions = torch.argmax(logits[:, -1, :], 1)
-			training_acc = sum([predictions[i] in valid_outputs[training_indices[i]] for i in range(400)]) / 400
-			print("training accuracy: %.2f±%.2f" % (training_acc, binomial_confidence_int(training_acc, 400)))
-			stdout.flush()
-			#time6 = time.perf_counter()
-			#print('[MAIN] Time to evaluate model: {}s'.format(time6 - time5))
-			#stdout.flush()
+					test_acc,test_loss = evaluate_model(model, eval_inputs, eval_outputs)
+					print("test accuracy = %.2f±%.2f, test loss = %f" % (test_acc, binomial_confidence_int(test_acc, 1000), test_loss))
+					stdout.flush()
+					#time6 = time.perf_counter()
+					#print('[MAIN] Time to evaluate model: {}s'.format(time6 - time5))
+					#stdout.flush()
 
-		#time7 = time.perf_counter()
-		#print('[MAIN] Total time for epoch: {}s'.format(time7 - time1))
-		#stdout.flush()
-		epoch += 1
+				#time7 = time.perf_counter()
+				#print('[MAIN] Total time for epoch: {}s'.format(time7 - time1))
+				#stdout.flush()
+				epoch += 1
+				num_batches = 0
+				epoch_loss = 0.0
 
 if __name__ == "__main__":
 	import argparse
