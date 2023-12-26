@@ -605,13 +605,15 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 			seed_generator_lock.release()
 			return seed_values[index]
 
-		total_collisions = 0
-		collisions_lock = Lock()
-
 		class StreamingDataset(torch.utils.data.IterableDataset):
 			def __init__(self, offset):
 				super(StreamingDataset).__init__()
 				self.offset = offset
+
+				from multiprocessing import Manager
+				self.multiprocessing_manager = Manager()
+				self.total_collisions = self.multiprocessing_manager.Value(int, 0)
+				self.collisions_lock = self.multiprocessing_manager.Lock()
 
 			def process_data(self, start):
 				current = start
@@ -623,10 +625,9 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 
 					inputs, outputs, valid_outputs, num_collisions = generate_training_set(max_input_size, BATCH_SIZE, max_lookahead, reserved_inputs, dist_from_start, quiet=True)
 					if num_collisions != 0:
-						collisions_lock.acquire()
-						total_collisions += num_collisions
-						collisions_lock.release()
-						print('Total number of training examples generated that are in the test set: {}'.format(worker_id, total_collisions))
+						with self.collisions_lock:
+							self.total_collisions.value += num_collisions
+						print('Total number of training examples generated that are in the test set: {}'.format(self.total_collisions.value))
 						stdout.flush()
 
 					yield inputs, outputs
