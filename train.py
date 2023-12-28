@@ -657,7 +657,7 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 		#time1 = time.perf_counter()
 		epoch_loss = 0.0
 		num_batches = 0
-		for idx, batch in enumerate(train_loader):
+		for batch in cycle(train_loader):
 			model.train()
 			optimizer.zero_grad()
 
@@ -694,7 +694,7 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 			optimizer.step()
 
 			num_batches += 1
-			if dataset_size == -1 and num_batches == STREAMING_BLOCK_SIZE // BATCH_SIZE:
+			if (dataset_size == -1 and num_batches == STREAMING_BLOCK_SIZE // BATCH_SIZE) or (dataset_size >= 0 and num_batches == dataset_size // BATCH_SIZE):
 				#time4 = time.perf_counter()
 				#print('[MAIN] Time to train: {}s'.format(time4 - time3))
 				#stdout.flush()
