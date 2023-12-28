@@ -11,6 +11,7 @@ from torch.nn import CrossEntropyLoss
 from torch.utils.data import Dataset, DataLoader
 from gpt2 import Transformer, ToeplitzMode
 from Sophia import SophiaG
+import time
 
 RESERVED_INDICES = (0,)
 
@@ -525,7 +526,7 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 	else:
 		device = torch.device('cuda')
 
-	BATCH_SIZE = 512
+	BATCH_SIZE = 2 ** 14
 	if dataset_size != -1:
 		train_data = DummyDataset(inputs, outputs, device)
 		train_loader = DataLoader(train_data, batch_size=BATCH_SIZE, shuffle=True)
@@ -601,8 +602,8 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 		# we are doing streaming training, so use an IterableDataset
 		from itertools import cycle
 		from threading import Lock
-		STREAMING_BLOCK_SIZE = 2 ** 16
-		NUM_DATA_WORKERS = 8
+		STREAMING_BLOCK_SIZE = 2 ** 18
+		NUM_DATA_WORKERS = 32
 		seed_generator = Random(seed_value)
 		seed_generator_lock = Lock()
 		seed_values = []
@@ -628,7 +629,10 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 
 			def process_data(self, start):
 				current = start
+				worker_info = torch.utils.data.get_worker_info()
+				worker_id = worker_info.id
 				while True:
+					worker_start_time = time.perf_counter()
 					new_seed = get_seed(current)
 					seed(new_seed)
 					torch.manual_seed(new_seed)
@@ -641,6 +645,9 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 						print('Total number of training examples generated that are in the test set: {}'.format(self.total_collisions.value))
 						stdout.flush()
 
+					worker_time = time.perf_counter() - worker_start_time
+					print('[WORKER {}] yield = {}, time to generate = {}s, throughput = {} examples/s'.format(worker_id, current, worker_time, BATCH_SIZE / worker_time))
+					stdout.flush()
 					yield inputs, outputs
 					current += NUM_DATA_WORKERS
 
@@ -650,21 +657,28 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 				return cycle(self.process_data(self.offset + worker_id))
 
 		iterable_dataset = StreamingDataset(epoch * STREAMING_BLOCK_SIZE // BATCH_SIZE)
-		train_loader = DataLoader(iterable_dataset, batch_size=None, num_workers=NUM_DATA_WORKERS, pin_memory=True)
+		train_loader = DataLoader(iterable_dataset, batch_size=None, num_workers=NUM_DATA_WORKERS, pin_memory=True, prefetch_factor=16*(STREAMING_BLOCK_SIZE // BATCH_SIZE))
 
 	while True:
-		import time
 		start_time = time.perf_counter()
+		transfer_time = 0.0
+		train_time = 0.0
+		log_time = 0.0
 		epoch_loss = 0.0
 		num_batches = 0
 		effective_dataset_size = (STREAMING_BLOCK_SIZE if dataset_size == -1 else dataset_size)
 		for batch in cycle(train_loader):
+			batch_start_time = time.perf_counter()
 			model.train()
 			optimizer.zero_grad()
 
 			input, output = batch
 			input = input.to(device, non_blocking=True)
 			output = output.to(device, non_blocking=True)
+
+			torch.cuda.synchronize(device)
+			train_start_time = time.perf_counter()
+			transfer_time += train_start_time - batch_start_time
 
 			logits = model(input)
 			loss_val = loss_func(logits[:, -1, :], output)
@@ -694,6 +708,10 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 			loss_val.backward()
 			optimizer.step()
 
+			torch.cuda.synchronize(device)
+			log_start_time = time.perf_counter()
+			train_time += log_start_time - train_start_time
+
 			num_batches += 1
 			if num_batches == effective_dataset_size // BATCH_SIZE:
 				#time4 = time.perf_counter()
@@ -716,8 +734,15 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 					print("epoch = {}, training loss = {}".format(epoch, epoch_loss))
 					utilization = popen('nvidia-smi --query-gpu=utilization.gpu --format=csv').read().split('\n')[1]
 					print("throughput = {} examples/s, GPU utilization = {}".format(effective_dataset_size / elapsed_time, utilization))
+					print("[PROFILE] Total batch time: {}s".format(elapsed_time))
+					print("[PROFILE] Time to transfer data to GPU: {}s".format(transfer_time))
+					print("[PROFILE] Time to train: {}s".format(train_time))
+					print("[PROFILE] Time to log/save/compute validation acc: {}s".format(log_time))
 					stdout.flush()
 					start_time = time.perf_counter()
+					transfer_time = 0.0
+					train_time = 0.0
+					log_time = 0.0
 
 				if epoch % eval_interval == 0:
 					model.eval()
@@ -740,6 +765,10 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 				epoch += 1
 				num_batches = 0
 				epoch_loss = 0.0
+
+			torch.cuda.synchronize(device)
+			log_end_time = time.perf_counter()
+			log_time += log_end_time - log_start_time
 
 if __name__ == "__main__":
 	import argparse
