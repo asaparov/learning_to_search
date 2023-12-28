@@ -518,7 +518,7 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 			with open(train_path, 'wb') as f:
 				pickle.dump((inputs, outputs, valid_outputs), f)
 
-	if not torch.cuda.is_available():
+	if True or not torch.cuda.is_available():
 		print("ERROR: CUDA device is not available.")
 		#from sys import exit
 		#exit(-1)
@@ -603,7 +603,7 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 		from itertools import cycle
 		from threading import Lock
 		STREAMING_BLOCK_SIZE = 2 ** 18
-		NUM_DATA_WORKERS = 32
+		NUM_DATA_WORKERS = 24
 		seed_generator = Random(seed_value)
 		seed_generator_lock = Lock()
 		seed_values = []
@@ -676,7 +676,8 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 			input = input.to(device, non_blocking=True)
 			output = output.to(device, non_blocking=True)
 
-			torch.cuda.synchronize(device)
+			if device.type == 'cuda':
+				torch.cuda.synchronize(device)
 			train_start_time = time.perf_counter()
 			transfer_time += train_start_time - batch_start_time
 
@@ -708,7 +709,8 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 			loss_val.backward()
 			optimizer.step()
 
-			torch.cuda.synchronize(device)
+			if device.type == 'cuda':
+				torch.cuda.synchronize(device)
 			log_start_time = time.perf_counter()
 			train_time += log_start_time - train_start_time
 
@@ -732,8 +734,11 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 				if epoch % log_interval == 0:
 					elapsed_time = time.perf_counter() - start_time
 					print("epoch = {}, training loss = {}".format(epoch, epoch_loss))
-					utilization = popen('nvidia-smi --query-gpu=utilization.gpu --format=csv').read().split('\n')[1]
-					print("throughput = {} examples/s, GPU utilization = {}".format(effective_dataset_size / elapsed_time, utilization))
+					if device.type == 'cuda':
+						utilization = popen('nvidia-smi --query-gpu=utilization.gpu --format=csv').read().split('\n')[1]
+						print("throughput = {} examples/s, GPU utilization = {}".format(effective_dataset_size / elapsed_time, utilization))
+					else:
+						print("throughput = {} examples/s".format(effective_dataset_size / elapsed_time))
 					print("[PROFILE] Total batch time: {}s".format(elapsed_time))
 					print("[PROFILE] Time to transfer data to GPU: {}s".format(transfer_time))
 					print("[PROFILE] Time to train: {}s".format(train_time))
@@ -766,7 +771,8 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 				num_batches = 0
 				epoch_loss = 0.0
 
-			torch.cuda.synchronize(device)
+			if device.type == 'cuda':
+				torch.cuda.synchronize(device)
 			log_end_time = time.perf_counter()
 			log_time += log_end_time - log_start_time
 
