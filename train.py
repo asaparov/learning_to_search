@@ -1,5 +1,5 @@
 from random import sample, randrange, choice, shuffle, seed, uniform, getstate, setstate, Random
-from os import listdir, makedirs, rename, remove
+from os import listdir, makedirs, rename, remove, popen
 from os.path import isfile, isdir
 from sys import stdout
 import pickle
@@ -9,7 +9,7 @@ from torch import nn, Tensor, LongTensor
 import torch.nn.functional as F
 from torch.nn import CrossEntropyLoss
 from torch.utils.data import Dataset, DataLoader
-from gpt2 import Transformer
+from gpt2 import Transformer, ToeplitzMode
 from Sophia import SophiaG
 
 RESERVED_INDICES = (0,)
@@ -525,7 +525,7 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 	else:
 		device = torch.device('cuda')
 
-	BATCH_SIZE = 4096
+	BATCH_SIZE = 512
 	if dataset_size != -1:
 		train_data = DummyDataset(inputs, outputs, device)
 		train_loader = DataLoader(train_data, batch_size=BATCH_SIZE, shuffle=True)
@@ -601,8 +601,8 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 		# we are doing streaming training, so use an IterableDataset
 		from itertools import cycle
 		from threading import Lock
-		STREAMING_BLOCK_SIZE = 2 ** 18
-		NUM_DATA_WORKERS = 32
+		STREAMING_BLOCK_SIZE = 2 ** 16
+		NUM_DATA_WORKERS = 8
 		seed_generator = Random(seed_value)
 		seed_generator_lock = Lock()
 		seed_values = []
@@ -653,10 +653,11 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 		train_loader = DataLoader(iterable_dataset, batch_size=None, num_workers=NUM_DATA_WORKERS, pin_memory=True)
 
 	while True:
-		#import time
-		#time1 = time.perf_counter()
+		import time
+		start_time = time.perf_counter()
 		epoch_loss = 0.0
 		num_batches = 0
+		effective_dataset_size = (STREAMING_BLOCK_SIZE if dataset_size == -1 else dataset_size)
 		for batch in cycle(train_loader):
 			model.train()
 			optimizer.zero_grad()
@@ -694,7 +695,7 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 			optimizer.step()
 
 			num_batches += 1
-			if (dataset_size == -1 and num_batches == STREAMING_BLOCK_SIZE // BATCH_SIZE) or (dataset_size >= 0 and num_batches == dataset_size // BATCH_SIZE):
+			if num_batches == effective_dataset_size // BATCH_SIZE:
 				#time4 = time.perf_counter()
 				#print('[MAIN] Time to train: {}s'.format(time4 - time3))
 				#stdout.flush()
@@ -711,8 +712,12 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 					#stdout.flush()
 
 				if epoch % log_interval == 0:
+					elapsed_time = time.perf_counter() - start_time
 					print("epoch = {}, training loss = {}".format(epoch, epoch_loss))
+					utilization = popen('nvidia-smi --query-gpu=utilization.gpu --format=csv').read().split('\n')[1]
+					print("throughput = {} examples/s, GPU utilization = {}".format(effective_dataset_size / elapsed_time, utilization))
 					stdout.flush()
+					start_time = time.perf_counter()
 
 				if epoch % eval_interval == 0:
 					model.eval()
