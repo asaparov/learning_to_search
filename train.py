@@ -473,7 +473,7 @@ def generate_training_set(max_input_size, dataset_size, max_lookahead, reserved_
 
 	return inputs, outputs, valid_outputs, num_collisions
 
-def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidden_dim, bidirectional, absolute_pos_emb, learnable_token_emb, toeplitz_attn, toeplitz_reg, add_padding):
+def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidden_dim, bidirectional, absolute_pos_emb, learnable_token_emb, toeplitz_attn, toeplitz_reg, toeplitz_pos_only, add_padding):
 	seed(seed_value)
 	torch.manual_seed(seed_value)
 	np.random.seed(seed_value)
@@ -484,10 +484,10 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 	np_random_state = np.random.get_state()
 	torch_random_state = torch.get_rng_state()
 
-	max_lookahead = ((max_input_size - 5) // 3 - 1) // 2
+	max_test_lookahead = ((max_input_size - 5) // 3 - 1) // 2
 	reserved_inputs = set()
 	dist_from_start = 1 if add_padding else None
-	for lookahead in list(range(1, max_lookahead + 1)) + [None]:
+	for lookahead in list(range(1, max_test_lookahead + 1)) + [None]:
 		setstate(random_state)
 		np.random.set_state(np_random_state)
 		torch.set_rng_state(torch_random_state)
@@ -540,8 +540,13 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 		filename += '_learntokemb'
 	if toeplitz_attn:
 		filename += '_toeplitz'
+		if toeplitz_pos_only:
+			filename += 'pos'
 	if toeplitz_reg != 0.0:
-		filename += '_toeplitz' + str(toeplitz_reg)
+		filename += '_toeplitz'
+		if toeplitz_pos_only:
+			filename += 'pos'
+		filename += str(toeplitz_reg)
 	if add_padding:
 		filename += '_padded'
 	if isdir(filename):
@@ -555,6 +560,12 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 	d_hid = ntoken + hidden_dim
 	dropout = 0
 	if len(existing_epochs) == 0:
+		if toeplitz_attn and toeplitz_pos_only:
+			toeplitz = ToeplitzMode.LOWER_RIGHT
+		elif toeplitz_attn and not toeplitz_pos_only:
+			toeplitz = ToeplitzMode.BLOCK
+		else:
+			toeplitz = ToeplitzMode.NONE
 		model = Transformer(
 				layers=nlayers,
 				pad_idx=PADDING_TOKEN,
@@ -567,7 +578,7 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 				bidirectional=bidirectional,
 				absolute_pos_emb=absolute_pos_emb,
 				learn_token_emb=learnable_token_emb,
-				diagonal_attn=toeplitz_attn)
+				toeplitz=toeplitz)
 		epoch = 0
 		model.to(device)
 	else:
@@ -667,14 +678,15 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 					P_q = next(v for k,v in transformer.attn.proj_q.named_parameters() if k == 'weight')
 					P_k = next(v for k,v in transformer.attn.proj_k.named_parameters() if k == 'weight')
 					A = torch.matmul(P_q.transpose(-2,-1),P_k)
-					loss_val += toeplitz_reg * compute_toeplitz_regularization(A[:ntoken,:ntoken])
-					loss_val += toeplitz_reg * compute_toeplitz_regularization(A[:ntoken,ntoken:d_hid])
-					loss_val += toeplitz_reg * compute_toeplitz_regularization(A[:ntoken,d_hid:])
-					loss_val += toeplitz_reg * compute_toeplitz_regularization(A[ntoken:d_hid,:ntoken])
-					loss_val += toeplitz_reg * compute_toeplitz_regularization(A[ntoken:d_hid,ntoken:d_hid])
-					loss_val += toeplitz_reg * compute_toeplitz_regularization(A[ntoken:d_hid,d_hid:])
-					loss_val += toeplitz_reg * compute_toeplitz_regularization(A[d_hid:,:ntoken])
-					loss_val += toeplitz_reg * compute_toeplitz_regularization(A[d_hid:,ntoken:d_hid])
+					if not toeplitz_pos_only:
+						loss_val += toeplitz_reg * compute_toeplitz_regularization(A[:ntoken,:ntoken])
+						loss_val += toeplitz_reg * compute_toeplitz_regularization(A[:ntoken,ntoken:d_hid])
+						loss_val += toeplitz_reg * compute_toeplitz_regularization(A[:ntoken,d_hid:])
+						loss_val += toeplitz_reg * compute_toeplitz_regularization(A[ntoken:d_hid,:ntoken])
+						loss_val += toeplitz_reg * compute_toeplitz_regularization(A[ntoken:d_hid,ntoken:d_hid])
+						loss_val += toeplitz_reg * compute_toeplitz_regularization(A[ntoken:d_hid,d_hid:])
+						loss_val += toeplitz_reg * compute_toeplitz_regularization(A[d_hid:,:ntoken])
+						loss_val += toeplitz_reg * compute_toeplitz_regularization(A[d_hid:,ntoken:d_hid])
 					loss_val += toeplitz_reg * compute_toeplitz_regularization(A[d_hid:,d_hid:])
 			epoch_loss += loss_val.item()
 
@@ -748,6 +760,7 @@ if __name__ == "__main__":
 	parser.add_argument("--learn-tok-emb", type=parse_bool_arg, required=True, metavar="'y/n'")
 	parser.add_argument("--toeplitz-attn", type=parse_bool_arg, required=True, metavar="'y/n'")
 	parser.add_argument("--toeplitz-reg", type=float, required=True, default=0.0)
+	parser.add_argument("--toeplitz-pos-only", type=parse_bool_arg, required=True, metavar="'y/n'")
 	parser.add_argument("--add-padding", type=parse_bool_arg, required=True, metavar="'y/n'")
 	args = parser.parse_args()
 
@@ -763,4 +776,5 @@ if __name__ == "__main__":
 		learnable_token_emb=args.learn_tok_emb,
 		toeplitz_attn=args.toeplitz_attn,
 		toeplitz_reg=args.toeplitz_reg,
+		toeplitz_pos_only=args.toeplitz_pos_only,
 		add_padding=args.add_padding)

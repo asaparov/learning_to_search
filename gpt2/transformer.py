@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import torch.utils.checkpoint
 from torch.nn import LayerNorm
-from gpt2 import AttentionLayer, Past, PadMasking, FutureMasking, PositionalEmbedding, TokenEmbedding, PositionwiseFeedForward
+from gpt2 import AttentionLayer, Past, PadMasking, FutureMasking, PositionalEmbedding, TokenEmbedding, PositionwiseFeedForward, ToeplitzMode
 from typing import Optional, Tuple, List, Union
 
 
@@ -28,9 +28,9 @@ class TransformerLayer(nn.Module):
                  feedforward: bool = True,
                  sparse_v: bool = False,
                  linear: bool = True,
-                 diagonal: bool = False):
+                 toeplitz: ToeplitzMode = ToeplitzMode.NONE):
         super().__init__()
-        self.attn = AttentionLayer(heads, dims, token_dims, pos_dims, dropout, sparse_v, linear, diagonal)
+        self.attn = AttentionLayer(heads, dims, token_dims, pos_dims, dropout, sparse_v, linear, toeplitz)
         self.ln_attn = LayerNorm(dims)
         if feedforward:
             self.ff = PositionwiseFeedForward(dims, rate, dropout)
@@ -92,7 +92,7 @@ class Transformer(nn.Module):
                  bidirectional: bool = True,
                  absolute_pos_emb: bool = True,
                  learn_token_emb: bool = False,
-                 diagonal_attn: bool = False):
+                 toeplitz: ToeplitzMode = ToeplitzMode.NONE):
         super().__init__()
         self.bidirectional = bidirectional
         self.pad_masking = PadMasking(pad_idx)
@@ -120,7 +120,7 @@ class Transformer(nn.Module):
             token_dim = words
             position_dim = 0
         self.transformers = nn.ModuleList([
-            TransformerLayer(heads, embedding_dim, token_dim, position_dim, rate, dropout, l != layers - 1, True, False, diagonal_attn)
+            TransformerLayer(heads, embedding_dim, token_dim, position_dim, rate, dropout, l != layers - 1, True, False, toeplitz)
             for l in range(layers)])
         self.ln_head = LayerNorm(embedding_dim)
 

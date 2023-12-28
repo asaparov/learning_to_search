@@ -143,32 +143,32 @@ class BlockToeplitz(nn.Module):
         return f'in_features_left={self.in_features_left}, in_features_mid={self.in_features_mid}, in_features_right={self.in_features_right}, out_features_left={self.out_features_left}, out_features_mid={self.out_features_mid}, out_features_right={self.out_features_right}, bias={self.bias is not None}'
 
 class MixedToeplitz(nn.Module):
-    def __init__(self, in_features_left: int, in_features_right: int, out_features_left: int, out_features_right: int, bias: bool = True, device=None, dtype=None):
-        factory_kwargs = {'device':device, 'dtype':dtype}
-        super().__init__()
-        self.in_features_left = in_features_left
-        self.out_features_left = out_features_left
-        self.in_features_right = in_features_right
-        self.out_features_right = out_features_right
-        self.weights_LL = nn.parameter.Parameter(torch.empty((self.out_features_left, self.in_features_left), **factory_kwargs))
-        self.weights_LR = nn.parameter.Parameter(torch.empty((self.out_features_left, self.in_features_right), **factory_kwargs))
-        self.weights_RL = nn.parameter.Parameter(torch.empty((self.out_features_right, self.in_features_left), **factory_kwargs))
-        self.diagonals_RR = nn.parameter.Parameter(torch.empty(self.out_features_right + self.in_features_right - 1, **factory_kwargs))
-        if bias:
-            self.bias = nn.parameter.Parameter(torch.empty(out_features_left + out_features_right, **factory_kwargs))
-        else:
-            self.register_parameter('bias', None)
-        self.reset_parameters()
+	def __init__(self, in_features_left: int, in_features_right: int, out_features_left: int, out_features_right: int, bias: bool = True, device=None, dtype=None):
+		factory_kwargs = {'device':device, 'dtype':dtype}
+		super().__init__()
+		self.in_features_left = in_features_left
+		self.out_features_left = out_features_left
+		self.in_features_right = in_features_right
+		self.out_features_right = out_features_right
+		self.weights_LL = nn.parameter.Parameter(torch.empty((self.out_features_left, self.in_features_left), **factory_kwargs))
+		self.weights_LR = nn.parameter.Parameter(torch.empty((self.out_features_left, self.in_features_right), **factory_kwargs))
+		self.weights_RL = nn.parameter.Parameter(torch.empty((self.out_features_right, self.in_features_left), **factory_kwargs))
+		self.diagonals_RR = nn.parameter.Parameter(torch.empty(self.out_features_right + self.in_features_right - 1, **factory_kwargs))
+		if bias:
+			self.bias = nn.parameter.Parameter(torch.empty(out_features_left + out_features_right, **factory_kwargs))
+		else:
+			self.register_parameter('bias', None)
+		self.reset_parameters()
 
-    def reset_parameters(self) -> None:
-        nn.init.kaiming_uniform_(self.weights_LL, a=math.sqrt(5))
-        nn.init.kaiming_uniform_(self.weights_LR, a=math.sqrt(5))
-        nn.init.kaiming_uniform_(self.weights_RL, a=math.sqrt(5))
-        nn.init.uniform_(self.diagonals_RR, -math.sqrt(5), math.sqrt(5))
-        if self.bias is not None:
-            fan_in = self.in_features_left + self.in_features_right
-            bound = 1 / math.sqrt(fan_in) if fan_in > 0 else 0
-            nn.init.uniform_(self.bias, -bound, bound)
+	def reset_parameters(self) -> None:
+		nn.init.kaiming_uniform_(self.weights_LL, a=math.sqrt(5))
+		nn.init.kaiming_uniform_(self.weights_LR, a=math.sqrt(5))
+		nn.init.kaiming_uniform_(self.weights_RL, a=math.sqrt(5))
+		nn.init.uniform_(self.diagonals_RR, -math.sqrt(5), math.sqrt(5))
+		if self.bias is not None:
+			fan_in = self.in_features_left + self.in_features_right
+			bound = 1 / math.sqrt(fan_in) if fan_in > 0 else 0
+			nn.init.uniform_(self.bias, -bound, bound)
 
     def forward(self, input: torch.Tensor) -> torch.Tensor:
         weight_RR = toeplitz(self.diagonals_RR[:self.out_features_right-1], self.diagonals_RR[self.out_features_right-1:])
@@ -182,9 +182,9 @@ class MixedToeplitz(nn.Module):
 
 
 class ToeplitzMode(Enum):
-    NONE = 0,
-    BLOCK = 1,
-    LOWER_RIGHT = 2
+	NONE = 0,
+	BLOCK = 1,
+	LOWER_RIGHT = 2
 
 
 class AttentionLayer(nn.Module):
