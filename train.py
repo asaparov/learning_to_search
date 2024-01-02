@@ -686,10 +686,10 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 			def __iter__(self):
 				worker_info = torch.utils.data.get_worker_info()
 				worker_id = worker_info.id
-				return cycle(self.process_data(self.offset + worker_id))
+				return self.process_data(self.offset + worker_id)
 
 		iterable_dataset = StreamingDataset(epoch * STREAMING_BLOCK_SIZE // BATCH_SIZE)
-		train_loader = DataLoader(iterable_dataset, batch_size=None, num_workers=NUM_DATA_WORKERS, pin_memory=True)
+		train_loader = DataLoader(iterable_dataset, batch_size=None, num_workers=NUM_DATA_WORKERS, pin_memory=True, prefetch_factor=8)
 
 	while True:
 		start_time = time.perf_counter()
@@ -699,7 +699,7 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 		epoch_loss = 0.0
 		num_batches = 0
 		effective_dataset_size = (STREAMING_BLOCK_SIZE if dataset_size == -1 else dataset_size)
-		for batch in cycle(train_loader):
+		for batch in (train_loader if dataset_size == -1 else cycle(train_loader)):
 			batch_start_time = time.perf_counter()
 			model.train()
 			optimizer.zero_grad()
@@ -708,8 +708,8 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 			input = input.to(device, non_blocking=True)
 			output = output.to(device, non_blocking=True)
 
-			if device.type == 'cuda':
-				torch.cuda.synchronize(device)
+			#if device.type == 'cuda':
+			#	torch.cuda.synchronize(device)
 			train_start_time = time.perf_counter()
 			transfer_time += train_start_time - batch_start_time
 
@@ -741,8 +741,8 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 			loss_val.backward()
 			optimizer.step()
 
-			if device.type == 'cuda':
-				torch.cuda.synchronize(device)
+			#if device.type == 'cuda':
+			#	torch.cuda.synchronize(device)
 			log_start_time = time.perf_counter()
 			train_time += log_start_time - train_start_time
 
@@ -774,7 +774,7 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 					print("[PROFILE] Total batch time: {}s".format(elapsed_time))
 					print("[PROFILE] Time to transfer data to GPU: {}s".format(transfer_time))
 					print("[PROFILE] Time to train: {}s".format(train_time))
-					print("[PROFILE] Time to log/save/compute validation acc: {}s".format(log_time))
+					print("[PROFILE] Time to log/save/validate: {}s".format(log_time))
 					stdout.flush()
 					start_time = time.perf_counter()
 					transfer_time = 0.0
@@ -803,8 +803,8 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 				num_batches = 0
 				epoch_loss = 0.0
 
-			if device.type == 'cuda':
-				torch.cuda.synchronize(device)
+			#if device.type == 'cuda':
+			#	torch.cuda.synchronize(device)
 			log_end_time = time.perf_counter()
 			log_time += log_end_time - log_start_time
 
