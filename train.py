@@ -31,6 +31,10 @@ except ModuleNotFoundError:
 	print("C++ module `generator` not found. Compiling from source...")
 	build_module("generator")
 	import generator
+except ImportError:
+	print("Error loading C++ module `generator`. Compiling from source...")
+	build_module("generator")
+	import generator
 print("C++ module `generator` loaded.")
 
 RESERVED_INDICES = (0,)
@@ -545,7 +549,7 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 			with open(train_path, 'wb') as f:
 				pickle.dump((inputs, outputs, valid_outputs), f)
 
-	if True or not torch.cuda.is_available():
+	if not torch.cuda.is_available():
 		print("ERROR: CUDA device is not available.")
 		#from sys import exit
 		#exit(-1)
@@ -673,9 +677,9 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 						stdout.flush()
 
 					worker_end_time = time.perf_counter()
-					print('[WORKER {}] yield = {}, throughput = {} examples/s, rank = {}'.format(worker_id, current, BATCH_SIZE / (worker_end_time - worker_start_time), multiprocessing.current_process()._identity[0]))
-					print('[WORKER {}] time to get seed = {}s, time to generate data = {}s'.format(worker_id, generate_start_time - worker_start_time, worker_end_time - generate_start_time))
-					stdout.flush()
+					#print('[WORKER {}] yield = {}, throughput = {} examples/s, rank = {}'.format(worker_id, current, BATCH_SIZE / (worker_end_time - worker_start_time), multiprocessing.current_process()._identity[0]))
+					#print('[WORKER {}] time to get seed = {}s, time to generate data = {}s'.format(worker_id, generate_start_time - worker_start_time, worker_end_time - generate_start_time))
+					#stdout.flush()
 					yield inputs, outputs
 					current += NUM_DATA_WORKERS
 
@@ -685,7 +689,7 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 				return cycle(self.process_data(self.offset + worker_id))
 
 		iterable_dataset = StreamingDataset(epoch * STREAMING_BLOCK_SIZE // BATCH_SIZE)
-		train_loader = DataLoader(iterable_dataset, batch_size=None, num_workers=NUM_DATA_WORKERS, pin_memory=True, prefetch_factor=16*(STREAMING_BLOCK_SIZE // BATCH_SIZE))
+		train_loader = DataLoader(iterable_dataset, batch_size=None, num_workers=NUM_DATA_WORKERS, pin_memory=True)
 
 	while True:
 		start_time = time.perf_counter()
