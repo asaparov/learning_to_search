@@ -325,7 +325,6 @@ bool generate_example(array<node>& vertices, node*& start, node*& end, array<arr
 			if (paths.length > 64) {
 				for (const auto& entry : forward_pointers) core::free(entry.value);
 				for (auto& p : path_queue) core::free(p);
-				core::free(partial_path);
 				return false;
 			}
 			continue;
