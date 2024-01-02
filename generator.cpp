@@ -381,8 +381,8 @@ py::tuple generate_training_set(const unsigned int max_input_size, const uint64_
 	unsigned int num_collisions = 0;
 	size_t input_shape[2]{dataset_size, max_input_size};
 	size_t output_shape[1]{dataset_size};
-	py::array_t<uint64_t, py::array::c_style> inputs(input_shape);
-	py::array_t<uint64_t, py::array::c_style> outputs(output_shape);
+	py::array_t<int64_t, py::array::c_style> inputs(input_shape);
+	py::array_t<int64_t, py::array::c_style> outputs(output_shape);
 	auto inputs_mem = inputs.mutable_unchecked<2>();
 	auto outputs_mem = outputs.mutable_unchecked<1>();
 	unsigned int* lookahead_step_histogram = (unsigned int*) alloca(sizeof(unsigned int) * max_input_size);
@@ -553,4 +553,5 @@ py::tuple generate_training_set(const unsigned int max_input_size, const uint64_
 
 PYBIND11_MODULE(generator, m) {
 	m.def("generate_training_set", &generate_training_set);
+	m.def("set_seed", &core::set_seed);
 }

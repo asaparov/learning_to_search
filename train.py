@@ -1,5 +1,5 @@
 from random import sample, randrange, choice, shuffle, seed, uniform, getstate, setstate, Random
-from os import listdir, makedirs, rename, remove, popen
+from os import listdir, makedirs, rename, remove, popen, sched_getaffinity
 from os.path import isfile, isdir
 from sys import stdout
 import pickle
@@ -12,6 +12,19 @@ from torch.utils.data import Dataset, DataLoader
 from gpt2 import Transformer, ToeplitzMode
 from Sophia import SophiaG
 import time
+import multiprocessing
+
+try:
+	import generator
+except ModuleNotFoundError:
+	print("C++ module `generator` not found. Compiling from source...")
+	import os
+	if os.system("g++ -Ofast -fno-stack-protector -Wall -Wpedantic -shared -fPIC $(python3 -m pybind11 --includes) -I../ generator.cpp -o generator$(python3-config --extension-suffix)") != 0:
+		print("ERROR: Unable to compile `generator.cpp`.")
+		import sys
+		sys.exit(1)
+	import generator
+print("C++ module `generator` loaded.")
 
 RESERVED_INDICES = (0,)
 
@@ -228,7 +241,7 @@ def generate_example(num_vertices, max_num_parents, max_vertex_id, get_shortest_
 def binomial_confidence_int(p, n):
 	return 1.96 * np.sqrt(p * (1.0 - p) / n)
 
-def generate_eval_data(max_input_size, min_path_length=2, distance_from_start=None, distance_from_end=None, lookahead_steps=None, num_paths_at_fork=None, num_samples=1000):
+def generate_eval_data(max_input_size, min_path_length=2, distance_from_start=-1, distance_from_end=-1, lookahead_steps=None, num_paths_at_fork=None, num_samples=1000):
 	QUERY_PREFIX_TOKEN = (max_input_size-5) // 3 + 4
 	PADDING_TOKEN = (max_input_size-5) // 3 + 3
 	EDGE_PREFIX_TOKEN = (max_input_size-5) // 3 + 2
@@ -282,11 +295,11 @@ def generate_eval_data(max_input_size, min_path_length=2, distance_from_start=No
 				if len(example) > max_input_size:
 					continue
 				shortest_path_length = min([len(p) for p in paths if path[:j] == p[:j]])
-				if distance_from_start != None and j != distance_from_start:
+				if distance_from_start != -1 and j != distance_from_start:
 					continue
-				if distance_from_end != None and shortest_path_length - j != distance_from_end:
+				if distance_from_end != -1 and shortest_path_length - j != distance_from_end:
 					continue
-				if distance_from_start == None and distance_from_end == None:
+				if distance_from_start == -1 and distance_from_end == -1:
 					# impose the same rejection sampling constraints as the training data distribution
 					#num_predictions = total_predictions + len(aggregated_paths)
 					#if num_predictions != 0 and distances_from_end[len(path) - j] / num_predictions >= MAX_FREQ_PER_BUCKET:
@@ -419,7 +432,7 @@ def generate_training_set(max_input_size, dataset_size, max_lookahead, reserved_
 			#path_lengths[len(path)] += 1
 			#total_path_lengths += 1
 			for j in range(1, len(path)):
-				if distance_from_start != None and j != distance_from_start:
+				if distance_from_start != -1 and j != distance_from_start:
 					continue
 				example = prefix + [v.id for v in path[:j]]
 				if len(example) > max_input_size:
@@ -475,10 +488,14 @@ def generate_training_set(max_input_size, dataset_size, max_lookahead, reserved_
 	return inputs, outputs, valid_outputs, num_collisions
 
 def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidden_dim, bidirectional, absolute_pos_emb, learnable_token_emb, toeplitz_attn, toeplitz_reg, toeplitz_pos_only, add_padding):
+	generator.set_seed(seed_value)
 	seed(seed_value)
 	torch.manual_seed(seed_value)
 	np.random.seed(seed_value)
 	PADDING_TOKEN = (max_input_size-5) // 3 + 3
+	BATCH_SIZE = 2 ** 14
+	print('Number of available CPUs: {}'.format(len(sched_getaffinity(0))))
+	stdout.flush()
 
 	# first reserve some data for OOD testing
 	random_state = getstate()
@@ -487,15 +504,18 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 
 	max_test_lookahead = ((max_input_size - 5) // 3 - 1) // 2
 	reserved_inputs = set()
-	dist_from_start = 1 if add_padding else None
+	dist_from_start = 1 if add_padding else -1
 	for lookahead in list(range(1, max_test_lookahead + 1)) + [None]:
+		gen_eval_start_time = time.perf_counter()
 		setstate(random_state)
 		np.random.set_state(np_random_state)
 		torch.set_rng_state(torch_random_state)
 
 		print('Reserving OOD test data for lookahead = {}'.format(lookahead))
 		stdout.flush()
-		inputs,outputs = generate_eval_data(max_input_size, min_path_length=2, distance_from_start=dist_from_start, distance_from_end=None, lookahead_steps=lookahead, num_paths_at_fork=None, num_samples=10000)
+		NUM_TEST_SAMPLES = 10000
+		inputs,outputs = generate_eval_data(max_input_size, min_path_length=2, distance_from_start=dist_from_start, distance_from_end=-1, lookahead_steps=lookahead, num_paths_at_fork=None, num_samples=NUM_TEST_SAMPLES)
+		print('Done. Throughput: {} examples/s'.format(NUM_TEST_SAMPLES / (time.perf_counter() - gen_eval_start_time)))
 		for i in range(inputs.shape[0]):
 			reserved_inputs.add(tuple([x for x in inputs[i,:] if x != PADDING_TOKEN]))
 		if lookahead == None:
@@ -512,7 +532,7 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 				inputs, outputs, valid_outputs = pickle.load(f)
 		else:
 			# we haven't generated the training data yet, so generate it here
-			inputs, outputs, valid_outputs = generate_training_set(max_input_size, dataset_size, max_lookahead, reserved_inputs, 1 if add_padding else None)
+			inputs, outputs, valid_outputs, _ = generator.generate_training_set(max_input_size, dataset_size, max_lookahead, reserved_inputs, 1 if add_padding else -1, False)
 
 			# save the generated training data to file
 			with open(train_path, 'wb') as f:
@@ -526,7 +546,6 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 	else:
 		device = torch.device('cuda')
 
-	BATCH_SIZE = 2 ** 14
 	if dataset_size != -1:
 		train_data = DummyDataset(inputs, outputs, device)
 		train_loader = DataLoader(train_data, batch_size=BATCH_SIZE, shuffle=True)
@@ -603,7 +622,7 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 		from itertools import cycle
 		from threading import Lock
 		STREAMING_BLOCK_SIZE = 2 ** 18
-		NUM_DATA_WORKERS = 24
+		NUM_DATA_WORKERS = 2
 		seed_generator = Random(seed_value)
 		seed_generator_lock = Lock()
 		seed_values = []
@@ -622,8 +641,7 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 				super(StreamingDataset).__init__()
 				self.offset = offset
 
-				from multiprocessing import Manager
-				self.multiprocessing_manager = Manager()
+				self.multiprocessing_manager = multiprocessing.Manager()
 				self.total_collisions = self.multiprocessing_manager.Value(int, 0)
 				self.collisions_lock = self.multiprocessing_manager.Lock()
 
@@ -634,19 +652,22 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 				while True:
 					worker_start_time = time.perf_counter()
 					new_seed = get_seed(current)
+					generator.set_seed(new_seed)
 					seed(new_seed)
 					torch.manual_seed(new_seed)
 					np.random.seed(new_seed)
 
-					inputs, outputs, valid_outputs, num_collisions = generate_training_set(max_input_size, BATCH_SIZE, max_lookahead, reserved_inputs, dist_from_start, quiet=True)
+					generate_start_time = time.perf_counter()
+					inputs, outputs, valid_outputs, num_collisions = generator.generate_training_set(max_input_size, BATCH_SIZE, max_lookahead, reserved_inputs, dist_from_start, True)
 					if num_collisions != 0:
 						with self.collisions_lock:
 							self.total_collisions.value += num_collisions
 						print('Total number of training examples generated that are in the test set: {}'.format(self.total_collisions.value))
 						stdout.flush()
 
-					worker_time = time.perf_counter() - worker_start_time
-					print('[WORKER {}] yield = {}, time to generate = {}s, throughput = {} examples/s'.format(worker_id, current, worker_time, BATCH_SIZE / worker_time))
+					worker_end_time = time.perf_counter()
+					print('[WORKER {}] yield = {}, throughput = {} examples/s, rank = {}'.format(worker_id, current, BATCH_SIZE / (worker_end_time - worker_start_time), multiprocessing.current_process()._identity[0]))
+					print('[WORKER {}] time to get seed = {}s, time to generate data = {}s'.format(worker_id, generate_start_time - worker_start_time, worker_end_time - generate_start_time))
 					stdout.flush()
 					yield inputs, outputs
 					current += NUM_DATA_WORKERS
