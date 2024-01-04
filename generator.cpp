@@ -127,6 +127,8 @@ bool generate_graph_with_lookahead(array<node>& vertices, node*& start, node*& e
 {
 	num_vertices = std::max(std::max(2u, num_vertices), 1 + num_paths * lookahead);
 
+	if (!vertices.ensure_capacity(num_vertices))
+		return false;
 	for (unsigned int i = 0; i < num_vertices; i++)
 		if (!init(vertices[i], i)) return false;
 	vertices.length = num_vertices;
