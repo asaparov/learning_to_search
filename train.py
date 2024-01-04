@@ -124,8 +124,10 @@ def generate_graph_with_lookahead(num_vertices, max_num_parents, max_vertex_id, 
 	for i in range(1, lookahead):
 		vertices[1 + i].parents.append(vertices[i])
 		vertices[i].children.append(vertices[1 + i])
-	index = 1 + lookahead
-	if lookahead != 0:
+	if lookahead == 0:
+		index = 2
+	else:
+		index = 1 + lookahead
 		for j in range(num_paths - 1):
 			vertices[index].parents.append(vertices[0])
 			vertices[0].children.append(vertices[index])
@@ -368,7 +370,7 @@ def evaluate_model(model, inputs, outputs):
 
 	predictions = torch.argmax(logits[:, -1, :], 1)
 	acc = sum(predictions == outputs) / len(predictions)
-	return acc.item(), loss
+	return acc.item(), loss, predictions
 
 class DummyDataset(Dataset):
 	def __init__(self, inputs, outputs, device, x_type=LongTensor, y_type=LongTensor):
@@ -789,7 +791,7 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 					del input, output
 					stdout.flush()
 
-					test_acc,test_loss = evaluate_model(model, eval_inputs, eval_outputs)
+					test_acc,test_loss,_ = evaluate_model(model, eval_inputs, eval_outputs)
 					print("test accuracy = %.2f±%.2f, test loss = %f" % (test_acc, binomial_confidence_int(test_acc, 1000), test_loss))
 					stdout.flush()
 					#time6 = time.perf_counter()

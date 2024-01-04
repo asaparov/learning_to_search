@@ -31,12 +31,6 @@ struct node {
 
 	node(unsigned int id) : id(id), children(8), parents(8) { }
 
-	static inline void swap(node& first, node& second) {
-		core::swap(first.id, second.id);
-		core::swap(first.children, second.children);
-		core::swap(first.parents, second.parents);
-	}
-
 	static inline void free(node& n) {
 		core::free(n.children);
 		core::free(n.parents);
@@ -102,6 +96,33 @@ unsigned int lookahead_depth(const node* vertex, const node* next_vertex, const 
 	return lookahead;
 }
 
+void get_descendants(const node& vertex, array<const node*>& descendants) {
+	array<const node*> queue(8);
+	array<const node*> visited(16);
+	queue[0] = &vertex;
+	queue.length = 1;
+	while (queue.length != 0) {
+		const node* current = queue.pop();
+		visited.add(current);
+		for (const node* child : current->children) {
+			descendants.add(child);
+			if (visited.contains(child))
+				continue;
+			queue.add(child);
+		}
+	}
+}
+
+bool has_cycles(array<node>& vertices) {
+	for (const node& vertex : vertices) {
+		array<const node*> descendants(8);
+		get_descendants(vertex, descendants);
+		if (descendants.contains(&vertex))
+			return true;
+	}
+	return false;
+}
+
 bool generate_graph_with_lookahead(array<node>& vertices, node*& start, node*& end, unsigned int num_vertices, unsigned int max_num_parents, unsigned int max_vertex_id, unsigned int lookahead, unsigned int num_paths)
 {
 	num_vertices = std::max(std::max(2u, num_vertices), 1 + num_paths * lookahead);
@@ -116,8 +137,11 @@ bool generate_graph_with_lookahead(array<node>& vertices, node*& start, node*& e
 		vertices[1 + i].parents.add(&vertices[i]);
 		vertices[i].children.add(&vertices[1 + i]);
 	}
-	unsigned int index = 1 + lookahead;
-	if (lookahead != 0) {
+	unsigned int index;
+	if (lookahead == 0) {
+		index = 2;
+	} else {
+		index = 1 + lookahead;
 		for (unsigned int j = 0; j < num_paths - 1; j++) {
 			vertices[index].parents.add(&vertices[0]);
 			vertices[0].children.add(&vertices[index]);
@@ -193,7 +217,6 @@ bool generate_graph_with_lookahead(array<node>& vertices, node*& start, node*& e
 		vertices[i].id = new_indices[src_index];
 		src_index++;
 	}
-	shuffle(vertices);
 	return true;
 }
 

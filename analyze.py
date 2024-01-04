@@ -1,7 +1,8 @@
-from random import seed, shuffle, randrange
+from random import seed, shuffle, randrange, Random
 import numpy as np
 import torch
-from train import evaluate_model
+from train import generate_eval_data, evaluate_model, binomial_confidence_int
+import generator
 
 def perturb_vertex_ids(input, fix_index, num_examples, max_input_size):
 	PADDING_TOKEN = max_input_size - 2
@@ -60,7 +61,7 @@ seed(2)
 torch.manual_seed(2)
 np.random.seed(2)
 
-if True or not torch.cuda.is_available():
+if not torch.cuda.is_available():
 	print("ERROR: CUDA device is not available.")
 	#from sys import exit
 	#exit(-1)
@@ -70,16 +71,54 @@ else:
 
 from sys import argv
 import os
-if os.path.isfile(argv[1]):
-	model = torch.load(argv[1], map_location=device)
+filepath = argv[1]
+if os.path.isfile(filepath):
+	model, _, _, _ = torch.load(filepath, map_location=device)
 
 	#run_model(model, [22, 21,  5, 19, 21, 11,  5, 21, 10,  3, 21,  4, 10, 21,  9,  4, 21,  9, 11, 23,  9,  3, 20,  9], max_input_size=24)
 	#run_model(model, [22, 22, 22, 22, 22, 22, 22, 21, 1,  2, 21,  1,  4, 21,  2,  3, 21, 4,  5, 23,  1,  3, 20, 1], max_input_size=24)
 	#run_model(model, [46, 45,  3, 19, 45, 18, 39, 45, 36, 15, 45, 24, 42, 45, 37,  3, 45, 37, 36, 45, 23, 32, 45,  8, 24, 45, 19, 30, 45, 15, 23, 45, 39, 40, 45, 40, 34, 45, 30, 18, 45, 32,  8, 47, 37, 34, 44, 37], max_input_size=48)
 	#run_model(model, [62, 62, 62, 62, 62, 61, 12, 18, 61, 27,  9, 61, 43, 34, 61, 34, 48, 61, 46,  5, 61, 47, 27, 61, 26, 39, 61, 16,  4, 61,  5, 16, 61, 39, 19, 61, 48, 47, 61, 18, 59, 61,  4, 57, 61, 57, 12, 61, 14, 26, 61, 14, 58, 61, 19, 43, 61, 58, 46, 63, 14,  9, 60, 14], max_input_size=64, num_perturbations=1)
 
-	max_input_size = (model.token_embedding.shape[0] - 5) * 3 + 5
-	evaluate_model(model, max_input_size=max_input_size, min_path_length=2, distance_from_start=-1, distance_from_end=-1, lookahead_steps=11, print_progress=True)
+	suffix = filepath[filepath.index('inputsize')+len('inputsize'):]
+	max_input_size = int(suffix[:suffix.index('_')])
+
+	suffix = filepath[filepath.index('seed')+len('seed'):]
+	training_seed = int(suffix[:suffix.index('_')])
+
+	suffix = filepath[filepath.index('maxlookahead')+len('maxlookahead'):]
+	training_max_lookahead = int(suffix[:suffix.index('_')])
+
+	seed(training_seed)
+	torch.manual_seed(training_seed)
+	np.random.seed(training_seed)
+
+	seed_generator = Random(training_seed)
+	seed_values = []
+
+	def get_seed(index):
+		if index < len(seed_values):
+			return seed_values[index]
+		while index >= len(seed_values):
+			seed_values.append(seed_generator.randrange(2 ** 32))
+		return seed_values[index]
+
+	NUM_TEST_SAMPLES = 1000
+	reserved_inputs = set()
+	print("Generating eval data...")
+	#inputs,outputs = generate_eval_data(max_input_size, min_path_length=2, distance_from_start=1, distance_from_end=-1, lookahead_steps=11, num_paths_at_fork=None, num_samples=NUM_TEST_SAMPLES)
+	generator.set_seed(get_seed(1))
+	inputs, outputs, _, _ = generator.generate_training_set(max_input_size, NUM_TEST_SAMPLES, training_max_lookahead, reserved_inputs, 1, False)
+	print("Evaluating model...")
+	test_acc,test_loss,predictions = evaluate_model(model, inputs, outputs)
+	print("Mistaken inputs:")
+	predictions = np.array(predictions.cpu())
+	incorrect_indices = np.nonzero(predictions != outputs)[0]
+	np.set_printoptions(threshold=10_000)
+	for incorrect_index in incorrect_indices:
+		print(inputs[incorrect_index, :])
+		print("Expected answer: {}, predicted answer: {}\n".format(outputs[incorrect_index], predictions[incorrect_index]))
+	print("Test accuracy = %.2f±%.2f, test loss = %f" % (test_acc, binomial_confidence_int(test_acc, 1000), test_loss))
 
 elif os.path.isdir(argv[1]):
 	import matplotlib
@@ -111,7 +150,7 @@ elif os.path.isdir(argv[1]):
 			if not os.path.isfile(filename):
 				break
 
-			model = torch.load(filename, map_location=device)
+			model, _, _, _ = torch.load(filename, map_location=device)
 
 			params = {k:v for k,v in model.named_parameters()}
 			# compute the first A matrix
