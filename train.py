@@ -506,7 +506,7 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 	torch.manual_seed(seed_value)
 	np.random.seed(seed_value)
 	PADDING_TOKEN = (max_input_size-5) // 3 + 3
-	BATCH_SIZE = 2 ** 14
+	BATCH_SIZE = 2 ** 11
 	print('Number of available CPUs: {}'.format(len(sched_getaffinity(0))))
 	stdout.flush()
 

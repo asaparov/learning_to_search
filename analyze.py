@@ -106,9 +106,9 @@ if os.path.isfile(filepath):
 	NUM_TEST_SAMPLES = 1000
 	reserved_inputs = set()
 	print("Generating eval data...")
-	#inputs,outputs = generate_eval_data(max_input_size, min_path_length=2, distance_from_start=1, distance_from_end=-1, lookahead_steps=11, num_paths_at_fork=None, num_samples=NUM_TEST_SAMPLES)
-	generator.set_seed(get_seed(1))
-	inputs, outputs, _, _ = generator.generate_training_set(max_input_size, NUM_TEST_SAMPLES, training_max_lookahead, reserved_inputs, 1, False)
+	inputs,outputs = generate_eval_data(max_input_size, min_path_length=2, distance_from_start=1, distance_from_end=-1, lookahead_steps=None, num_paths_at_fork=None, num_samples=NUM_TEST_SAMPLES)
+	#generator.set_seed(get_seed(1))
+	#inputs, outputs, _, _ = generator.generate_training_set(max_input_size, NUM_TEST_SAMPLES, training_max_lookahead, reserved_inputs, 1, False)
 	print("Evaluating model...")
 	test_acc,test_loss,predictions = evaluate_model(model, inputs, outputs)
 	print("Mistaken inputs:")
