@@ -31,7 +31,7 @@ class BaseAttention(nn.Module):
         x = torch.matmul(q, k.transpose(-2, -1)) / math.sqrt(k.size(-1))
 
         if mask is not None:
-            x += mask.type_as(x) * x.new_tensor(-1e4)
+            x += mask.type_as(x) * x.new_tensor(-1e9)
         x = self.dropout(x.softmax(-1))
 
         return torch.matmul(x, v)
