@@ -26,11 +26,11 @@ class TransformerLayer(nn.Module):
                  rate: int,
                  dropout: float = 0.1,
                  feedforward: bool = True,
-                 sparse_v: bool = False,
+                 ablate: bool = False,
                  linear: bool = True,
                  toeplitz: ToeplitzMode = ToeplitzMode.NONE):
         super().__init__()
-        self.attn = AttentionLayer(heads, dims, token_dims, pos_dims, dropout, sparse_v, linear, toeplitz)
+        self.attn = AttentionLayer(heads, dims, token_dims, pos_dims, dropout, ablate, linear, toeplitz)
         self.ln_attn = LayerNorm(dims)
         if feedforward:
             self.ff = PositionwiseFeedForward(dims, rate, dropout)
@@ -92,6 +92,7 @@ class Transformer(nn.Module):
                  bidirectional: bool = True,
                  absolute_pos_emb: bool = True,
                  learn_token_emb: bool = False,
+                 ablate: bool = True,
                  toeplitz: ToeplitzMode = ToeplitzMode.NONE):
         super().__init__()
         self.bidirectional = bidirectional
@@ -120,7 +121,7 @@ class Transformer(nn.Module):
             token_dim = words
             position_dim = 0
         self.transformers = nn.ModuleList([
-            TransformerLayer(heads, embedding_dim, token_dim, position_dim, rate, dropout, l != layers - 1, True, False, toeplitz)
+            TransformerLayer(heads, embedding_dim, token_dim, position_dim, rate, dropout, l != layers - 1, ablate, False, toeplitz)
             for l in range(layers)])
         self.ln_head = LayerNorm(embedding_dim)
 

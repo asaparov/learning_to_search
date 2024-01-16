@@ -500,7 +500,7 @@ def generate_training_set(max_input_size, dataset_size, max_lookahead, reserved_
 
 	return inputs, outputs, valid_outputs, num_collisions
 
-def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidden_dim, bidirectional, absolute_pos_emb, learnable_token_emb, toeplitz_attn, toeplitz_reg, toeplitz_pos_only, add_padding):
+def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidden_dim, bidirectional, absolute_pos_emb, learnable_token_emb, toeplitz_attn, toeplitz_reg, toeplitz_pos_only, add_padding, ablate):
 	generator.set_seed(seed_value)
 	seed(seed_value)
 	torch.manual_seed(seed_value)
@@ -571,6 +571,8 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 		filename += '_noAPE'
 	if learnable_token_emb:
 		filename += '_learntokemb'
+	if not ablate:
+		filename += '_unablated'
 	if toeplitz_attn:
 		filename += '_toeplitz'
 		if toeplitz_pos_only:
@@ -611,6 +613,7 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 				bidirectional=bidirectional,
 				absolute_pos_emb=absolute_pos_emb,
 				learn_token_emb=learnable_token_emb,
+				ablate=ablate,
 				toeplitz=toeplitz)
 		epoch = 0
 		model.to(device)
@@ -836,6 +839,7 @@ if __name__ == "__main__":
 	parser.add_argument("--toeplitz-reg", type=float, required=True, default=0.0)
 	parser.add_argument("--toeplitz-pos-only", type=parse_bool_arg, required=True, metavar="'y/n'")
 	parser.add_argument("--add-padding", type=parse_bool_arg, required=True, metavar="'y/n'")
+	parser.add_argument("--ablate", type=parse_bool_arg, required=True, metavar="'y/n'")
 	args = parser.parse_args()
 
 	train(
@@ -851,4 +855,5 @@ if __name__ == "__main__":
 		toeplitz_attn=args.toeplitz_attn,
 		toeplitz_reg=args.toeplitz_reg,
 		toeplitz_pos_only=args.toeplitz_pos_only,
-		add_padding=args.add_padding)
+		add_padding=args.add_padding,
+		ablate=args.ablate)
