@@ -665,3 +665,40 @@ so the reconstructed algorithm is as follows:
 attention layer 0 does matching (positive for non-placeholder tokens and negative for placeholder tokens)
 attention layer 1 and 2 do backwards steps
 attention layer 3 copies vertices reachable from the starting vertex (i.e. with large activation at 191) into rows 61 and 63
+
+
+
+
+
+
+[44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 43, 15, 34, 43, 30,  9, 43, 14, 22, 43,  8, 13, 43,  8,  2, 43, 26,  1, 43,  1, 14, 43, 36,  7, 43, 22,  4, 43, 22,  2, 43, 34, 26, 43, 34, 25, 43, 28, 30, 43, 16,  3, 43, 16, 32, 43, 13, 33, 43, 12, 15, 43, 25, 21, 43,  9, 36, 43,  3, 12, 43, 32,  8, 43, 33, 28, 45, 16,  4, 42, 16]
+
+goal vertex is 4
+after the first layer, the goal vertex position should contain activation for: token value 4, position 187 (goal vertex position), and position 145 (position of other '4')
+
+all positions containing '22' should contain activation for: token value 22, position 127 (position of first '22'), position 144 (position of second '22'), and 147 (position of other '22')
+
+22 -> 4
+
+in the second layer, x^T*A looks like:
+at the goal vertex position: 144 and 186 have high activation
+
+as expected x^T*A*x at (-3,144-62=82) has high value (529996.1875) but (-3,65) has much higher value (536253.8750) and (-3,85) has value (536284.5625). why?
+the input at 65 has activation: {22:6.9259, 127:6.7314, 144:6.8088, 147:6.8088} and -0.1466 elsewhere
+the input at 82 has activation: {22:6.9259, 127:6.8084, 144:6.7314, 147:6.8092} and -0.1466 elsewhere
+the value of x^T*A at the goal position has activation: {144:79589.4688, 186:77404.6406} and -1266.4833 for position portion of embedding and 0 for other portion of embedding
+
+the dot product of input at 65 with x^T*A would look like 6.7314*-1266.4833 + 6.8088*79589.4688 + 6.8088*-1266.4833 = 524760.34
+the dot product of input at 82 with x^T*A would look like 6.8084*-1266.4833 + 6.7314*79589.4688 + 6.8092*-1266.4833 = 518502.09
+and this accounts for the full difference in activations between (x^T*A*x)[-3,65] and (x^T*A*x)[-3,82].
+
+
+k_params = {k:v for k,v in self.proj_k.named_parameters()}
+q_params = {k:v for k,v in self.proj_q.named_parameters()}
+P_k = k_params['weight']
+P_q = q_params['weight']
+U_k = torch.cat((P_k,k_params['bias'].unsqueeze(1)),1)
+U_q = torch.cat((P_q,q_params['bias'].unsqueeze(1)),1)
+A = torch.matmul(P_q.transpose(-2,-1),P_k)
+input = q[0,:,:]
+torch.matmul(torch.matmul(input,A),input.transpose(-2,-1))[-3,65]

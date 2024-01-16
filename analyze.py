@@ -3,10 +3,12 @@ import numpy as np
 import torch
 from train import generate_eval_data, evaluate_model, binomial_confidence_int
 import generator
+from gpt2 import Transformer, ToeplitzMode
 
 def perturb_vertex_ids(input, fix_index, num_examples, max_input_size):
-	PADDING_TOKEN = max_input_size - 2
-	EDGE_PREFIX_TOKEN = max_input_size - 3
+	PADDING_TOKEN = (max_input_size-5) // 3 + 3
+	EDGE_PREFIX_TOKEN = (max_input_size-5) // 3 + 2
+	max_vertex_id = (max_input_size-5) // 3
 
 	out = torch.empty((num_examples, input.shape[0]), dtype=torch.int64)
 	out_labels = torch.empty((num_examples), dtype=torch.int64)
@@ -17,38 +19,40 @@ def perturb_vertex_ids(input, fix_index, num_examples, max_input_size):
 	fixed_edge = edge_indices[fixed_edge_index]
 	padding_size = next(i for i in range(len(input)) if input[i] != PADDING_TOKEN)
 	out[:,:padding_size] = PADDING_TOKEN
+	out_labels[0] = out[0,fix_index+1]
 	for i in range(1, num_examples):
-		id_map = list(range(1, max_input_size - 4))
+		id_map = list(range(1, max_vertex_id + 1))
 		shuffle(id_map)
 		id_map = [0] + id_map
 		del edge_indices[fixed_edge_index]
-		#shuffle(edge_indices)
+		shuffle(edge_indices)
 		edge_indices.insert(fixed_edge_index, fixed_edge)
 		for j in range(len(edge_indices)):
 			out[i,padding_size+(3*j):padding_size+(3*j)+3] = torch.LongTensor([EDGE_PREFIX_TOKEN, id_map[input[edge_indices[j]+1]], id_map[input[edge_indices[j]+2]]])
-		out[i,padding_size+(3*edge_count):] = torch.LongTensor([(id_map[v] if v < max_input_size - 4 else v) for v in input[padding_size+(3*edge_count):]])
+		out[i,padding_size+(3*edge_count):] = torch.LongTensor([(id_map[v] if v <= max_vertex_id else v) for v in input[padding_size+(3*edge_count):]])
 		out_labels[i] = out[i,fix_index+1]
 	return out, out_labels
 
-def run_model(model, input, max_input_size, num_perturbations=2**14):
+def run_model(model, input, fix_index, max_input_size, num_perturbations=2**14):
 	if len(input) > max_input_size:
 		raise ValueError("Input length must be at most 'max_input_size'.")
 	device = next(model.parameters()).device
-	QUERY_PREFIX_TOKEN = max_input_size - 1
-	PADDING_TOKEN = max_input_size - 2
-	EDGE_PREFIX_TOKEN = max_input_size - 3
-	PATH_PREFIX_TOKEN = max_input_size - 4
+	QUERY_PREFIX_TOKEN = (max_input_size-5) // 3 + 4
+	PADDING_TOKEN = (max_input_size-5) // 3 + 3
+	EDGE_PREFIX_TOKEN = (max_input_size-5) // 3 + 2
+	PATH_PREFIX_TOKEN = (max_input_size-5) // 3 + 1
 
 	model.eval()
 	padded_input = [PADDING_TOKEN] * (max_input_size - len(input)) + input
 	padded_input = torch.LongTensor(padded_input).to(device)
 	print("running model on input")
 	print(padded_input)
-	perturbed_input, perturbed_output = perturb_vertex_ids(padded_input, 14, num_perturbations, max_input_size)
+	perturbed_input, perturbed_output = perturb_vertex_ids(padded_input, fix_index, 1+num_perturbations, max_input_size)
 	predictions, _ = model(perturbed_input)
 	import pdb; pdb.set_trace()
 	if len(predictions.shape) == 3:
 		predictions = predictions[:, -1, :]
+		perturbed_output = perturbed_output.to(device)
 		num_correct = torch.sum(torch.argmax(predictions,1) == perturbed_output)
 		print("accuracy: {}".format(num_correct / predictions.shape[0]))
 	else:
@@ -69,16 +73,69 @@ if not torch.cuda.is_available():
 else:
 	device = torch.device('cuda')
 
+def ideal_model(max_input_size, num_layers, hidden_dim, bidirectional, absolute_pos_emb, learnable_token_emb):
+	PADDING_TOKEN = (max_input_size-5) // 3 + 3
+	max_vertex_id = (max_input_size-5) // 3
+
+	ntoken = (max_input_size-5) // 3 + 5
+	nhead = 1
+	d_hid = ntoken + hidden_dim
+	dropout = 0
+	toeplitz = ToeplitzMode.NONE
+	model = Transformer(
+			layers=num_layers,
+			pad_idx=PADDING_TOKEN,
+			words=ntoken,
+			seq_len=max_input_size,
+			heads=nhead,
+			dims=max(ntoken,d_hid),
+			rate=1,
+			dropout=dropout,
+			bidirectional=bidirectional,
+			absolute_pos_emb=absolute_pos_emb,
+			learn_token_emb=learnable_token_emb,
+			ablate=False,
+			toeplitz=toeplitz)
+
+	model.ln_head.weight = torch.nn.Parameter(torch.ones(model.ln_head.weight.size(0)))
+	model.ln_head.bias = torch.nn.Parameter(torch.zeros(model.ln_head.bias.size(0)))
+	for i, transformer in enumerate(model.transformers):
+		transformer.ln_attn.weight = torch.nn.Parameter(torch.ones(transformer.ln_attn.weight.size(0)))
+		transformer.ln_attn.bias = torch.nn.Parameter(torch.zeros(transformer.ln_attn.bias.size(0)))
+		if transformer.ff:
+			transformer.ln_ff.weight = torch.nn.Parameter(torch.ones(transformer.ln_ff.weight.size(0)))
+			transformer.ln_ff.bias = torch.nn.Parameter(torch.zeros(transformer.ln_ff.bias.size(0)))
+			transformer.ff[0].weight = torch.nn.Parameter(torch.eye(transformer.ff[0].weight.size(0)))
+			transformer.ff[0].bias = torch.nn.Parameter(-torch.ones(transformer.ff[0].bias.size(0)))
+			transformer.ff[3].weight = torch.nn.Parameter(-torch.eye(transformer.ff[3].weight.size(0)))
+			transformer.ff[3].bias = torch.nn.Parameter(torch.zeros(transformer.ff[3].bias.size(0)))
+		transformer.attn.proj_q.bias = torch.nn.Parameter(torch.zeros(transformer.attn.proj_q.bias.size(0)))
+		transformer.attn.proj_k.bias = torch.nn.Parameter(torch.zeros(transformer.attn.proj_k.bias.size(0)))
+		transformer.attn.proj_v.bias = torch.nn.Parameter(torch.zeros(transformer.attn.proj_k.bias.size(0)))
+		transformer.attn.proj_q.weight = torch.nn.Parameter(torch.eye(transformer.attn.proj_q.weight.size(0)))
+		if i == 0:
+			proj_k = torch.zeros(transformer.attn.proj_k.weight.shape)
+			for j in range(0, max_vertex_id + 1):
+				proj_k[j, j] = 10000.0
+			for j in range(d_hid, d_hid + max_input_size):
+				proj_k[j, j] = -10000.0
+			transformer.attn.proj_k.weight = torch.nn.Parameter(proj_k)
+			transformer.attn.proj_v.bias = torch.nn.Parameter(torch.zeros(transformer.attn.proj_v.bias.size(0)))
+			transformer.attn.proj_v.weight = torch.nn.Parameter((max_vertex_id+1)*torch.eye(transformer.attn.proj_v.weight.size(0)))
+		else:
+			proj_k = torch.zeros(transformer.attn.proj_k.weight.shape)
+			for j in range(d_hid + 1, d_hid + max_input_size):
+				proj_k[j, j-1] = 100.0
+			transformer.attn.proj_k.weight = torch.nn.Parameter(proj_k)
+			transformer.attn.proj_v.bias = torch.nn.Parameter(K*torch.ones(transformer.attn.proj_v.bias.size(0)))
+			transformer.attn.proj_v.weight = torch.nn.Parameter(10*K*torch.eye(transformer.attn.proj_v.weight.size(0)))
+	return model
+
 from sys import argv
 import os
 filepath = argv[1]
 if os.path.isfile(filepath):
 	model, _, _, _ = torch.load(filepath, map_location=device)
-
-	#run_model(model, [22, 21,  5, 19, 21, 11,  5, 21, 10,  3, 21,  4, 10, 21,  9,  4, 21,  9, 11, 23,  9,  3, 20,  9], max_input_size=24)
-	#run_model(model, [22, 22, 22, 22, 22, 22, 22, 21, 1,  2, 21,  1,  4, 21,  2,  3, 21, 4,  5, 23,  1,  3, 20, 1], max_input_size=24)
-	#run_model(model, [46, 45,  3, 19, 45, 18, 39, 45, 36, 15, 45, 24, 42, 45, 37,  3, 45, 37, 36, 45, 23, 32, 45,  8, 24, 45, 19, 30, 45, 15, 23, 45, 39, 40, 45, 40, 34, 45, 30, 18, 45, 32,  8, 47, 37, 34, 44, 37], max_input_size=48)
-	#run_model(model, [62, 62, 62, 62, 62, 61, 12, 18, 61, 27,  9, 61, 43, 34, 61, 34, 48, 61, 46,  5, 61, 47, 27, 61, 26, 39, 61, 16,  4, 61,  5, 16, 61, 39, 19, 61, 48, 47, 61, 18, 59, 61,  4, 57, 61, 57, 12, 61, 14, 26, 61, 14, 58, 61, 19, 43, 61, 58, 46, 63, 14,  9, 60, 14], max_input_size=64, num_perturbations=1)
 
 	suffix = filepath[filepath.index('inputsize')+len('inputsize'):]
 	max_input_size = int(suffix[:suffix.index('_')])
@@ -88,6 +145,13 @@ if os.path.isfile(filepath):
 
 	suffix = filepath[filepath.index('maxlookahead')+len('maxlookahead'):]
 	training_max_lookahead = int(suffix[:suffix.index('_')])
+
+	model = ideal_model(max_input_size=max_input_size, num_layers=6, hidden_dim=16, bidirectional=True, absolute_pos_emb=True, learnable_token_emb=False)
+
+	#run_model(model, [22, 21,  5, 19, 21, 11,  5, 21, 10,  3, 21,  4, 10, 21,  9,  4, 21,  9, 11, 23,  9,  3, 20,  9], max_input_size=24)
+	#run_model(model, [22, 22, 22, 22, 22, 22, 22, 21, 1,  2, 21,  1,  4, 21,  2,  3, 21, 4,  5, 23,  1,  3, 20, 1], max_input_size=24)
+	#run_model(model, [46, 45,  3, 19, 45, 18, 39, 45, 36, 15, 45, 24, 42, 45, 37,  3, 45, 37, 36, 45, 23, 32, 45,  8, 24, 45, 19, 30, 45, 15, 23, 45, 39, 40, 45, 40, 34, 45, 30, 18, 45, 32,  8, 47, 37, 34, 44, 37], max_input_size=48)
+	run_model(model, [43, 15, 34, 43, 30,  9, 43, 14, 22, 43,  8, 13, 43,  8,  2, 43, 26,  1, 43,  1, 14, 43, 36,  7, 43, 22,  4, 43, 22,  2, 43, 34, 26, 43, 34, 25, 43, 28, 30, 43, 16, 3, 43, 16, 32, 43, 13, 33, 43, 12, 15, 43, 25, 21, 43,  9, 36, 43, 3, 12, 43, 32,  8, 43, 33, 28, 45, 16,  4, 42, 16], fix_index=98, max_input_size=max_input_size, num_perturbations=0)
 
 	seed(training_seed)
 	torch.manual_seed(training_seed)
@@ -106,11 +170,12 @@ if os.path.isfile(filepath):
 	NUM_TEST_SAMPLES = 1000
 	reserved_inputs = set()
 	print("Generating eval data...")
-	inputs,outputs = generate_eval_data(max_input_size, min_path_length=2, distance_from_start=1, distance_from_end=-1, lookahead_steps=None, num_paths_at_fork=None, num_samples=NUM_TEST_SAMPLES)
+	inputs,outputs = generate_eval_data(max_input_size, min_path_length=2, distance_from_start=1, distance_from_end=-1, lookahead_steps=9, num_paths_at_fork=None, num_samples=NUM_TEST_SAMPLES)
 	#generator.set_seed(get_seed(1))
 	#inputs, outputs, _, _ = generator.generate_training_set(max_input_size, NUM_TEST_SAMPLES, training_max_lookahead, reserved_inputs, 1, False)
 	print("Evaluating model...")
 	test_acc,test_loss,predictions = evaluate_model(model, inputs, outputs)
+	import pdb; pdb.set_trace()
 	print("Mistaken inputs:")
 	predictions = np.array(predictions.cpu())
 	incorrect_indices = np.nonzero(predictions != outputs)[0]
