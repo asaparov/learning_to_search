@@ -121,7 +121,7 @@ class Transformer(nn.Module):
             token_dim = words
             position_dim = 0
         self.transformers = nn.ModuleList([
-            TransformerLayer(heads, embedding_dim, token_dim, position_dim, rate, dropout, l != layers - 1, ablate, False, toeplitz)
+            TransformerLayer(heads, embedding_dim, token_dim, position_dim, rate, dropout, l != layers - 1, ablate, not ablate, toeplitz)
             for l in range(layers)])
         self.ln_head = LayerNorm(embedding_dim)
 
