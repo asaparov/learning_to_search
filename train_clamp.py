@@ -67,7 +67,6 @@ def generate_data(input_size, num_examples):
 	return x.detach()
 
 def clamp_loss(inputs, predictions):
-	import pdb; pdb.set_trace()
 	num_examples = inputs.size(0)
 	loss = torch.sum(torch.maximum(predictions[inputs < 1.0], torch.tensor(0.0)) ** 2 / num_examples)
 	mask = (inputs >= 1.0)
