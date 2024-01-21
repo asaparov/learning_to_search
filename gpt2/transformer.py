@@ -28,7 +28,8 @@ class TransformerLayer(nn.Module):
                  feedforward: bool = True,
                  ablate: bool = False,
                  linear: bool = True,
-                 toeplitz: ToeplitzMode = ToeplitzMode.NONE):
+                 toeplitz: ToeplitzMode = ToeplitzMode.NONE,
+                 pre_ln: bool = True):
         super().__init__()
         self.attn = AttentionLayer(heads, dims, token_dims, pos_dims, dropout, ablate, linear, toeplitz)
         self.ln_attn = LayerNorm(dims)
@@ -37,34 +38,30 @@ class TransformerLayer(nn.Module):
             self.ln_ff = LayerNorm(dims)
         else:
             self.ff = None
+		self.pre_ln = pre_ln
 
     def forward(self,
                 x: torch.Tensor,
                 past: Optional[Past] = None,
                 mask: Optional[torch.Tensor] = None,
                 ) -> Union[torch.Tensor, Tuple[torch.Tensor, Past]]:
-        # Layer normalizations are performed before the layers respectively.
-        a = self.ln_attn(x)
+        # If pre_ln == True, layer normalizations are performed before the layers respectively.
+        a = (self.ln_attn(x) if self.pre_ln else x)
         if self.attn.proj_v:
             a, past = self.attn(a, a, a, past, mask)
         else:
             a, past = self.attn(x, x, x, past, mask)
 
-        '''print("attention layer output:")
-        mean = torch.mean(a)
-        std = torch.std(a)
-        for i in range(a.size(0)):
-            print("  a[{},:] > mean(a) + 0.8*std(a): {}".format(i, torch.nonzero(a[i,:] > mean + 0.8*std)[:,0].tolist()))'''
-
         x = x + a
+        if not self.pre_ln:
+             x = self.ln_attn(x)
         if self.ff:
-            x = x + self.ff(self.ln_ff(x))
-
-        '''print("feedforward layer + residual connection output:")
-        mean = torch.mean(x)
-        std = torch.std(x)
-        for i in range(x.size(0)):
-            print("  x[{},:] > mean(x) + 0.4*std(x): {}".format(i, torch.nonzero(x[i,:] > mean + 0.4*std)[:,0].tolist()))'''
+            if self.pre_ln:
+                x = x + self.ff(self.ln_ff(x))
+            else:
+                x = x + self.ff(x)
+            if not self.pre_ln:
+                x = self.ln_ff(x)
 
         return x if self.training else (x, past)
 
@@ -93,7 +90,8 @@ class Transformer(nn.Module):
                  absolute_pos_emb: bool = True,
                  learn_token_emb: bool = False,
                  ablate: bool = True,
-                 toeplitz: ToeplitzMode = ToeplitzMode.NONE):
+                 toeplitz: ToeplitzMode = ToeplitzMode.NONE,
+                 pre_ln: bool = True):
         super().__init__()
         self.bidirectional = bidirectional
         self.pad_masking = PadMasking(pad_idx)

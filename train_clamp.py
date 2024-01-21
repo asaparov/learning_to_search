@@ -1,6 +1,5 @@
 import torch
 from torch import nn, Tensor, LongTensor
-from torch.nn import MSELoss
 from torch.utils.data import DataLoader
 from gpt2 import TransformerLayer, ToeplitzMode, Past, FutureMasking
 from Sophia import SophiaG
@@ -56,18 +55,29 @@ class ContinuousTransformer(nn.Module):
 
 def generate_data(input_size, num_examples):
 	from torch.distributions.cauchy import Cauchy
-	m = Cauchy(0.0, 1.0)
-	inputs = m.sample((num_examples, input_size, input_size))
-	outputs = torch.clamp(inputs, max=1.0)
-	return inputs, outputs
+	m = Cauchy(0.0, 4.0)
+	x = m.sample((num_examples, input_size, input_size))
+	x[x > input_size] /= input_size
+	x[x < 1.0] = 0.0
+	x[:,:,0] = 1.1
+	x = torch.gather(x, dim=-1, index=torch.argsort(torch.rand_like(x), dim=-1))
+	ln = torch.nn.LayerNorm(input_size)
+	return ln(x).detach()
 
-def evaluate_model(model, inputs, outputs):
-	loss_func = MSELoss(reduction="mean")
+def clamp_loss(inputs, predictions):
+	num_examples = inputs.size(0)
+	loss = torch.sum(torch.maximum(predictions[inputs < 1.0], torch.tensor(0.0)) ** 2 / num_examples)
+	mask = (inputs >= 1.0)
+	denom = torch.sum(mask, dim=-1)
+	means = torch.sum(predictions * mask, dim=-1) / denom
+	return loss + torch.sum(torch.sum(((predictions - means.unsqueeze(-1)) * mask) ** 2, dim=-1) / denom / num_examples)
+
+def evaluate_model(model, inputs):
 	predictions, _ = model(inputs)
-	loss = loss_func(predictions, outputs).item()
+	loss = clamp_loss(inputs, predictions).item()
 	return loss, predictions
 
-def train(max_input_size, seed_value, nlayers, bidirectional, toeplitz_attn, toeplitz_reg, toeplitz_pos_only, ablate):
+def train(max_input_size, seed_value, nlayers, bidirectional, toeplitz_attn, toeplitz_reg, toeplitz_pos_only, ablate, pre_ln):
 	torch.manual_seed(seed_value)
 
 	# first reserve some data for OOD testing
@@ -77,7 +87,7 @@ def train(max_input_size, seed_value, nlayers, bidirectional, toeplitz_attn, toe
 	torch.set_rng_state(torch_random_state)
 
 	NUM_TEST_SAMPLES = 10000
-	eval_inputs,eval_outputs = generate_data(max_input_size, num_examples=NUM_TEST_SAMPLES)
+	eval_inputs = generate_data(max_input_size, num_examples=NUM_TEST_SAMPLES)
 
 	if not torch.cuda.is_available():
 		print("ERROR: CUDA device is not available.")
@@ -87,7 +97,6 @@ def train(max_input_size, seed_value, nlayers, bidirectional, toeplitz_attn, toe
 	else:
 		device = torch.device('cuda')
 	eval_inputs = eval_inputs.to(device)
-	eval_outputs = eval_outputs.to(device)
 
 	# compute the checkpoint filenames and try to resume from the last one
 	filename = 'clamp_results/checkpoints_{}layer_inputsize{}_seed{}'.format(nlayers, max_input_size, seed_value)
@@ -104,6 +113,8 @@ def train(max_input_size, seed_value, nlayers, bidirectional, toeplitz_attn, toe
 		if toeplitz_pos_only:
 			filename += 'pos'
 		filename += str(toeplitz_reg)
+	if not pre_ln:
+		filename += '_postLN'
 	if isdir(filename):
 		existing_epochs = [int(ckpt[(ckpt.rfind('epoch') + len('epoch')):-len('.pt')]) for ckpt in listdir(filename) if ckpt.startswith('epoch')]
 	else:
@@ -125,7 +136,8 @@ def train(max_input_size, seed_value, nlayers, bidirectional, toeplitz_attn, toe
 					rate=1,
 					bidirectional=bidirectional,
 					ablate=ablate,
-					toeplitz=toeplitz)
+					toeplitz=toeplitz,
+					pre_ln=pre_ln)
 		epoch = 0
 		model.to(device)
 	else:
@@ -135,8 +147,7 @@ def train(max_input_size, seed_value, nlayers, bidirectional, toeplitz_attn, toe
 		model, torch_random_state = loaded_obj
 		torch.set_rng_state(torch_random_state.cpu())
 
-	loss_func = MSELoss(reduction="mean")
-	optimizer = SophiaG((p for p in model.parameters() if p.requires_grad), lr=1.0e-2, weight_decay=0.1)
+	optimizer = SophiaG((p for p in model.parameters() if p.requires_grad), lr=1.0e-4, weight_decay=0.1)
 
 	log_interval = 1
 	eval_interval = 1
@@ -146,7 +157,7 @@ def train(max_input_size, seed_value, nlayers, bidirectional, toeplitz_attn, toe
 	from threading import Lock
 	BATCH_SIZE = 2 ** 16
 	STREAMING_BLOCK_SIZE = 2 ** 21
-	NUM_DATA_WORKERS = 2
+	NUM_DATA_WORKERS = 8
 	seed_generator = torch.Generator()
 	seed_generator.manual_seed(seed_value)
 	seed_generator_lock = Lock()
@@ -174,9 +185,9 @@ def train(max_input_size, seed_value, nlayers, bidirectional, toeplitz_attn, toe
 				new_seed = get_seed(current)
 				torch.manual_seed(new_seed)
 
-				inputs, outputs = generate_data(max_input_size, BATCH_SIZE)
+				inputs = generate_data(max_input_size, BATCH_SIZE)
 
-				yield inputs, outputs
+				yield inputs
 				current += NUM_DATA_WORKERS
 
 		def __iter__(self):
@@ -200,9 +211,8 @@ def train(max_input_size, seed_value, nlayers, bidirectional, toeplitz_attn, toe
 			model.train()
 			optimizer.zero_grad()
 
-			input, output = batch
+			input = batch
 			input = input.to(device, non_blocking=True)
-			output = output.to(device, non_blocking=True)
 
 			#if device.type == 'cuda':
 			#	torch.cuda.synchronize(device)
@@ -210,7 +220,7 @@ def train(max_input_size, seed_value, nlayers, bidirectional, toeplitz_attn, toe
 			transfer_time += train_start_time - batch_start_time
 
 			predictions = model(input)
-			loss_val = loss_func(predictions, output)
+			loss_val = clamp_loss(input, predictions)
 			if toeplitz_reg != 0.0:
 				def compute_toeplitz_regularization(m):
 					regularization = 0.0
@@ -236,7 +246,7 @@ def train(max_input_size, seed_value, nlayers, bidirectional, toeplitz_attn, toe
 
 			loss_val.backward()
 			optimizer.step()
-			del input, output
+			del input
 
 			#if device.type == 'cuda':
 			#	torch.cuda.synchronize(device)
@@ -272,7 +282,7 @@ def train(max_input_size, seed_value, nlayers, bidirectional, toeplitz_attn, toe
 
 				if epoch % eval_interval == 0:
 					model.eval()
-					test_loss,_ = evaluate_model(model, eval_inputs, eval_outputs)
+					test_loss,_ = evaluate_model(model, eval_inputs)
 					print("test loss = %f" % test_loss)
 					stdout.flush()
 
@@ -306,6 +316,7 @@ if __name__ == "__main__":
 	parser.add_argument("--toeplitz-reg", type=float, required=True, default=0.0)
 	parser.add_argument("--toeplitz-pos-only", type=parse_bool_arg, required=True, metavar="'y/n'")
 	parser.add_argument("--ablate", type=parse_bool_arg, required=True, metavar="'y/n'")
+	parser.add_argument("--preLN", type=parse_bool_arg, required=True, metavar="'y/n'")
 	args = parser.parse_args()
 
 	train(
@@ -316,4 +327,5 @@ if __name__ == "__main__":
 		toeplitz_attn=args.toeplitz_attn,
 		toeplitz_reg=args.toeplitz_reg,
 		toeplitz_pos_only=args.toeplitz_pos_only,
-		ablate=args.ablate)
+		ablate=args.ablate,
+		pre_ln=args.preLN)
