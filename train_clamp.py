@@ -18,13 +18,14 @@ class ContinuousTransformer(nn.Module):
 					rate: int = 4,
 					bidirectional: bool = True,
 					ablate: bool = True,
-					toeplitz: ToeplitzMode = ToeplitzMode.NONE):
+					toeplitz: ToeplitzMode = ToeplitzMode.NONE,
+					pre_ln: bool = True):
 		super().__init__()
 		self.bidirectional = bidirectional
 		self.future_masking = FutureMasking()
 
 		self.transformers = nn.ModuleList([
-			TransformerLayer(heads, dims, dims, 0, rate, 0, True, ablate, not ablate, toeplitz)
+			TransformerLayer(heads, dims, dims, 0, rate, 0, True, ablate, not ablate, toeplitz, pre_ln)
 			for l in range(layers)])
 
 	def to(self, device):

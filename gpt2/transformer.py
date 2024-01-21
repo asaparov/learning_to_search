@@ -38,7 +38,7 @@ class TransformerLayer(nn.Module):
             self.ln_ff = LayerNorm(dims)
         else:
             self.ff = None
-		self.pre_ln = pre_ln
+        self.pre_ln = pre_ln
 
     def forward(self,
                 x: torch.Tensor,
@@ -119,7 +119,7 @@ class Transformer(nn.Module):
             token_dim = words
             position_dim = 0
         self.transformers = nn.ModuleList([
-            TransformerLayer(heads, embedding_dim, token_dim, position_dim, rate, dropout, l != layers - 1, ablate, not ablate, toeplitz)
+            TransformerLayer(heads, embedding_dim, token_dim, position_dim, rate, dropout, l != layers - 1, ablate, not ablate, toeplitz, pre_ln)
             for l in range(layers)])
         self.ln_head = LayerNorm(embedding_dim)
 
