@@ -121,28 +121,10 @@ class Transformer(nn.Module):
         self.transformers = nn.ModuleList([
             TransformerLayer(heads, embedding_dim, token_dim, position_dim, rate, dropout, l != layers - 1, ablate, not ablate, toeplitz, pre_ln)
             for l in range(layers)])
-        self.ln_head = LayerNorm(embedding_dim)
-
-        def get_slopes(n):
-            import math
-            def get_slopes_power_of_2(n):
-                start = (2**(-2**-(math.log2(n)-3)))
-                ratio = start
-                return [start*ratio**i for i in range(n)]
-
-            if math.log2(n).is_integer():
-                return get_slopes_power_of_2(n)                   #In the paper, we only train models that have 2^a heads for some a. This function has
-            else:                                                 #some good properties that only occur when the input is a power of 2. To maintain that even
-                closest_power_of_2 = 2**math.floor(math.log2(n))  #when the number of heads is not a power of 2, we use this workaround.
-                return get_slopes_power_of_2(closest_power_of_2) + get_slopes(2*closest_power_of_2)[0::2][:n-closest_power_of_2]
-
-        self.slopes = torch.Tensor(get_slopes(heads))
-        #In the next line, the part after the * is what constructs the diagonal matrix (right matrix in Figure 3 in the paper).
-        #If you run it you'll see that it doesn't exactly print out the same matrix as we have in Figure 3, but one where all rows are identical.
-        #This works because the softmax operation is invariant to translation, and our bias functions are always linear.
-        #self.alibi = self.slopes.unsqueeze(1).unsqueeze(1) * torch.arange(seq_len).unsqueeze(0).unsqueeze(0).expand(heads, -1, -1)
-        #self.alibi = self.alibi.view(heads, 1, seq_len)
-        #self.alibi = self.alibi.repeat(words//seq_len, 1, 1)  # batch_size, 1, 1
+        if pre_ln:
+            self.ln_head = LayerNorm(embedding_dim)
+        else:
+            self.ln_head = None
 
     def to(self, device):
         super().to(device)
@@ -192,7 +174,8 @@ class Transformer(nn.Module):
                 present.append(x[1])
                 x = x[0]
 
-        x = self.ln_head(x)
+        if self.ln_head:
+            x = self.ln_head(x)
         if self.positional_embedding is not None:
             if len(x.shape) == 2:
                 x = x[:,:-self.positional_embedding.shape[0]]

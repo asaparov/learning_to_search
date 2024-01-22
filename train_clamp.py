@@ -58,21 +58,23 @@ def generate_data(input_size, num_examples):
 	from torch.distributions.cauchy import Cauchy
 	m = Cauchy(0.0, 4.0)
 	x = m.sample((num_examples, input_size, input_size))
-	x[x > input_size] /= input_size
-	x[x < 1.0] = 0.0
 	ln = torch.nn.LayerNorm(input_size)
 	x = ln(x)
+	x[x > input_size] /= input_size
+	x[x < 1.0] = 0.0
 	x[:,:,0] = 1.1
 	x = torch.gather(x, dim=-1, index=torch.argsort(torch.rand_like(x), dim=-1))
 	return x.detach()
 
 def clamp_loss(inputs, predictions):
 	num_examples = inputs.size(0)
-	loss = torch.sum(torch.maximum(predictions[inputs < 1.0], torch.tensor(0.0)) ** 2 / num_examples)
+	lower_loss = torch.sum(torch.maximum(predictions[inputs < 1.0], torch.tensor(0.0)) ** 2 / num_examples)
 	mask = (inputs >= 1.0)
 	denom = torch.sum(mask, dim=-1)
 	means = torch.sum(predictions * mask, dim=-1) / denom
-	return loss + torch.sum(torch.sum(((predictions - means.unsqueeze(-1)) * mask) ** 2, dim=-1) / denom / num_examples)
+	dispersion_loss = torch.sum(torch.sum(((predictions - means.unsqueeze(-1)) * mask) ** 2, dim=-1) / denom / num_examples)
+	upper_loss = torch.sum((torch.minimum(predictions[inputs >= 1.0], torch.tensor(1.0)) - 1.0) ** 2 / num_examples)
+	return lower_loss + dispersion_loss + upper_loss
 
 def evaluate_model(model, inputs):
 	predictions, _ = model(inputs)

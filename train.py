@@ -500,7 +500,7 @@ def generate_training_set(max_input_size, dataset_size, max_lookahead, reserved_
 
 	return inputs, outputs, valid_outputs, num_collisions
 
-def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidden_dim, bidirectional, absolute_pos_emb, learnable_token_emb, toeplitz_attn, toeplitz_reg, toeplitz_pos_only, add_padding, ablate, preLN):
+def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidden_dim, bidirectional, absolute_pos_emb, learnable_token_emb, toeplitz_attn, toeplitz_reg, toeplitz_pos_only, add_padding, ablate, pre_ln):
 	generator.set_seed(seed_value)
 	seed(seed_value)
 	torch.manual_seed(seed_value)
@@ -616,7 +616,8 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 				absolute_pos_emb=absolute_pos_emb,
 				learn_token_emb=learnable_token_emb,
 				ablate=ablate,
-				toeplitz=toeplitz)
+				toeplitz=toeplitz,
+				pre_ln=pre_ln)
 		epoch = 0
 		model.to(device)
 	else:
