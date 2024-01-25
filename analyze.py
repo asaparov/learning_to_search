@@ -123,8 +123,8 @@ def ideal_model(max_input_size, num_layers, hidden_dim, bidirectional, absolute_
 			proj_k = torch.zeros(transformer.attn.proj_k.weight.shape)
 			for j in range(0, max_vertex_id + 1):
 				proj_k[j, j] = 10000.0
-			#for j in range(d_hid, d_hid + max_input_size):
-			#	proj_k[j, j] = -5000.0
+			for j in range(d_hid + 1, d_hid + max_input_size - 1, 3):
+				proj_k[d_hid:, j] = -10000.0
 			transformer.attn.proj_k.weight = torch.nn.Parameter(proj_k)
 			if transformer.attn.proj_v:
 				transformer.attn.proj_v.bias = torch.nn.Parameter(torch.zeros(transformer.attn.proj_v.bias.size(0)))
@@ -138,8 +138,11 @@ def ideal_model(max_input_size, num_layers, hidden_dim, bidirectional, absolute_
 				transformer.ff[3].weight = torch.nn.Parameter(-torch.eye(transformer.ff[3].weight.size(0)))
 				transformer.ff[3].bias = torch.nn.Parameter(torch.zeros(transformer.ff[3].bias.size(0)))
 			proj_k = torch.zeros(transformer.attn.proj_k.weight.shape)
-			for j in range(d_hid + 1, d_hid + max_input_size):
+			for j in range(0, max_vertex_id + 1):
+				proj_k[j, j] = -100.0
+			for j in range(d_hid + 1, d_hid + max_input_size - 5):
 				proj_k[j, j-1] = 100.0
+			proj_k[-1,-1] = 1000.0
 			transformer.attn.proj_k.weight = torch.nn.Parameter(proj_k)
 			if transformer.attn.proj_v:
 				transformer.attn.proj_v.bias = torch.nn.Parameter(torch.zeros(transformer.attn.proj_v.bias.size(0)))

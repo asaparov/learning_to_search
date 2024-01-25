@@ -23,7 +23,10 @@ def build_module(name):
 try:
 	from os.path import getmtime
 	from importlib.util import find_spec
-	if getmtime(find_spec('generator').origin) < getmtime('generator.cpp'):
+	generator_spec = find_spec('generator')
+	if generator_spec == None:
+		raise ModuleNotFoundError
+	if getmtime(generator_spec.origin) < getmtime('generator.cpp'):
 		print("C++ module `generator` is out-of-date. Compiling from source...")
 		build_module("generator")
 	import generator
