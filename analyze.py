@@ -212,12 +212,12 @@ if os.path.isfile(filepath):
 	suffix = filepath[filepath.index('maxlookahead')+len('maxlookahead'):]
 	training_max_lookahead = int(suffix[:suffix.index('_')])
 
-	model = ideal_model(max_input_size=max_input_size, num_layers=6, hidden_dim=16, bidirectional=True, absolute_pos_emb=True, learnable_token_emb=False)
+	#model = ideal_model(max_input_size=max_input_size, num_layers=6, hidden_dim=16, bidirectional=True, absolute_pos_emb=True, learnable_token_emb=False)
 
 	#run_model(model, [22, 21,  5, 19, 21, 11,  5, 21, 10,  3, 21,  4, 10, 21,  9,  4, 21,  9, 11, 23,  9,  3, 20,  9], max_input_size=24)
 	#run_model(model, [22, 22, 22, 22, 22, 22, 22, 21, 1,  2, 21,  1,  4, 21,  2,  3, 21, 4,  5, 23,  1,  3, 20, 1], max_input_size=24)
 	#run_model(model, [46, 45,  3, 19, 45, 18, 39, 45, 36, 15, 45, 24, 42, 45, 37,  3, 45, 37, 36, 45, 23, 32, 45,  8, 24, 45, 19, 30, 45, 15, 23, 45, 39, 40, 45, 40, 34, 45, 30, 18, 45, 32,  8, 47, 37, 34, 44, 37], max_input_size=48)
-	run_model(model, [43, 15, 34, 43, 30,  9, 43, 14, 22, 43,  8, 13, 43,  8,  2, 43, 26,  1, 43,  1, 14, 43, 36,  7, 43, 22,  4, 43, 22,  2, 43, 34, 26, 43, 34, 25, 43, 28, 30, 43, 16, 3, 43, 16, 32, 43, 13, 33, 43, 12, 15, 43, 25, 21, 43,  9, 36, 43, 3, 12, 43, 32,  8, 43, 33, 28, 45, 16,  4, 42, 16], fix_index=98, max_input_size=max_input_size, num_perturbations=0)
+	#run_model(model, [43, 15, 34, 43, 30,  9, 43, 14, 22, 43,  8, 13, 43,  8,  2, 43, 26,  1, 43,  1, 14, 43, 36,  7, 43, 22,  4, 43, 22,  2, 43, 34, 26, 43, 34, 25, 43, 28, 30, 43, 16, 3, 43, 16, 32, 43, 13, 33, 43, 12, 15, 43, 25, 21, 43,  9, 36, 43, 3, 12, 43, 32,  8, 43, 33, 28, 45, 16,  4, 42, 16], fix_index=98, max_input_size=max_input_size, num_perturbations=0)
 
 	seed(training_seed)
 	torch.manual_seed(training_seed)
@@ -236,12 +236,11 @@ if os.path.isfile(filepath):
 	NUM_TEST_SAMPLES = 1000
 	reserved_inputs = set()
 	print("Generating eval data...")
-	inputs,outputs = generate_eval_data(max_input_size, min_path_length=2, distance_from_start=1, distance_from_end=-1, lookahead_steps=9, num_paths_at_fork=None, num_samples=NUM_TEST_SAMPLES)
+	inputs,outputs = generate_eval_data(max_input_size, min_path_length=2, distance_from_start=1, distance_from_end=-1, lookahead_steps=13, num_paths_at_fork=None, num_samples=NUM_TEST_SAMPLES)
 	#generator.set_seed(get_seed(1))
 	#inputs, outputs, _, _ = generator.generate_training_set(max_input_size, NUM_TEST_SAMPLES, training_max_lookahead, reserved_inputs, 1, False)
 	print("Evaluating model...")
 	test_acc,test_loss,predictions = evaluate_model(model, inputs, outputs)
-	import pdb; pdb.set_trace()
 	print("Mistaken inputs:")
 	predictions = np.array(predictions.cpu())
 	incorrect_indices = np.nonzero(predictions != outputs)[0]
