@@ -52,7 +52,6 @@ class TransformerLayer(nn.Module):
         else:
             a, past = self.attn(x, x, x, past, mask)
 
-        import pdb; pdb.set_trace()
         x = x + a
         if not self.pre_ln:
              x = self.ln_attn(x)

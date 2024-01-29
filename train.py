@@ -626,6 +626,8 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 	else:
 		last_epoch = max(existing_epochs)
 		epoch = last_epoch + 1
+		print("Loading model from '{}/epoch{}.pt'...".format(filename, last_epoch))
+		stdout.flush()
 		loaded_obj = torch.load(filename + '/epoch{}.pt'.format(last_epoch), map_location=device)
 		model, random_state, np_random_state, torch_random_state = loaded_obj
 		setstate(random_state)
