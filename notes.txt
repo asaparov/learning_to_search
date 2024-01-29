@@ -685,3 +685,10 @@ layer 3 does the 2nd backwards step: x[64] is copied into x[-3]
 layer 4 does the 3rd backwards step: x[73] is copied into x[-3]
 
 the goal isnt copied into x[-3] for some reason (it gets to 8 reachable vertices but the next backwards step seems incorrect)
+the attention layer copies from positions 73 and 76 (containing tokens 26 and 1 respectively). instead, it should be copying from position 115 (corresponding to the source vertex of the edge 3 -> 12).
+
+we fixed this by adding a diagonal term to the k_proj matrix at -2,-2 (matching the position of the PATH_PREFIX_TOKEN)
+
+we need to fix the issue of the self-activation of the last token being too high (it may predict 16 instead of the correct answer which is 3). maybe try reducing the activations of all tokens in the first layer?
+
+we fixed this by tweaking the FF-layer. by changing k in the function f(x) = x - k*ReLU(x - 1) we can maintain information about the relative sizes of the token activations within each embedding.

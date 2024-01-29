@@ -52,6 +52,7 @@ class TransformerLayer(nn.Module):
         else:
             a, past = self.attn(x, x, x, past, mask)
 
+        import pdb; pdb.set_trace()
         x = x + a
         if not self.pre_ln:
              x = self.ln_attn(x)
@@ -119,7 +120,7 @@ class Transformer(nn.Module):
             token_dim = words
             position_dim = 0
         self.transformers = nn.ModuleList([
-            TransformerLayer(heads, embedding_dim, token_dim, position_dim, rate, dropout, l != layers - 1, ablate, not ablate, toeplitz, pre_ln)
+            TransformerLayer(heads, embedding_dim, token_dim, position_dim, rate, dropout, l != layers - 1 if ablate else True, ablate, not ablate, toeplitz, pre_ln)
             for l in range(layers)])
         if pre_ln:
             self.ln_head = LayerNorm(embedding_dim)

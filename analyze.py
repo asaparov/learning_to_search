@@ -106,12 +106,6 @@ def ideal_model(max_input_size, num_layers, hidden_dim, bidirectional, absolute_
 	for i, transformer in enumerate(model.transformers):
 		transformer.ln_attn.weight = torch.nn.Parameter(torch.ones(transformer.ln_attn.weight.size(0)))
 		transformer.ln_attn.bias = torch.nn.Parameter(torch.zeros(transformer.ln_attn.bias.size(0)))
-		transformer.attn.proj_q.bias = torch.nn.Parameter(torch.zeros(transformer.attn.proj_q.bias.size(0)))
-		transformer.attn.proj_k.bias = torch.nn.Parameter(torch.zeros(transformer.attn.proj_k.bias.size(0)))
-		transformer.attn.proj_q.weight = torch.nn.Parameter(torch.eye(transformer.attn.proj_q.weight.size(0)))
-		if transformer.attn.linear:
-			transformer.attn.linear.bias = torch.nn.Parameter(torch.zeros(transformer.attn.linear.bias.size(0)))
-			transformer.attn.linear.weight = torch.nn.Parameter(torch.eye(transformer.attn.linear.weight.size(0)))
 		if i == 0:
 			if transformer.ff:
 				transformer.ln_ff.weight = torch.nn.Parameter(torch.ones(transformer.ln_ff.weight.size(0)))
@@ -125,28 +119,82 @@ def ideal_model(max_input_size, num_layers, hidden_dim, bidirectional, absolute_
 				proj_k[j, j] = 10000.0
 			for j in range(d_hid + 1, d_hid + max_input_size - 1, 3):
 				proj_k[d_hid:, j] = -10000.0
+				proj_k[-1, j] = 100.0
+			for j in range(d_hid, d_hid + max_input_size - 1, 3):
+				proj_k[d_hid:, j] = -10000.0
+			proj_k[-2,-2] = 10000.0
 			transformer.attn.proj_k.weight = torch.nn.Parameter(proj_k)
+			transformer.attn.proj_q.weight = torch.nn.Parameter(torch.eye(transformer.attn.proj_q.weight.size(0)))
+			transformer.attn.proj_q.bias = torch.nn.Parameter(torch.zeros(transformer.attn.proj_q.bias.size(0)))
+			transformer.attn.proj_k.bias = torch.nn.Parameter(torch.zeros(transformer.attn.proj_k.bias.size(0)))
 			if transformer.attn.proj_v:
 				transformer.attn.proj_v.bias = torch.nn.Parameter(torch.zeros(transformer.attn.proj_v.bias.size(0)))
-				transformer.attn.proj_v.weight = torch.nn.Parameter(max_vertex_id*torch.eye(transformer.attn.proj_v.weight.size(0)))
-		else:
+				proj_v = max_vertex_id*torch.eye(transformer.attn.proj_v.weight.size(0))
+				for j in range(0, max_vertex_id + 1):
+					proj_v[j, j] = -0.5
+				transformer.attn.proj_v.weight = torch.nn.Parameter(proj_v)
+			if transformer.attn.linear:
+				transformer.attn.linear.bias = torch.nn.Parameter(torch.zeros(transformer.attn.linear.bias.size(0)))
+				transformer.attn.linear.weight = torch.nn.Parameter(torch.eye(transformer.attn.linear.weight.size(0)))
+		elif i < len(model.transformers) - 1:
 			if transformer.ff:
 				transformer.ln_ff.weight = torch.nn.Parameter(torch.ones(transformer.ln_ff.weight.size(0)))
 				transformer.ln_ff.bias = torch.nn.Parameter(torch.zeros(transformer.ln_ff.bias.size(0)))
 				transformer.ff[0].weight = torch.nn.Parameter(torch.eye(transformer.ff[0].weight.size(0)))
 				transformer.ff[0].bias = torch.nn.Parameter(-torch.ones(transformer.ff[0].bias.size(0)))
-				transformer.ff[3].weight = torch.nn.Parameter(-torch.eye(transformer.ff[3].weight.size(0)))
+				if i == 1:
+					transformer.ff[3].weight = torch.nn.Parameter(-1.01*torch.eye(transformer.ff[3].weight.size(0)))
+				else:
+					transformer.ff[3].weight = torch.nn.Parameter(-0.99*torch.eye(transformer.ff[3].weight.size(0)))
 				transformer.ff[3].bias = torch.nn.Parameter(torch.zeros(transformer.ff[3].bias.size(0)))
 			proj_k = torch.zeros(transformer.attn.proj_k.weight.shape)
 			for j in range(0, max_vertex_id + 1):
 				proj_k[j, j] = -100.0
 			for j in range(d_hid + 1, d_hid + max_input_size - 5):
 				proj_k[j, j-1] = 100.0
-			proj_k[-1,-1] = 1000.0
+			if i == 1:
+				for j in range(d_hid + 1, d_hid + max_input_size - 5, 3):
+					proj_k[j, j-1] = 0.0
+					proj_k[j, j+1] = 20.0
+					proj_k[j,-1] = 0.0
+			proj_k[-2,-2] = 1.0
+			proj_k[-1,-1] = 1.0
 			transformer.attn.proj_k.weight = torch.nn.Parameter(proj_k)
+			proj_q_bias = torch.zeros(transformer.attn.proj_q.bias.size(0))
+			proj_q_bias[-2] = 100.0
+			proj_q = torch.eye(transformer.attn.proj_q.weight.size(0))
+			transformer.attn.proj_q.weight = torch.nn.Parameter(proj_q)
+			transformer.attn.proj_q.bias = torch.nn.Parameter(proj_q_bias)
+			transformer.attn.proj_k.bias = torch.nn.Parameter(torch.zeros(transformer.attn.proj_k.bias.size(0)))
+			if transformer.attn.proj_v:
+				transformer.attn.proj_v.bias = torch.nn.Parameter(torch.zeros(transformer.attn.proj_v.bias.size(0)))
+				proj_v = torch.eye(transformer.attn.proj_v.weight.size(0))
+				if i == 1:
+					proj_v = 2 * proj_v
+				transformer.attn.proj_v.weight = torch.nn.Parameter(proj_v)
+			if transformer.attn.linear:
+				transformer.attn.linear.bias = torch.nn.Parameter(torch.zeros(transformer.attn.linear.bias.size(0)))
+				transformer.attn.linear.weight = torch.nn.Parameter(torch.eye(transformer.attn.linear.weight.size(0)))
+		else:
+			if transformer.ff:
+				transformer.ln_ff.weight = torch.nn.Parameter(torch.ones(transformer.ln_ff.weight.size(0)))
+				transformer.ln_ff.bias = torch.nn.Parameter(torch.zeros(transformer.ln_ff.bias.size(0)))
+				transformer.ff[0].weight = torch.nn.Parameter(torch.eye(transformer.ff[0].weight.size(0)))
+				transformer.ff[0].bias = torch.nn.Parameter(-3*torch.ones(transformer.ff[0].bias.size(0)))
+				transformer.ff[3].weight = torch.nn.Parameter(-1.1*torch.eye(transformer.ff[3].weight.size(0)))
+				transformer.ff[3].bias = torch.nn.Parameter(torch.zeros(transformer.ff[3].bias.size(0)))
+			proj_k = torch.zeros(transformer.attn.proj_q.weight.shape)
+			proj_k[-1,-3] = 100.0
+			transformer.attn.proj_k.weight = torch.nn.Parameter(proj_k)
+			transformer.attn.proj_q.weight = torch.nn.Parameter(torch.eye(transformer.attn.proj_q.weight.size(0)))
+			transformer.attn.proj_q.bias = torch.nn.Parameter(torch.zeros(transformer.attn.proj_q.bias.size(0)))
+			transformer.attn.proj_k.bias = torch.nn.Parameter(torch.zeros(transformer.attn.proj_q.bias.size(0)))
 			if transformer.attn.proj_v:
 				transformer.attn.proj_v.bias = torch.nn.Parameter(torch.zeros(transformer.attn.proj_v.bias.size(0)))
 				transformer.attn.proj_v.weight = torch.nn.Parameter(torch.eye(transformer.attn.proj_v.weight.size(0)))
+			if transformer.attn.linear:
+				transformer.attn.linear.bias = torch.nn.Parameter(torch.zeros(transformer.attn.linear.bias.size(0)))
+				transformer.attn.linear.weight = torch.nn.Parameter(torch.eye(transformer.attn.linear.weight.size(0)))
 	return model
 
 from sys import argv

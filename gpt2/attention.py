@@ -66,9 +66,9 @@ class BaseAttention(nn.Module):
             a = x.softmax(-1)
             for src_index in src_indices:
                 print('a[{},{}] = {}'.format(dst_index, src_index, a[0,0,dst_index,src_index]))
-        print_products(-3)
+        #print_products(-1)
+        #import pdb; pdb.set_trace()
         x = self.dropout(x.softmax(-1))
-        import pdb; pdb.set_trace()
 
         return torch.matmul(x, v)
 
