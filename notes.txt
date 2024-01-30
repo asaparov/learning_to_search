@@ -692,3 +692,63 @@ we fixed this by adding a diagonal term to the k_proj matrix at -2,-2 (matching 
 we need to fix the issue of the self-activation of the last token being too high (it may predict 16 instead of the correct answer which is 3). maybe try reducing the activations of all tokens in the first layer?
 
 we fixed this by tweaking the FF-layer. by changing k in the function f(x) = x - k*ReLU(x - 1) we can maintain information about the relative sizes of the token activations within each embedding.
+
+
+
+
+analyzing the unablated max_input_length = 90 model with 6 layers, max train lookahead = 10, seed = 2:
+looking at the input:
+[31, 31, 31, 31, 31, 31, 31, 30,  7, 23, 30,  9, 22, 30,  6,  4, 30, 6, 10, 30, 25, 19, 30, 17,  9, 30, 17, 16, 30,  1, 14, 30, 11, 21, 30, 26,  1, 30, 12, 11, 30, 14,  6, 30, 15, 25, 30, 24, 28, 30,  4, 17, 30, 19,  8, 30, 27, 26, 30, 27, 12, 30, 27,  5, 30, 22, 24, 30, 8,  3, 30, 18, 15, 30,  3,  7, 30,  3, 10, 30,  3,  2, 30, 21, 18, 32, 27, 28, 29, 27]
+
+27 -> 26 ->  1 -> 14 ->  6 ->  4 -> 17 ->  9 -> 22 -> 24 -> 28
+27 -> 12 -> 11 -> 21 -> 18 -> 15 -> 25 -> 19 ->  8 ->  3 ->  7 -> 23
+27 ->  5
+ 6 -> 10
+17 -> 16
+ 3 -> 10
+ 3 ->  2
+
+attention layer 5 copies row 35 into row 89 with weight 0.7547, and copies row 86 into row 89 with weight 0.0948 (it also copies row 38 into 89 with weight 0.1346 but row 38 has very low activation at 26). rows 35 and 86 of the inputs to attention layer 5 have large activation at 26 but low activation at row 38 and 89.
+
+before FF layer 4, rows 35 and 86 still have high activation at 26 (along with high activation at non-token elements). in fact, row 86 also contains high activation at 5, 12, and 26 (excluding non-token activations), which are the valid next steps from the current vertex.
+
+before attention layer 4, row 86 has higher activation at 5 than 26. in fact, row 86 has highest activation at 5, 12, and 26 (excluding non-token activations), which are the valid next steps from the current vertex. row 35 has high activation at 26.
+
+before FF layer 3, row 86 still has high activations at 5, 12, 26. row 35 has high activation at 26.
+
+before attention layer 3, row 86 still has high activations at 5, 12, 26. row 35 has high activation at 26.
+
+before FF layer 2, row 86 still has high activations at 5, 12, 26. row 35 has high activation at 26.
+
+before attention layer 2, row 35 still has high activation at 26. however, row 86 no longer has high activation at 5, 12, 26. the linear layer after attention layer 2 significantly increases the activation in row 86 at element 26. what causes such a large increase in activation? the bias term at 26 is -0.0300 so this is not the cause. the 26th row of the weight matrix seems to select large activations at 135 and small activations at 88.
+  attention layer 2 copies rows 56, 59, and 62 into row 86, with weights 0.2018, 0.1861, 0.1862, respectively. rows 59 and 62 have strong negative activation at 88.
+
+how is the high activation at row 35 computed before the input to attention layer 2? its because the input token at position 35 is 26. so the more important question is why is row 35 selected by attention layer 5? because row 35 has strong negative activation at 138 and row 89 has strong positive activation at 138. (row 35, element 138 is -1.5198, whereas row 38, element 138 is -1.6055) -> element 138 is not sufficient since both rows 35 and 38 have large negative values.
+  at element 40: row 35 has -0.5226, row 38 has 0.0214
+  at element 113: row 35 has 0.3868, row 38 has -0.6394
+  at element 49: row 35 has -0.0824, row 38 has 0.3710
+  -> from a perturbation analysis, its neither the representation at 35 or 38 that causes the difference in behavior. rather, its due to row 89. but which part? there seem to be a handful of important indices: 40, 50, 135, 137, and (maybe not as important but still important) 55, 36, 110, 64, 120, 30, 54, 57
+  more specifically, row 89, elements 40, 55, and 57 have large negative value.
+
+before FF layer 4, row 89 still has large negative activations at 40, 55, 57
+
+but attention layer 4 makes the activations at 40 and 55 more negative. the attention layer copies row 23 into row 89.
+
+attention layer 3 copies rows 11, 23, 29, 32, 53 into row 23. it also copies rows 29, 35, 38, 53, 65, 71 into row 89.
+
+attention layer 2 copies rows 56, 59 into 89. (token matching?) it also copies many rows into 23. it copies rows 14, 23, 47 into 11. it copies rows 32, 50 into row 29. it copies rows 32, 38, 47 into row 32.
+
+
+
+if we change the goal vertex to 7, the model correctly predicts 12. how?
+
+attention layer 5 copies rows 38 and 86 into row 89, with weights 0.6330 and 0.3143 respectively. the inputs to attention layer 5 at row 86 also have high activation at 5, 12, 26. the input at row 38 has high activation at 12.
+
+...
+
+before FF layer 2, row 86 still has high activations at 5, 12, 26. row 38 still has high activation at 12.
+
+how is the high activation at row 38 computed before the input to attention layer 2? its because the input token at position 38 is 12. so the more important question is why is row 38 selected by attention layer 5? because row 38 has strong negative activation at 138 and row 89 has strong positive activation at 138. (row 35, element 138 is -1.4799, whereas row 38, element 138 is -1.5498) -> element 138 is not sufficient since both rows 35 and 38 have large negative values.
+  at element 40: row 35 has -0.5549, row 38 has -0.0280
+  at element 113: row 35 has 0.4127, row 38 has -0.6588
+  at element 49: row 35 has -0.1794, row 38 has 0.3273

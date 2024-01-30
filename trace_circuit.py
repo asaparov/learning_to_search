@@ -3,6 +3,7 @@ import numpy as np
 import torch
 from torch import nn, LongTensor, FloatTensor
 from train import generate_example, lookahead_depth
+from gpt2 import TokenEmbedding
 import math
 
 def normalize_conditions(conditions):
@@ -117,8 +118,16 @@ class TransformerTracer:
 		attn += mask.type_as(attn) * attn.new_tensor(-1e4)
 		attn = attn_layer.attn.dropout(attn.softmax(-1))
 
-		v = x
-		return torch.matmul(attn, v), attn, A
+		if attn_layer.proj_v:
+			v = attn_layer.proj_v(x)
+		else:
+			v = x
+		new_x = torch.matmul(attn, v)
+		if attn_layer.linear:
+			out = attn_layer.linear(new_x)
+		else:
+			out = new_x
+		return out, attn, v, new_x, A
 
 	def trace(self, x: torch.Tensor, quiet: bool = True):
 		n = x.shape[0]
@@ -139,20 +148,28 @@ class TransformerTracer:
 		d = x.shape[1]
 
 		# Apply transformer layers sequentially.
+		layer_inputs = []
 		attn_inputs = []
 		attn_matrices = []
+		v_outputs = []
+		attn_linear_inputs = []
+		attn_outputs = []
 		A_matrices = []
 		ff_inputs = []
 		ff_parameters = []
 		for i, transformer in enumerate(self.model.transformers):
 			# Layer normalizations are performed before the layers respectively.
-			attn_inputs.append(x)
+			layer_inputs.append(x)
 			a = transformer.ln_attn(x)
+			attn_inputs.append(a)
 			if transformer.attn.proj_v:
-				a, attn_matrix, A = self.compute_attention(transformer.attn, a, mask)
+				a, attn_matrix, v, attn_linear_input, A = self.compute_attention(transformer.attn, a, mask)
 			else:
-				a, attn_matrix, A = self.compute_attention(transformer.attn, x, mask)
+				a, attn_matrix, v, attn_linear_input, A = self.compute_attention(transformer.attn, x, mask)
+			v_outputs.append(v)
 			attn_matrices.append(attn_matrix)
+			attn_linear_inputs.append(attn_linear_input)
+			attn_outputs.append(a)
 			A_matrices.append(A)
 
 			x = x + a
@@ -166,7 +183,22 @@ class TransformerTracer:
 			#print(x[-1,:])
 		attn_inputs.append(x)
 		token_dim = self.model.token_embedding.shape[0]
+
+		if self.model.ln_head:
+			x = self.model.ln_head(x)
+		if self.model.positional_embedding is not None:
+			if len(x.shape) == 2:
+				x = x[:,:-self.model.positional_embedding.shape[0]]
+			else:
+				x = x[:,:,:-self.model.positional_embedding.shape[0]]
+		if type(self.model.token_embedding) == TokenEmbedding:
+			x = self.model.token_embedding(x, transposed=True)
+		else:
+			x = torch.matmul(x, self.model.token_embedding.transpose(0, 1))
+
 		prediction = torch.argmax(x[-1,:token_dim]).tolist()
+		if not quiet:
+			print("Model prediction: {}".format(prediction))
 
 		# work backwards and identify which inputs contributed most to the output
 		representations = [(n-1,prediction,True)]
@@ -323,6 +355,9 @@ if __name__ == "__main__":
 		device = torch.device('cuda')
 
 	tfm_model, _, _, _ = torch.load(argv[1], map_location=device)
+	for transformer in tfm_model.transformers:
+		if not hasattr(transformer, 'pre_ln'):
+			transformer.pre_ln = True
 	tracer = TransformerTracer(tfm_model)
 
 	#input = [22, 21,  5, 19, 21, 11,  5, 21, 10,  3, 21,  4, 10, 21,  9,  4, 21,  9, 11, 23,  9,  3, 20,  9]
@@ -330,7 +365,8 @@ if __name__ == "__main__":
 	#input = [46, 45,  3, 19, 45, 18, 39, 45, 36, 15, 45, 24, 42, 45, 37,  3, 45, 37, 36, 45, 23, 32, 45,  8, 24, 45, 19, 30, 45, 15, 23, 45, 39, 40, 45, 40, 34, 45, 30, 18, 45, 32,  8, 47, 37, 34, 44, 37]
 	#input = [46, 46, 46, 46, 46, 46, 46, 45, 31, 39, 45, 42,  4, 45, 21,  7, 45, 19, 20, 45, 13, 22, 45,  7, 42, 45, 20, 21, 45, 17, 19, 45, 17, 31, 45, 10, 14, 45, 39, 10, 45, 14, 13, 47, 17,  4, 44, 17]
 	#input = [62, 62, 62, 62, 62, 61, 15,  8, 61, 11, 18, 61,  9,  5, 61, 19, 14, 61, 19, 17, 61,  1, 11, 61,  6,  7, 61, 10,  3, 61,  2,  1, 61, 13, 10, 61, 12,  4, 61, 17, 16, 61,  7, 12, 61, 14,  2, 61,  3,  9, 61, 16, 15, 61, 18,  6, 61,  8, 13, 63, 19,  4, 60, 19]
-	input = [44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 43, 21, 40, 43, 21, 22, 43, 22, 34, 43, 13,  3, 43, 31,  2, 43, 24, 13, 43,  4, 41, 43, 30, 31, 43, 17, 15, 43, 34, 38, 43,  3, 28, 43, 18, 17, 43, 14, 24, 43,  2,  4, 43, 32, 30, 43, 40, 18, 43, 15, 14, 43, 38, 32, 45, 21, 28, 42, 21]
+	#input = [44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 43, 21, 40, 43, 21, 22, 43, 22, 34, 43, 13,  3, 43, 31,  2, 43, 24, 13, 43,  4, 41, 43, 30, 31, 43, 17, 15, 43, 34, 38, 43,  3, 28, 43, 18, 17, 43, 14, 24, 43,  2,  4, 43, 32, 30, 43, 40, 18, 43, 15, 14, 43, 38, 32, 45, 21, 28, 42, 21]
+	input = [31, 31, 31, 31, 31, 31, 31, 30,  7, 23, 30,  9, 22, 30,  6,  4, 30, 6, 10, 30, 25, 19, 30, 17,  9, 30, 17, 16, 30,  1, 14, 30, 11, 21, 30, 26,  1, 30, 12, 11, 30, 14,  6, 30, 15, 25, 30, 24, 28, 30,  4, 17, 30, 19,  8, 30, 27, 26, 30, 27, 12, 30, 27,  5, 30, 22, 24, 30, 8,  3, 30, 18, 15, 30,  3,  7, 30,  3, 10, 30,  3,  2, 30, 21, 18, 32, 27, 28, 29, 27]
 	input = torch.LongTensor(input).to(device)
 	prediction = tracer.trace(input, quiet=False)
 	import pdb; pdb.set_trace()
