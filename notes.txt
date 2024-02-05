@@ -738,6 +738,10 @@ attention layer 3 copies rows 11, 23, 29, 32, 53 into row 23. it also copies row
 
 attention layer 2 copies rows 56, 59 into 89. (token matching?) it also copies many rows into 23. it copies rows 14, 23, 47 into 11. it copies rows 32, 50 into row 29. it copies rows 32, 38, 47 into row 32.
 
+attention layer 1 copies 87 into EDGE_PREFIX_TOKEN and also into many target vertices and some source vertices. it also copies row 83 into rows 47, 83. (row 47 contains the token 24 which is the vertex immediately preceding the goal)
+
+attention layer 0 copies row 87 into row 83 (and a small weight is copied into all rows with an EDGE_PREFIX_TOKEN).
+
 
 
 if we change the goal vertex to 7, the model correctly predicts 12. how?
@@ -752,3 +756,57 @@ how is the high activation at row 38 computed before the input to attention laye
   at element 40: row 35 has -0.5549, row 38 has -0.0280
   at element 113: row 35 has 0.4127, row 38 has -0.6588
   at element 49: row 35 has -0.1794, row 38 has 0.3273
+
+attention layer 1 copies row 87 into EDGE_PREFIX_TOKEN and also into many target vertices (3,  6,  9, 12, 18, 21, 27, 30, 33, 36, 39, 51, 54, 60, 72, 75, 78, 81) it also copies row 83 into rows 74, 83. (row 74 contains the token 3 which is the vertex immediately preceding the goal)
+
+attention layer 0 copies row 87 into row 83 (and a small weight is copied into all rows with an EDGE_PREFIX_TOKEN).
+
+
+need to make the A-matrix analysis more robust. suppose the embedding at position i is x_i. we want to find out why i attends to j at a given layer. so why is x_i * A * x_j^T is larger than x_i * A * x_k^T for k != j? consider decomposing each x_i into y_i + z_i such that the y_i component is not useful to make x_i * A * x_j^T larger than x_i * A * x_k^T, whereas the z_i component is useful.
+  x_i * A * x_j^T = x_i * A * (y_j + z_j)^T
+  if we simplify this into the sparse setting, suppose z_j is one-hot. then to compute the non-zero index of z_j, we can compute [x_i * A]_l * x_jl for every l, and [x_i * A]_l * x_kl for every l. then we can find the l such that [x_i * A]_l * x_jl - [x_i * A]_l * x_kl = [x_i * A]_l * [x_j - x_k]_l is maximal. thus, l is the index of x_j that makes x_i * A * x_j^T larger than x_i * A * x_k^T, and A[:,l] helps to select this index.
+  but more generally, we could also look at every l where [x_i * A]_l * [x_j - x_k]_l > 0, which contributes to help make x_i * A * x_j^T > x_i * A * x_k^T. the relative magnitudes of [x_i * A]_l * [x_j - x_k]_l can vary (some l's can be more important than others), and we can measure the relative importance by looking at their relative magnitudes (maybe normalize?).
+  however, it may be the case that values of l such that [x_i * A]_l * [x_j - x_k]_l is very positive are cancelled out by values of l such that [x_i * A]_l * [x_j - x_k]_l is very negative, so does it make sense to only look at values of l where [x_i * A]_l * [x_j - x_k]_l > 0?
+
+looking at the above example, we find that in attention layer 5, row 35 is copied into row 89, and the reason is because [x_i * A]_l * [x_j - x_k]_l is large when i=89, j=35, l=138, for all values of k except 35 and 38 (and also 5 and 86). so one important component of row 35 that facilitates its selection in this attention layer is that the element at 138 is very negative (this is probably encoding some important information; especially since input[35] is 26 and input[38] is 12, which are two of the valid next steps from the current vertex). but why is row 35 copied and not row 38?
+  this is a lot less clear, there doesn't seem to be one obvious element that's much larger than others. the largest contributor is element 40. to find out why, we have to consider why [x_i * A]_40 * [x_j - x_k]_40 is so large. well x_{35,40} is -0.5226 and x_{38,40} is 0.0214, and [x_89 * A]_40 is -9.8504 (why is this so negative? well because x_{89,36} = 0.8297 and A_{36,40} = -2.4941). so we would want to keep track of the negative activation at 40 in row 35.
+  the next largest contributor is element 125. x_{35,125} is -0.0072, x_{38,125} is 0.6846, and [x_89 * A]_125 is -5.4847 (TODO: why is this so negative?).
+  so perhaps the correct way to think about this is that there are certain values of x_35 that need to be as negative or as positive as possible in order to maximize the value of x_89 * A * x_35^T, and we can keep track of these "directions" such as in: element 125 should be as negative as possible, element 40 should be as negative as possible, element 138 should be as negative as possible.
+
+  so in this view, each value of x_35 is assigned either + or - indicating whether increasing that element's value will increase or decrease the attention weight on 35. propagating this backward, we encounter the layer normalization, but this does not actually change the signs that we're keeping track of. before this step, we have the FF layer. the FF layer, however, could negate some of these elements,
+
+  maybe we should compute the gradient of the cross entropy of the final output and backpropagate it?
+
+from perturbing the goal from 28 to 7 (the other side of the fork), we note that x_{35,40} and x_{38,40} don't change much, but x_{89,36} changes quite a bit (it's now -0.1181).
+
+going back to when the goal is 28, we see that x_{89,36} is large even before FF layer 4. attention layer 4 seems to cause x_{89,36} to become large, as the input to this layer has small x_{89,36}. attention layer 4 copies row 23 into row 89 with weight 0.9760 (NOTE: position 23 of the input corresponds to the source vertex of the edge 17 -> 9). why does this copy occur? well [x_89 * A]_77 * x_{23,77} is large (22.3977), and no other row has as large of a contribution from element 77 (i.e. [x_89 * A]_77 * x_{j,77} is small for j != 23). why is this value large, well because x_{23,77} = 0.4133, [x_89 * A]_77 = 63.8712. why is this large? because x_{89,138} = 5.6221 and A_{138,77} = 10.8522.
+  -> also, where does the high activation at x_{89,36} come from? it has to be from the linear layer at the end of attention layer 4. inspecting the product of [P_L * P_V]_36 and the input x_23, we find that the elements at 47 and 95 contribute the most.
+
+perturbation analysis, how do these activations change? x_{89,138} is still large, but x_{23,77} = -0.8337. similarly, x_{23,47} and x_{23,95} don't change much (doing linear(proj_v(x_23)) on the perturbed input leads to large activation at 36 as well). attention layer 4 instead copies rows 20 and 53 into row 89 (corresponding to the source vertex of the edge 25 -> 29 and the source of the edge 19 -> 8, respectively).
+
+going back to goal = 28, attention layer 3 copies multiple rows into row 23: 11, 23, 29, 32, 53 (and many more with smaller, but not that much smaller, weight). these correspond to the source of 9 -> 22, the source of 17 -> 9, the source of 1 -> 14, the source of 11 -> 21 (wrong path), the source of 19 -> 8 (wrong path). where is x_{23,77} copied from? it seems to be copied from rows 11, 23, 29, and 53, with strongest contributions from 11, 29, and 53. what are the source values of x_11 and x29 that cause high activation at 77? the contribution from row 11 to x_{23,77} is almost entirely due to high activation at x_{11,1}. similarly with row 29, its due to high activation at x_{29,1} (though inspecting these values, they are quite modest. the size of the contribution is mainly due to very large weight, 23.7961, at [P_V^T * P_L^T]_{1,77}).
+
+why is x_{11,1} and x_{29,1} (modestly) positive? the corresponding elements before FF layer 2 are also large. x_{29,1} is large because the value of input[29] is 1. so then why is x_{11,1} large?
+
+attention layer 2 doesn't make much of a change to x_{11,1}. the input to FF layer 2 also has large activation at x_{11,1}. attention layer 1 also doesn't make much of a change to x_{11,1}.
+
+FF layer 0 seems to increase the activation at x_{11,1} by some amount. this seems to be largely due to the bias term of the 2nd linear component in this FF layer.
+
+
+
+
+what if we try to trace the circuit from the input?
+attention layer 0:
+goal=28: attention layer 0 copies row 87 into 83, which corresponds to the source vertex of the edge 21 -> 18.
+goal=7:  same thing
+
+FF layer 0 seems to affect both inputs similarly.
+
+attention layer 1:
+goal=28: attention layer 1 copies row 87 into almost every row uniformly, except with smaller weights on rows 83 and 86. it also copies row 83 into row 47 with weight 0.3242 and into row 83 with weight 0.2294 and rows 0, 1, 2, 3, 5, 8, 29, 76, 79 with weights between 0.05 and 0.1. row 47 corresponds to the source vertex of the edge 24 -> 28.
+goal=7:  attention layer 1 copies row 87 into almost every row uniformly, except with smaller weights on rows 74, 83, and 86. it also copies row 83 into row 74 with weight 0.3166 and into row 83 with weight 0.1984 and rows 2, 5, 14, 23, 29, 32, 38 with weights between 0.05 and 0.1. row 74 corresponds to the source vertex of the edge 3 -> 7.
+-> this is a backwards step from the goal
+
+attention layer 2:
+goal=28: attention layer 2 copies row 47 into many rows uniformly.
+goal=7:  attention layer 2 copies row 47 into many rows uniformly.
