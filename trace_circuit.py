@@ -288,11 +288,99 @@ class TransformerTracer:
 			print("Model prediction: {}".format(prediction))
 			print("Model prediction for other input: {}".format(other_prediction))
 
+		PADDING_TOKEN = (n - 5) // 3 + 3
+		EDGE_PREFIX_TOKEN = (n - 5) // 3 + 2
+		start_index = torch.sum(input == PADDING_TOKEN)
+		num_edges = torch.sum(input == EDGE_PREFIX_TOKEN)
+
+		forward_edges = []
+		for i in range((n - 5) // 3 + 1):
+			forward_edges.append([])
+		for i in range(2, n-5, 3):
+			if i >= start_index:
+				forward_edges[input[i].item()].append(input[i+1].item())
+		def path_length(start, end):
+			if input[start] > (90 - 5) // 3 or input[end] > (90 - 5) // 3:
+				return -1
+			queue = [(input[start],0)]
+			best_distance = -1
+			while len(queue) != 0:
+				current, distance = queue.pop()
+				if current == input[end]:
+					if best_distance == -1 or distance < best_distance:
+						best_distance = distance
+					continue
+				for child in forward_edges[current]:
+					queue.append((child,distance+1))
+			return best_distance
+
+		tracked_indices = [(n-1,n-1),(n-3,n-3),(n-4,n-4)]
+		copies = []
+		total_copy_distances = []
+		for i, transformer in enumerate(self.model.transformers):
+			new_tracked_indices = []
+			copy_distances = []
+			if i == 5:
+				import pdb; pdb.set_trace()
+			for tracked_index, src in tracked_indices:
+				# determine the destination rows that this attention layer copies the row `tracked_index` into
+				very_large = torch.nonzero(attn_matrices[i][:,tracked_index] >= 0.1)
+				for dst_index in very_large:
+					dst_index = dst_index.item()
+					copies.append((i,tracked_index,dst_index,src))
+					new_tracked_indices.append((dst_index,src))
+					path_len = path_length(dst_index, tracked_index)
+					if path_len == -1:
+						path_len = path_length(tracked_index, dst_index)
+						if path_len != -1:
+							path_len = -path_len
+						else:
+							path_len = None
+					copy_distances.append(path_len)
+				if len(very_large) > 0:
+					continue
+				if i == 2 and tracked_index == 47:
+					import pdb; pdb.set_trace()
+				large = torch.nonzero(attn_matrices[i][:,tracked_index] >= 0.03)
+				if len(large) > num_edges / 2:
+					# this could be inverse encoded
+					if torch.sum(large % 3 == 2) > 0.75 * len(large):
+						# the large weights correspond to source vertices of edges
+						small = [j for j in range(2, n, 3) if j >= start_index and attn_matrices[i][j,tracked_index] < 0.02]
+						for dst_index in small:
+							copies.append((i,tracked_index,dst_index,src))
+							new_tracked_indices.append((dst_index,src))
+							path_len = path_length(dst_index, tracked_index)
+							if path_len == -1:
+								path_len = path_length(tracked_index, dst_index)
+								if path_len != -1:
+									path_len = -path_len
+								else:
+									path_len = None
+							copy_distances.append(path_len)
+					elif torch.sum(large % 3 == 0) > 0.75 * len(large):
+						# the large weights correspond to target vertices of edges
+						small = [j for j in range(0, n, 3) if j >= start_index and attn_matrices[i][j,tracked_index] < 0.02]
+						for dst_index in small:
+							copies.append((i,tracked_index,dst_index,src))
+							new_tracked_indices.append((dst_index,src))
+							path_len = path_length(dst_index, tracked_index)
+							if path_len == -1:
+								path_len = path_length(tracked_index, dst_index)
+								if path_len != -1:
+									path_len = -path_len
+								else:
+									path_len = None
+							copy_distances.append(path_len)
+			tracked_indices = new_tracked_indices
+			total_copy_distances.append(copy_distances)
+
+		import pdb; pdb.set_trace()
+
 		# work backwards and identify which inputs contributed most to the output
 		representations = [(n-1,prediction,True)]
 		if self.model.transformers[-1].ff:
 			raise Exception('Not implemented')
-		representations2 = [(n-1, torch.tensor([ff_inputs[-1][n-1,prediction] if i == prediction else 0 for i in range(n)]))]
 		for i, transformer in reversed(list(enumerate(self.model.transformers))):
 			ff_input = ff_inputs[i]
 			ff_output = layer_inputs[i + 1] - ff_input

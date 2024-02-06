@@ -798,15 +798,48 @@ FF layer 0 seems to increase the activation at x_{11,1} by some amount. this see
 what if we try to trace the circuit from the input?
 attention layer 0:
 goal=28: attention layer 0 copies row 87 into 83, which corresponds to the source vertex of the edge 21 -> 18.
+  it doesn't seem to copy row 89 into anything. but it copies row 86 uniformly into many rows corresponding to source vertices, except for 56, 59, 62, 83, which correspond to the edges 27 -> 26, 27 -> 12, 27 -> 5, 21 -> 18.
 goal=7:  same thing
 
 FF layer 0 seems to affect both inputs similarly.
 
 attention layer 1:
 goal=28: attention layer 1 copies row 87 into almost every row uniformly, except with smaller weights on rows 83 and 86. it also copies row 83 into row 47 with weight 0.3242 and into row 83 with weight 0.2294 and rows 0, 1, 2, 3, 5, 8, 29, 76, 79 with weights between 0.05 and 0.1. row 47 corresponds to the source vertex of the edge 24 -> 28.
+  it copies row 89 into a bunch of other rows corresponding to source vertices, but they're seemingly random. it copies row 86 into row 88. it copies row 56 into 86 and 89. it copies row 59 into 59, 86, 87, 89. it copies row 62 back into 86.
 goal=7:  attention layer 1 copies row 87 into almost every row uniformly, except with smaller weights on rows 74, 83, and 86. it also copies row 83 into row 74 with weight 0.3166 and into row 83 with weight 0.1984 and rows 2, 5, 14, 23, 29, 32, 38 with weights between 0.05 and 0.1. row 74 corresponds to the source vertex of the edge 3 -> 7.
+  it copies row 89 into a bunch of other rows corresponding to source vertices, but they're seemingly random. it copies row 86 into row 88. it copies row 56 into 86 and 89. it copies row 59 into 59, 86, 87, 89. it copies row 62 back into 86.
 -> this is a backwards step from the goal
 
 attention layer 2:
-goal=28: attention layer 2 copies row 47 into many rows uniformly.
-goal=7:  attention layer 2 copies row 47 into many rows uniformly.
+goal=28: attention layer 2 copies row 47 into many rows uniformly:
+  8, 11, 14, 17, 20, 23, 26, 29, 32, 35, 38, 41, 44,     50, 53,     68, 71, 74, 77, 83, 88 (these are all source vertices except 56, 59, 62, especially 65, which instead have lower weights, but not as low as non-source vertices) -> the row corresponding to a source vertex with low activation is 65, which corresponds to the source vertex of the edge 22 -> 24. this looks like a backwards step with negative encoding
+it also copies row 83 into almost every row uniformly, except 86 (which is the start vertex). row 87 is not really copied anywhere (the weights are less than 0.01)
+goal=7:  attention layer 2 copies row 74 into many rows uniformly:
+     11, 14, 17, 20, 23,     29, 32, 35,     41, 44, 47, 50,     65,     71,     77, 83, 88 (these are all source vertices except 56, 59, 62, especially 68, and 74, which instead have lower weights, but not as low as non-source vertices) -> the rows corresponding to a source vertex with low activation are 68 and 74, which correspond to the source vertices of the edges 8 -> 3 and 3 -> 7
+it also copies row 83 into almost every row uniformly, except 86 (which is the start vertex). row 87 is not really copied anywhere (the weights are less than 0.01)
+
+attention layer 3:
+goal 28: attention layer 3 copies row 65 into 41 (and many other rows with weight < 0.1) -> 41 corresponds to the source vertex of the edge 14 -> 6
+goal 7:  attention layer 3 copies row 68 into many rows uniformly, except 8, 74, 80, 87, and especially 20 and 53. 20 and 53 correspond to the edges 25 -> 19 and 19 -> 8, respectively.
+another backwards step?
+
+attention layer 4:
+goal 28: attention layer 4 copies row 41 into row 35, which corresponds to the source vertex of the edge 26 -> 1 (26 is the correct answer).
+goal 7:  attention layer 4 copies row 20 into many rows, but rows 83, 88, and 89 have highest weight. 83 corresponds to the edge 21 -> 18, whereas 88 and 89 are the last two tokens of the input.
+
+attention layer 5:
+goal 28: row 35 is copied into row 89.
+goal 7:  row 83 is barely copied anywhere. row 38 is copied into row 89.
+
+
+interestingly, if we change the input into:
+27 -> 26 ->  1 -> 14 ->  6 ->  4 -> 17 ->  9 -> 22 -> 24 -> 28
+27 -> 12 -> 11 -> 21 -> 18 -> 15 -> 25 -> 19 ->  8 ->  3
+27 ->  5 ->  7 -> 23
+ 6 -> 10
+17 -> 16
+ 3 -> 10
+ 3 ->  2
+
+and the goal is 28, the model will incorrectly predict 5 (!)
+if the goal is 7, the model will incorrectly predict 26 (!)
