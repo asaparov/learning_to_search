@@ -313,34 +313,40 @@ class TransformerTracer:
 				for child in forward_edges[current]:
 					queue.append((child,distance+1))
 			return best_distance
+		def compute_copy_distances(src_pos, dst_pos):
+			copy_distances = []
+			for k,copy_path in tracked_indices:
+				if k != dst_pos or (src_pos != None and copy_path[0] != src_pos):
+					continue
+				copy_distance = []
+				print(copy_path)
+				for j in range(1, len(copy_path)):
+					prev = copy_path[j - 1]
+					curr = copy_path[j]
+					length = path_length(curr, prev)
+					if length == -1:
+						length = path_length(prev, curr)
+						if length == -1:
+							length = None
+						else:
+							length = -length
+					copy_distance.append(length)
+				copy_distances.append(copy_distance)
+			return copy_distances
 
-		tracked_indices = [(n-1,n-1),(n-3,n-3),(n-4,n-4)]
-		copies = []
-		total_copy_distances = []
+		tracked_indices = [(j,[]) for j in range(n-5) if j % 3 != 1 and j >= start_index]
+		tracked_indices += [(n-4,[]),(n-3,[]),(n-1,[])]
+		#tracked_indices = [(n-3,[])]
 		for i, transformer in enumerate(self.model.transformers):
 			new_tracked_indices = []
-			copy_distances = []
-			if i == 5:
-				import pdb; pdb.set_trace()
 			for tracked_index, src in tracked_indices:
+				if (len(src) == 0 and tracked_index == n-3) or (len(src) != 0 and src[0] == n-3):
+					import pdb; pdb.set_trace()
 				# determine the destination rows that this attention layer copies the row `tracked_index` into
 				very_large = torch.nonzero(attn_matrices[i][:,tracked_index] >= 0.1)
 				for dst_index in very_large:
 					dst_index = dst_index.item()
-					copies.append((i,tracked_index,dst_index,src))
-					new_tracked_indices.append((dst_index,src))
-					path_len = path_length(dst_index, tracked_index)
-					if path_len == -1:
-						path_len = path_length(tracked_index, dst_index)
-						if path_len != -1:
-							path_len = -path_len
-						else:
-							path_len = None
-					copy_distances.append(path_len)
-				if len(very_large) > 0:
-					continue
-				if i == 2 and tracked_index == 47:
-					import pdb; pdb.set_trace()
+					new_tracked_indices.append((dst_index,src+[tracked_index]))
 				large = torch.nonzero(attn_matrices[i][:,tracked_index] >= 0.03)
 				if len(large) > num_edges / 2:
 					# this could be inverse encoded
@@ -348,33 +354,21 @@ class TransformerTracer:
 						# the large weights correspond to source vertices of edges
 						small = [j for j in range(2, n, 3) if j >= start_index and attn_matrices[i][j,tracked_index] < 0.02]
 						for dst_index in small:
-							copies.append((i,tracked_index,dst_index,src))
-							new_tracked_indices.append((dst_index,src))
-							path_len = path_length(dst_index, tracked_index)
-							if path_len == -1:
-								path_len = path_length(tracked_index, dst_index)
-								if path_len != -1:
-									path_len = -path_len
-								else:
-									path_len = None
-							copy_distances.append(path_len)
+							new_tracked_indices.append((dst_index,src+[tracked_index]))
 					elif torch.sum(large % 3 == 0) > 0.75 * len(large):
 						# the large weights correspond to target vertices of edges
 						small = [j for j in range(0, n, 3) if j >= start_index and attn_matrices[i][j,tracked_index] < 0.02]
 						for dst_index in small:
-							copies.append((i,tracked_index,dst_index,src))
-							new_tracked_indices.append((dst_index,src))
-							path_len = path_length(dst_index, tracked_index)
-							if path_len == -1:
-								path_len = path_length(tracked_index, dst_index)
-								if path_len != -1:
-									path_len = -path_len
-								else:
-									path_len = None
-							copy_distances.append(path_len)
+							new_tracked_indices.append((dst_index,src+[tracked_index]))
+					else:
+						small = torch.nonzero(attn_matrices[i][:,tracked_index] < 0.02)
+						if len(small) < 0.25 * n:
+							for dst_index in small:
+								dst_index = dst_index.item()
+								new_tracked_indices.append((dst_index,src+[tracked_index]))
 			tracked_indices = new_tracked_indices
-			total_copy_distances.append(copy_distances)
 
+		compute_copy_distances(n-3, n-1)
 		import pdb; pdb.set_trace()
 
 		# work backwards and identify which inputs contributed most to the output
