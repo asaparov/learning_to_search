@@ -832,6 +832,14 @@ goal 28: row 35 is copied into row 89.
 goal 7:  row 83 is barely copied anywhere. row 38 is copied into row 89.
 
 
+some perturbation analysis when changing the goal from 28 to/from 7. in the inputs to layer 5, it seems like rows 35 and 38 make no difference. row 89 seems to make all the difference (is it storing the set of reachable vertices from the goal? and then layer 5 computes the intersection with the next valid vertices?).
+
+for the inputs to layer 4, however, it seems only the representations at rows 20 and 23 causes the prediction to flip from one path to the other. when the goal is 28, layer 4 copies row 23 into 89. if the goal is 7, layer 4 copies rows 20 and 53 into 89. why are these rows selected to copy from?
+  when the goal is 28, row 23 is selected because row 23 has large positive activation at 77, whereas row 20 has large negative activation at 77. when the goal is 7, row 20 has positive activation at 77, and row 23 has negative activation at 77. in fact, these are the only rows where activation at 77 is positive. this is due to the fact that the A-matrix at layer 4 has strong activation at [138,77] what is activation at 77 encoding?
+  this large activation at 77 is traceable to before FF layer 3.
+
+
+
 interestingly, if we change the input into:
 27 -> 26 ->  1 -> 14 ->  6 ->  4 -> 17 ->  9 -> 22 -> 24 -> 28
 27 -> 12 -> 11 -> 21 -> 18 -> 15 -> 25 -> 19 ->  8 ->  3

@@ -103,7 +103,7 @@ class TransformerTracer:
 		self.model.eval()
 		self.algorithm = [AlgorithmStep() for i in range(len(self.model.transformers))]
 
-	def compute_attention(self, attn_layer, x: torch.Tensor, mask: torch.Tensor):
+	def compute_attention(self, layer_index: int, attn_layer, x: torch.Tensor, mask: torch.Tensor):
 		n, d = x.shape[0], x.shape[1]
 		k_params = {k:v for k,v in attn_layer.proj_k.named_parameters()}
 		q_params = {k:v for k,v in attn_layer.proj_q.named_parameters()}
@@ -128,7 +128,7 @@ class TransformerTracer:
 			out = new_x
 		return out, attn_pre_softmax, attn, v, new_x, A
 
-	def forward(self, x: torch.Tensor, mask: torch.Tensor, start_layer: int, start_at_ff: bool):
+	def forward(self, x: torch.Tensor, mask: torch.Tensor, start_layer: int, start_at_ff: bool, perturbations):
 		# Apply transformer layers sequentially.
 		layer_inputs = [None] * start_layer
 		attn_inputs = [None] * start_layer
@@ -140,8 +140,16 @@ class TransformerTracer:
 		A_matrices = [None] * start_layer
 		ff_inputs = [None] * start_layer
 		ff_parameters = [None] * start_layer
+		current_layer = start_layer
 		for transformer in self.model.transformers[start_layer:]:
 			# Layer normalizations are performed before the layers respectively.
+			if perturbations != None:
+				for (perturb_layer, perturb_index, perturb_vec) in perturbations:
+					if current_layer == perturb_layer:
+						if perturb_index == -1:
+							x[0:,:] = perturb_vec[0:,:]
+						else:
+							x[perturb_index,:] = perturb_vec
 			if start_at_ff:
 				layer_inputs.append(None)
 				attn_inputs.append(None)
@@ -155,9 +163,9 @@ class TransformerTracer:
 				a = transformer.ln_attn(x)
 				attn_inputs.append(a)
 				if transformer.attn.proj_v:
-					a, pre_softmax, attn_matrix, v, attn_linear_input, A = self.compute_attention(transformer.attn, a, mask)
+					a, pre_softmax, attn_matrix, v, attn_linear_input, A = self.compute_attention(current_layer, transformer.attn, a, mask)
 				else:
-					a, pre_softmax, attn_matrix, v, attn_linear_input, A = self.compute_attention(transformer.attn, x, mask)
+					a, pre_softmax, attn_matrix, v, attn_linear_input, A = self.compute_attention(current_layer, transformer.attn, x, mask)
 				v_outputs.append(v)
 				attn_matrices.append(attn_matrix)
 				attn_pre_softmax.append(pre_softmax)
@@ -174,6 +182,7 @@ class TransformerTracer:
 			else:
 				ff_parameters.append((None, None, None, None))
 			#print(x[-1,:])
+			current_layer += 1
 		layer_inputs.append(x)
 		token_dim = self.model.token_embedding.shape[0]
 
@@ -270,8 +279,6 @@ class TransformerTracer:
 		x = self.model.dropout_embedding(x)
 		d = x.shape[1]
 
-		layer_inputs, attn_inputs, attn_pre_softmax, attn_matrices, v_outputs, attn_linear_inputs, attn_outputs, A_matrices, ff_inputs, ff_parameters, prediction = self.forward(x, mask, 0, False)
-
 		# Use token embedding and positional embedding layers.
 		other_input = other_x # store the input for keeping track the code paths executed by each input
 		other_x = self.model.token_embedding[other_x]
@@ -282,7 +289,11 @@ class TransformerTracer:
 		other_x = torch.cat((other_x, pos), -1)
 		other_x = self.model.dropout_embedding(other_x)
 
-		other_layer_inputs, other_attn_inputs, other_attn_pre_softmax, other_attn_matrices, other_v_outputs, other_attn_linear_inputs, other_attn_outputs, other_A_matrices, other_ff_inputs, other_ff_parameters, other_prediction = self.forward(other_x, mask, 0, False)
+		other_layer_inputs, other_attn_inputs, other_attn_pre_softmax, other_attn_matrices, other_v_outputs, other_attn_linear_inputs, other_attn_outputs, other_A_matrices, other_ff_inputs, other_ff_parameters, other_prediction = self.forward(other_x, mask, 0, False, None)
+
+		layer_inputs, attn_inputs, attn_pre_softmax, attn_matrices, v_outputs, attn_linear_inputs, attn_outputs, A_matrices, ff_inputs, ff_parameters, prediction = self.forward(x, mask, 0, False, None)
+		#[(3,65,other_layer_inputs[3][65,:]),(3,68,other_layer_inputs[3][68,:])])
+		#[(4,23,other_layer_inputs[4][23,:]),(4,20,other_layer_inputs[4][20,:])])
 
 		if not quiet:
 			print("Model prediction: {}".format(prediction))
@@ -340,8 +351,6 @@ class TransformerTracer:
 		for i, transformer in enumerate(self.model.transformers):
 			new_tracked_indices = []
 			for tracked_index, src in tracked_indices:
-				if (len(src) == 0 and tracked_index == n-3) or (len(src) != 0 and src[0] == n-3):
-					import pdb; pdb.set_trace()
 				# determine the destination rows that this attention layer copies the row `tracked_index` into
 				very_large = torch.nonzero(attn_matrices[i][:,tracked_index] >= 0.1)
 				for dst_index in very_large:
@@ -368,7 +377,7 @@ class TransformerTracer:
 								new_tracked_indices.append((dst_index,src+[tracked_index]))
 			tracked_indices = new_tracked_indices
 
-		compute_copy_distances(n-3, n-1)
+		print(compute_copy_distances(n-3, n-1))
 		import pdb; pdb.set_trace()
 
 		# work backwards and identify which inputs contributed most to the output
