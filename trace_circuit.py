@@ -292,12 +292,99 @@ class TransformerTracer:
 		other_layer_inputs, other_attn_inputs, other_attn_pre_softmax, other_attn_matrices, other_v_outputs, other_attn_linear_inputs, other_attn_outputs, other_A_matrices, other_ff_inputs, other_ff_parameters, other_prediction = self.forward(other_x, mask, 0, False, None)
 
 		layer_inputs, attn_inputs, attn_pre_softmax, attn_matrices, v_outputs, attn_linear_inputs, attn_outputs, A_matrices, ff_inputs, ff_parameters, prediction = self.forward(x, mask, 0, False, None)
-		#[(3,65,other_layer_inputs[3][65,:]),(3,68,other_layer_inputs[3][68,:])])
-		#[(4,23,other_layer_inputs[4][23,:]),(4,20,other_layer_inputs[4][20,:])])
+		#[(3,65,other_layer_inputs[3][65,:]),(3,68,other_layer_inputs[3][68,:])]
+		#[(4,23,other_layer_inputs[4][23,:]),(4,20,other_layer_inputs[4][20,:])]
+		#[(5,89,other_layer_inputs[5][89,:])]
+		#[(5,35,other_layer_inputs[5][35,:]),(5,38,other_layer_inputs[5][38,:])]
+		#[(3,14,other_layer_inputs[3][14,:]),(3,71,other_layer_inputs[3][71,:])]
+		#[(4,14,other_layer_inputs[4][14,:]),(4,41,other_layer_inputs[4][41,:]),(4,71,other_layer_inputs[4][71,:])]
+		#[(3,29,other_layer_inputs[3][29,:]),(3,32,other_layer_inputs[3][32,:])]
 
 		if not quiet:
 			print("Model prediction: {}".format(prediction))
 			print("Model prediction for other input: {}".format(other_prediction))
+
+		def check_copy(i, dst, src, attn_inputs, attn_matrices):
+			attn_input = attn_inputs[i]
+			if not quiet:
+				print('Attention layer {} is copying row {} into row {} with weight {} because:'.format(i,src,dst,attn_matrices[i][dst,src]))
+			# determine why row `src` is being copied from
+			attn_input_prime = torch.cat((attn_input, torch.ones((n,1))), 1)
+			right_products = torch.matmul(attn_input_prime[dst,:], A_matrices[i]) * attn_input_prime[src,:]
+			for right_index in torch.nonzero(right_products[:-1] > torch.max(right_products[:-1]) - 5.0).tolist():
+				right_index = right_index[0]
+				if not quiet:
+					print('  Row {} at index {} has value {}'.format(src, right_index, attn_input_prime[src,right_index]))
+				left_products = attn_input_prime[dst,:] * A_matrices[i][:,right_index].reshape(1,-1)[0]
+				if attn_input_prime[src,right_index] > 0.0:
+					left_indices = torch.nonzero(left_products > torch.max(left_products) - 5.0).tolist()
+				else:
+					left_indices = torch.nonzero(left_products < torch.min(left_products) - 5.0).tolist()
+				for left_index in left_indices:
+					left_index = left_index[0]
+					if not quiet:
+						print('  Row {} at index {} has value {}, and A[{},{}]={}'.format(dst, left_index, attn_input_prime[dst,left_index], left_index, right_index, A_matrices[i][left_index,right_index]))
+			left_products = attn_input_prime[dst,:] * torch.matmul(A_matrices[i], attn_input_prime[src,:])
+			for left_index in torch.nonzero(left_products[:-1] > torch.max(left_products[:-1]) - 5.0).tolist():
+				left_index = left_index[0]
+				if not quiet:
+					print('  Row {} at index {} has value {}'.format(dst, left_index, attn_input_prime[dst,left_index]))
+
+		def check_copy_contrastive(i, dst, src, other_src, attn_inputs, other_attn_inputs, attn_matrices):
+			attn_input = attn_inputs[i]
+			other_attn_input = other_attn_inputs[i]
+			if not quiet:
+				print('Attention layer {} is copying row {} into row {} with weight {} because:'.format(i,src,dst,attn_matrices[i][dst,src]))
+			# determine why row `src` is being copied from
+			attn_input_prime = torch.cat((attn_input, torch.ones((n,1))), 1)
+			other_attn_input_prime = torch.cat((other_attn_input, torch.ones((n,1))), 1)
+			right_products = torch.matmul(attn_input_prime[dst,:], A_matrices[i]) * (attn_input_prime[src,:] - other_attn_input_prime[other_src,:])
+			import pdb; pdb.set_trace()
+			for right_index in torch.nonzero(right_products[:-1] > torch.max(right_products[:-1]) - 2.0).tolist():
+				right_index = right_index[0]
+				if not quiet:
+					print('  Row {} at index {} has value {}'.format(src, right_index, attn_input_prime[src,right_index]))
+				left_products = attn_input_prime[dst,:] * A_matrices[i][:,right_index].reshape(1,-1)[0]
+				if attn_input_prime[src,right_index] > 0.0:
+					left_indices = torch.nonzero(left_products > torch.max(left_products) - 1.0).tolist()
+				else:
+					left_indices = torch.nonzero(left_products < torch.min(left_products) + 1.0).tolist()
+				for left_index in left_indices:
+					left_index = left_index[0]
+					if not quiet:
+						print('  Row {} at index {} has value {}, and A[{},{}]={}'.format(dst, left_index, attn_input_prime[dst,left_index], left_index, right_index, A_matrices[i][left_index,right_index]))
+			left_products = attn_input_prime[dst,:] * torch.matmul(A_matrices[i], attn_input_prime[src,:] - other_attn_input_prime[other_src,:])
+			for left_index in torch.nonzero(left_products[:-1] > torch.max(left_products[:-1]) - 2.0).tolist():
+				left_index = left_index[0]
+				if not quiet:
+					print('  Row {} at index {} has value {}'.format(dst, left_index, attn_input_prime[dst,left_index]))
+
+		def one_hot(n, k):
+			v = torch.zeros(n)
+			v[k] = 1.0
+			return v
+
+		def trace_activation(i, row, vec):
+			# first undo the pre-attention layer norm
+			vec_layer_input = ((vec - self.model.transformers[i].ln_attn.bias) / self.model.transformers[i].ln_attn.weight) * torch.sqrt(torch.var(layer_inputs[i][row,:], correction=0) + self.model.transformers[i].ln_attn.eps) + torch.mean(layer_inputs[i][row,:])
+
+			# check to see how much the FF layer contributes to the representation
+			vec = torch.zeros(attn_inputs[i][row,:].shape)
+			vec[40] = vec_layer_input[40]
+			vec[125] = vec_layer_input[125]
+			vec[138] = vec_layer_input[138]
+			vec_layer_input = vec
+			vec_relu_out = torch.linalg.solve(self.model.transformers[i-1].ff[3].weight.T, (vec_layer_input - self.model.transformers[i-1].ff[3].bias).unsqueeze(1).T, left=False)[0]
+			vec_relu_out = vec_relu_out * (self.model.transformers[i-1].ff[2](self.model.transformers[i-1].ff[1](self.model.transformers[i-1].ff[0](self.model.transformers[i-1].ln_ff(ff_inputs[i-1][row,:])))) > 0.0)
+			vec_ff_in = torch.linalg.solve(self.model.transformers[i-1].ff[0].weight.T, (vec_relu_out - self.model.transformers[i-1].ff[0].bias).unsqueeze(1).T, left=False)[0]
+			print(torch.nonzero(self.model.transformers[i-1].ln_ff(ff_inputs[i-1][row,:])*vec_ff_in > 3.0))
+			import pdb; pdb.set_trace()
+
+		vec = torch.zeros(attn_inputs[5][35,:].shape)
+		vec[40] = attn_inputs[5][35,40]
+		vec[125] = attn_inputs[5][35,125]
+		vec[138] = attn_inputs[5][35,138]
+		trace_activation(5, 35, vec)
 
 		PADDING_TOKEN = (n - 5) // 3 + 3
 		EDGE_PREFIX_TOKEN = (n - 5) // 3 + 2
@@ -552,7 +639,13 @@ if __name__ == "__main__":
 	input = [31, 31, 31, 31, 31, 31, 31, 30,  7, 23, 30,  9, 22, 30,  6,  4, 30, 6, 10, 30, 25, 19, 30, 17,  9, 30, 17, 16, 30,  1, 14, 30, 11, 21, 30, 26,  1, 30, 12, 11, 30, 14,  6, 30, 15, 25, 30, 24, 28, 30,  4, 17, 30, 19,  8, 30, 27, 26, 30, 27, 12, 30, 27,  5, 30, 22, 24, 30, 8,  3, 30, 18, 15, 30,  3,  7, 30,  3, 10, 30,  3,  2, 30, 21, 18, 32, 27, 28, 29, 27]
 	input = torch.LongTensor(input).to(device)
 	other_input = input.clone().detach()
-	other_input[-3] = 7
+	#other_input[-3] = 7
+	other_input[next(i for i in range(len(input)) if input[i] ==  1 and input[i+1] == 14) + 1] = 21
+	other_input[next(i for i in range(len(input)) if input[i] == 11 and input[i+1] == 21) + 1] = 14
+	#other_input[next(i for i in range(len(input)) if input[i] ==   6 and input[i+1] ==   4) + 0] = 18
+	#other_input[next(i for i in range(len(input)) if input[i] ==   6 and input[i+1] ==   4) + 1] = 15
+	#other_input[next(i for i in range(len(input)) if input[i] ==  18 and input[i+1] ==  15) + 0] =  6
+	#other_input[next(i for i in range(len(input)) if input[i] ==  18 and input[i+1] ==  15) + 1] =  4
 	prediction = tracer.trace(input, other_input, quiet=False)
 	import pdb; pdb.set_trace()
 
