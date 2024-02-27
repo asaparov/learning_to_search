@@ -856,6 +856,11 @@ layer 3 copies rows 14, 29, 32, and 71 into 14 and 41.
 when perturbing the target vertices of the edges 4 -> 17 and 15 -> 25, both rows 89 and 35,38 are important for determining the correct copy at the last layer.
 
 
+attention layer 5 copies row 35 into 89 because element 40 is negative and element 125 is zero.
+
+attention layer 4 copies row 14 into 35 and the negativity of element 40 comes from: element 39 is negative, element 106 is positive, and element 122 is positive.
+
+
 
 interestingly, if we change the input into:
 27 -> 26 ->  1 -> 14 ->  6 ->  4 -> 17 ->  9 -> 22 -> 24 -> 28

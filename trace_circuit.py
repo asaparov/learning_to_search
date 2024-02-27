@@ -364,27 +364,189 @@ class TransformerTracer:
 			v[k] = 1.0
 			return v
 
-		def trace_activation(i, row, vec):
+		def trace_activation(i, row, representations):
 			# first undo the pre-attention layer norm
+			vec = torch.zeros(d)
+			for element, activation in representations:
+				vec[element] = activation
 			vec_layer_input = ((vec - self.model.transformers[i].ln_attn.bias) / self.model.transformers[i].ln_attn.weight) * torch.sqrt(torch.var(layer_inputs[i][row,:], correction=0) + self.model.transformers[i].ln_attn.eps) + torch.mean(layer_inputs[i][row,:])
+			for j in range(len(representations)):
+				element, _ = representations[j]
+				representations[j] = element, vec_layer_input[element]
 
 			# check to see how much the FF layer contributes to the representation
-			vec = torch.zeros(attn_inputs[i][row,:].shape)
-			vec[40] = vec_layer_input[40]
-			vec[125] = vec_layer_input[125]
-			vec[138] = vec_layer_input[138]
-			vec_layer_input = vec
-			vec_relu_out = torch.linalg.solve(self.model.transformers[i-1].ff[3].weight.T, (vec_layer_input - self.model.transformers[i-1].ff[3].bias).unsqueeze(1).T, left=False)[0]
-			vec_relu_out = vec_relu_out * (self.model.transformers[i-1].ff[2](self.model.transformers[i-1].ff[1](self.model.transformers[i-1].ff[0](self.model.transformers[i-1].ln_ff(ff_inputs[i-1][row,:])))) > 0.0)
-			vec_ff_in = torch.linalg.solve(self.model.transformers[i-1].ff[0].weight.T, (vec_relu_out - self.model.transformers[i-1].ff[0].bias).unsqueeze(1).T, left=False)[0]
-			print(torch.nonzero(self.model.transformers[i-1].ln_ff(ff_inputs[i-1][row,:])*vec_ff_in > 3.0))
-			import pdb; pdb.set_trace()
+			ff_indices = []
+			residual_indices = []
+			for element, activation in representations:
+				ff_output = layer_inputs[i][row,element] - ff_inputs[i-1][row,element]
+				if activation > 0.5 and activation > torch.max(layer_inputs[i][row,:]) / 8:
+					# this element has large positive activation in the output
+					if ff_output > 0.2 * activation:
+						# the FF layer contributes non-negligibly to the activation
+						ff_indices.append((element, True))
+					if ff_output < 0.8 * activation:
+						# the residual connection contributes non-negligibly to the activation
+						residual_indices.append(element)
+				elif activation < -0.5 and activation < torch.min(layer_inputs[i][row,:]) / 8:
+					# this element has large negative activation in the output
+					if ff_output < 0.2 * activation:
+						# the FF layer contributes non-negligibly to the activation
+						ff_indices.append((element, False))
+					if ff_output > 0.8 * activation:
+						# the residual connection contributes non-negligibly to the activation
+						residual_indices.append(element)
+				else:
+					# this element has small activation in the output
+					if ff_inputs[i-1][row,element] > 0.5 and ff_inputs[i-1][row,element] > torch.max(ff_inputs[i-1][row,:]) / 8:
+						ff_indices.append((element, False))
+					elif ff_inputs[i-1][row,element] < -0.5 and ff_inputs[i-1][row,element] < torch.min(ff_inputs[i-1][row,:]) / 8:
+						ff_indices.append((element, True))
+					#else:
+					#	ff_indices.append((element, None))
+					residual_indices.append(element)
 
-		vec = torch.zeros(attn_inputs[5][35,:].shape)
-		vec[40] = attn_inputs[5][35,40]
-		vec[125] = attn_inputs[5][35,125]
-		vec[138] = attn_inputs[5][35,138]
-		trace_activation(5, 35, vec)
+			new_ff_indices = []
+			for element, sign in ff_indices:
+				# check if the bias makes a significant contribution
+				ff_output = layer_inputs[i][row,element] - ff_inputs[i-1][row,element]
+				if sign == True and self.model.transformers[i-1].ff[3].bias[element] > 0.8 * ff_output:
+					print('Output of FF layer {} at row {}, element {} is positive due to bias of FF3.'.format(i, row, element))
+					continue
+				elif sign == False and self.model.transformers[i-1].ff[3].bias[element] < 0.8 * ff_output:
+					print('Output of FF layer {} at row {}, element {} is negative due to bias of FF3.'.format(i, row, element))
+					continue
+
+				ff0_input = self.model.transformers[i-1].ln_ff(ff_inputs[i-1][row,:])
+				contributions = ff0_input.repeat((d,1))
+				contributions[:,:] *= self.model.transformers[i-1].ff[0].weight
+				contributions = torch.cat((contributions, self.model.transformers[i-1].ff[0].bias.unsqueeze(1)), 1)
+				ff1_input = self.model.transformers[i-1].ff[0](ff0_input)
+				contributions[ff1_input <= 0,:] = 0
+				contributions = torch.sum(contributions.T * self.model.transformers[i-1].ff[3].weight[element,:], dim=1)
+				if sign == True:
+					# find the elements of contributions that are most positive and add their indices to new_ff_indices
+					for index in torch.nonzero(contributions > torch.max(contributions) / 2).T[0].tolist():
+						if index not in new_ff_indices:
+							new_ff_indices.append(index)
+				elif sign == False:
+					# find the elements of contributions that are most negative and add their indices to new_ff_indices
+					for index in torch.nonzero(contributions < torch.min(contributions) / 2).T[0].tolist():
+						if index not in new_ff_indices:
+							new_ff_indices.append(index)
+
+			new_representations = []
+			for index in residual_indices:
+				new_representations.append((index, ff_inputs[i-1][row,index]))
+			for index in new_ff_indices:
+				if index not in residual_indices:
+					new_representations.append((index, ff_inputs[i-1][row,index]))
+			representations = new_representations
+
+			# check to see how much the attention layer contributes to the representation
+			attn_indices = []
+			residual_indices = []
+			for element, activation in representations:
+				attn_output = ff_inputs[i-1][row,element] - layer_inputs[i-1][row,element]
+				if activation > 0.5 and activation > torch.max(layer_inputs[i][row,:]) / 8:
+					# this element has large positive activation in the output
+					if attn_output > 0.2 * activation:
+						# the attention layer contributes non-negligibly to the activation
+						attn_indices.append((element, True))
+					if attn_output < 0.8 * activation:
+						# the residual connection contributes non-negligibly to the activation
+						residual_indices.append(element)
+				elif activation < -0.5 and activation < torch.min(layer_inputs[i][row,:]) / 8:
+					# this element has large negative activation in the output
+					if attn_output < 0.2 * activation:
+						# the attention layer contributes non-negligibly to the activation
+						attn_indices.append((element, False))
+					if attn_output > 0.8 * activation:
+						# the residual connection contributes non-negligibly to the activation
+						residual_indices.append(element)
+				else:
+					# this element has small activation in the output
+					if attn_inputs[i-1][row,element] > 0.5 and attn_inputs[i-1][row,element] > torch.max(attn_inputs[i-1][row,:]) / 8:
+						attn_indices.append((element, False))
+					elif attn_inputs[i-1][row,element] < -0.5 and attn_inputs[i-1][row,element] < torch.min(attn_inputs[i-1][row,:]) / 8:
+						attn_indices.append((element, True))
+					#else:
+					#	attn_indices.append((element, None))
+					residual_indices.append(element)
+
+			new_attn_indices = []
+			for element, sign in attn_indices:
+				attn_output = ff_inputs[i-1][row,element] - layer_inputs[i-1][row,element]
+				if sign == True and self.model.transformers[i-1].attn.linear.bias[element] > 0.8 * attn_output:
+					print('Output of FF layer {} at row {}, element {} is positive due to bias of the post-attention linear layer.'.format(i, row, element))
+					continue
+				elif sign == False and self.model.transformers[i-1].attn.linear.bias[element] < 0.8 * attn_output:
+					print('Output of FF layer {} at row {}, element {} is negative due to bias of the post-attention linear layer.'.format(i, row, element))
+					continue
+
+				# compute the contributions to this element from the proj_v bias
+				bias_contributions = self.model.transformers[i-1].attn.proj_v.bias * self.model.transformers[i-1].attn.linear.weight[element,:]
+				if sign == True and torch.max(bias_contributions) > 0.8 * attn_output:
+					print('Output of FF layer {} at row {}, element {} is positive due to bias of the V-projection.'.format(i, row, element))
+					continue
+				elif sign == False and torch.min(bias_contributions) < 0.8 * attn_output:
+					print('Output of FF layer {} at row {}, element {} is negative due to bias of the V-projection.'.format(i, row, element))
+					continue
+
+				# compute the contributions to this element from the attention input
+				contributions = attn_matrices[i-1][row,:].unsqueeze(1).repeat(1,d) * attn_inputs[i-1] * torch.matmul(self.model.transformers[i-1].attn.linear.weight[element,:], self.model.transformers[i-1].attn.proj_v.weight).repeat(n,1)
+				if sign == True:
+					# find the elements of contributions that are most positive and add their indices to new_attn_indices
+					for index in torch.nonzero(contributions > torch.max(contributions) / 2).tolist():
+						if tuple(index) not in new_attn_indices:
+							new_attn_indices.append(tuple(index))
+				elif sign == False:
+					# find the elements of contributions that are most negative and add their indices to new_attn_indices
+					for index in torch.nonzero(contributions < torch.min(contributions) / 2).tolist():
+						if tuple(index) not in new_attn_indices:
+							new_attn_indices.append(tuple(index))
+
+			new_representations = []
+			for index in residual_indices:
+				new_representations.append((row, index, attn_inputs[i-1][row,index]))
+			for src_row, index in new_attn_indices:
+				if (src_row, index) not in residual_indices:
+					new_representations.append((src_row, index, attn_inputs[i-1][src_row,index]))
+			representations = new_representations
+
+			print('In the input to attention layer {}:'.format(i-1))
+			for src_row, element, activation in representations:
+				print('  Row {}, element {} has activation {}'.format(src_row, element, activation))
+
+		def trace_activation_forward(row, element):
+			representation = torch.zeros((n,d))
+			representation[row,element] = 1.0
+			for i in range(len(self.model.transformers)):
+				# compute the pre-attention layer norm
+				zero_representation = self.model.transformers[i].ln_attn.bias
+				attn_representation = ((representation - torch.mean(layer_inputs[i], dim=1).unsqueeze(1)) / torch.sqrt(torch.var(layer_inputs[i], dim=1, correction=0) + self.model.transformers[i].ln_attn.eps).unsqueeze(1)) * self.model.transformers[i].ln_attn.weight + self.model.transformers[i].ln_attn.bias
+
+				# compute the output of the attention layer
+				zero_representation = self.model.transformers[i].attn.proj_v(zero_representation)
+				zero_representation = self.model.transformers[i].attn.linear(zero_representation)
+				v_representation = self.model.transformers[i].attn.proj_v(attn_representation)
+				attn_out = self.model.transformers[i].attn.linear(torch.matmul(attn_matrices[i], v_representation))
+				attn_out -= zero_representation
+				representation += attn_out
+
+				# compute the pre-FF layer norm
+				zero_representation = self.model.transformers[i].ln_ff.bias
+				ff_representation = ((representation - torch.mean(ff_inputs[i], dim=1).unsqueeze(1)) / torch.sqrt(torch.var(ff_inputs[i], dim=1, correction=0) + self.model.transformers[i].ln_ff.eps).unsqueeze(1)) * self.model.transformers[i].ln_ff.weight + self.model.transformers[i].ln_ff.bias
+
+				# compute the output of the FF layer
+				zero_representation = self.model.transformers[i].ff[0](zero_representation)
+				ff0_representation_output = self.model.transformers[i].ff[0](ff_representation)
+				ff0_output = self.model.transformers[i].ff[0](self.model.transformers[i].ln_ff(ff_inputs[i]))
+				import pdb; pdb.set_trace()
+				print('asd')
+
+		#trace_activation(5, 35, [(40, attn_inputs[5][35,40]), (125, attn_inputs[5][35,125]), (128, attn_inputs[5][35,128])])
+		trace_activation_forward(90-3,136-3)
+		import pdb; pdb.set_trace()
 
 		PADDING_TOKEN = (n - 5) // 3 + 3
 		EDGE_PREFIX_TOKEN = (n - 5) // 3 + 2
