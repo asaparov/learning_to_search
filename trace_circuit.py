@@ -518,7 +518,8 @@ class TransformerTracer:
 				print('  Row {}, element {} has activation {}'.format(src_row, element, activation))
 
 		def trace_activation_forward(representation, num_layers):
-			representations = [representation]
+			representation = representation.clone().detach()
+			representations = [representation.clone().detach()]
 			attn_representations = []
 			for i in range(num_layers):
 				layer_norm_matrix = self.model.transformers[i].ln_attn.weight.unsqueeze(0).repeat((n,1)) / torch.sqrt(torch.var(layer_inputs[i], dim=1, correction=0) + self.model.transformers[i].ln_attn.eps).unsqueeze(1).repeat((1,d))
@@ -530,7 +531,7 @@ class TransformerTracer:
 					layer_norm_matrix = self.model.transformers[i].ln_ff.weight.unsqueeze(0).repeat((n,1)) / torch.sqrt(torch.var(ff_inputs[i], dim=1, correction=0) + self.model.transformers[i].ln_ff.eps).unsqueeze(1).repeat((1,d))
 					ff0_output = self.model.transformers[i].ff[0](self.model.transformers[i].ln_ff(ff_inputs[i]))
 					representation += torch.matmul((ff0_output > 0.0) * torch.matmul(representation * layer_norm_matrix, self.model.transformers[i].ff[0].weight.T), self.model.transformers[i].ff[3].weight.T)
-				representations.append(representation)
+				representations.append(representation.clone().detach())
 
 			return attn_representations, representations
 
@@ -551,7 +552,7 @@ class TransformerTracer:
 			representation[i,i,input[i]] = 1.0
 			representation[n+i,i,d-n+i] = 1.0
 		attn_representations, representations = trace_activation_forward(representation, len(self.model.transformers))
-		check_copyr(2, 65, 47, attn_inputs, attn_matrices, attn_representations)
+		check_copyr(4, 35, 41, attn_inputs, attn_matrices, attn_representations)
 		import pdb; pdb.set_trace()
 
 		PADDING_TOKEN = (n - 5) // 3 + 3

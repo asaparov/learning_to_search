@@ -4,8 +4,33 @@ import torch
 from torch import nn, LongTensor, FloatTensor
 from torch.nn import BCEWithLogitsLoss, Sigmoid
 from torch.utils.data import DataLoader
-from train import generate_example, DummyDataset
 from Sophia import SophiaG
+
+def build_module(name):
+	from os import system
+	if system(f"g++ -Ofast -fno-stack-protector -Wall -Wpedantic -shared -fPIC $(python3 -m pybind11 --includes) -I../ {name}.cpp -o {name}$(python3-config --extension-suffix)") != 0:
+		print(f"ERROR: Unable to compile `{name}.cpp`.")
+		import sys
+		sys.exit(1)
+try:
+	from os.path import getmtime
+	from importlib.util import find_spec
+	generator_spec = find_spec('generator')
+	if generator_spec == None:
+		raise ModuleNotFoundError
+	if getmtime(generator_spec.origin) < getmtime('generator.cpp'):
+		print("C++ module `generator` is out-of-date. Compiling from source...")
+		build_module("generator")
+	import generator
+except ModuleNotFoundError:
+	print("C++ module `generator` not found. Compiling from source...")
+	build_module("generator")
+	import generator
+except ImportError:
+	print("Error loading C++ module `generator`. Compiling from source...")
+	build_module("generator")
+	import generator
+print("C++ module `generator` loaded.")
 
 class TransformerProber(nn.Module):
 	def __init__(self, tfm_model, probe_layer):
@@ -132,105 +157,126 @@ if __name__ == "__main__":
 	model = TransformerProber(tfm_model, probe_layer=1)
 	model.to(device)
 
-	max_input_size = 24
-	QUERY_PREFIX_TOKEN = max_input_size - 1
-	PADDING_TOKEN = max_input_size - 2
-	EDGE_PREFIX_TOKEN = max_input_size - 3
-	PATH_PREFIX_TOKEN = max_input_size - 4
-	dataset_size = 100000
-	num_generated = 0
-	inputs = np.empty((dataset_size, max_input_size), dtype=np.int64)
-	outputs = np.empty((dataset_size, max_input_size), dtype=np.int64)
-	path_lengths = [0] * max_input_size
-	total_path_lengths = 0
-	MAX_PATH_LENGTH_BUCKET = 0.4
-	valid_outputs = []
+	suffix = argv[1][argv[1].index('inputsize')+len('inputsize'):]
+	max_input_size = int(suffix[:suffix.index('_')])
 
-	while num_generated < dataset_size:
-		while True:
-			g, start, end, paths = generate_example(randrange(3, 7), 4, max_input_size - 5)
-			if paths != None and min([len(path) for path in paths]) > 1:
-				break
+	# reserve some data for validation
+	lookahead_steps = 10
+	reachable_distance = 4
+	start_vertex_index = max_input_size-1
+	reserved_inputs = set()
 
-		prefix = []
-		for vertex in g:
-			for child in vertex.children:
-				prefix.extend([EDGE_PREFIX_TOKEN, vertex.id, child.id])
-		prefix.extend([QUERY_PREFIX_TOKEN, start.id, end.id, PATH_PREFIX_TOKEN])
+	# we are doing streaming training, so use an IterableDataset
+	from itertools import cycle
+	from threading import Lock
+	STREAMING_BLOCK_SIZE = 2 ** 18
+	NUM_DATA_WORKERS = 2
+	seed_generator = Random(seed_value)
+	seed_generator_lock = Lock()
+	seed_values = []
 
-		for path in paths:
-			if len(path) == 1:
-				continue
-			if total_path_lengths != 0 and path_lengths[len(path)] / total_path_lengths >= MAX_PATH_LENGTH_BUCKET:
-				continue
-			path_lengths[len(path)] += 1
-			total_path_lengths += 1
-			example = list(prefix)
-			for j in range(1, len(path)):
-				example.append(path[j - 1].id)
-				if len(example) > max_input_size:
-					#print('WARNING: Generated example is too long.')
-					continue
-				inputs[num_generated,(max_input_size-len(example)):] = example
-				inputs[num_generated,:(max_input_size-len(example))] = PADDING_TOKEN
-				# compute the positions of matching source vertices
-				outputs[num_generated,:] = [1.0 if (i > 0 and inputs[num_generated, i - 1] == EDGE_PREFIX_TOKEN and inputs[num_generated, i] == path[j - 1].id) else 0.0 for i in range(max_input_size)]
-				valid_outputs.append([v.id for v in path[j - 1].children])
-				num_generated += 1
-				if num_generated == dataset_size:
-					break
-			if num_generated == dataset_size:
-				break
+	def get_seed(index):
+		if index < len(seed_values):
+			return seed_values[index]
+		seed_generator_lock.acquire()
+		while index >= len(seed_values):
+			seed_values.append(seed_generator.randrange(2 ** 32))
+		seed_generator_lock.release()
+		return seed_values[index]
 
-		if num_generated % 1000 == 0 or num_generated >= dataset_size:
-			print("{} examples generated.".format(num_generated))
-			print("Path length histogram:")
-			print(', '.join(['%d:%.2f' % (i, path_lengths[i] / total_path_lengths + 1e-9) for i in range(len(path_lengths)) if path_lengths[i] != 0]))
+	class StreamingDataset(torch.utils.data.IterableDataset):
+		def __init__(self, offset):
+			super(StreamingDataset).__init__()
+			self.offset = offset
 
-	train_data = DummyDataset(inputs, outputs, device, x_type=LongTensor, y_type=FloatTensor)
-	train_loader = DataLoader(train_data, batch_size=2048, shuffle=True)
+			self.multiprocessing_manager = multiprocessing.Manager()
+			self.total_collisions = self.multiprocessing_manager.Value(int, 0)
+			self.collisions_lock = self.multiprocessing_manager.Lock()
 
-	loss_func = BCEWithLogitsLoss(reduction='mean')
+		def process_data(self, start):
+			current = start
+			worker_info = torch.utils.data.get_worker_info()
+			worker_id = worker_info.id
+			while True:
+				worker_start_time = time.perf_counter()
+				new_seed = get_seed(current)
+				generator.set_seed(new_seed)
+				seed(new_seed)
+				torch.manual_seed(new_seed)
+				np.random.seed(new_seed)
+
+				generate_start_time = time.perf_counter()
+				inputs, outputs, num_collisions = generate_reachable_training_set(max_input_size, BATCH_SIZE, lookahead_steps, reserved_inputs, dist_from_start, reachable_distance, start_vertex_index)
+				generator.generate_training_set(max_input_size, BATCH_SIZE, max_lookahead, reserved_inputs, dist_from_start, True)
+				if num_collisions != 0:
+					with self.collisions_lock:
+						self.total_collisions.value += num_collisions
+					print('Total number of training examples generated that are in the test set: {}'.format(self.total_collisions.value))
+					stdout.flush()
+
+				worker_end_time = time.perf_counter()
+				yield inputs, outputs
+				current += NUM_DATA_WORKERS
+
+		def __iter__(self):
+			worker_info = torch.utils.data.get_worker_info()
+			worker_id = worker_info.id
+			return self.process_data(self.offset + worker_id)
+
+	iterable_dataset = StreamingDataset(epoch * STREAMING_BLOCK_SIZE // BATCH_SIZE)
+	train_loader = DataLoader(iterable_dataset, batch_size=None, num_workers=NUM_DATA_WORKERS, pin_memory=True, prefetch_factor=8)
+
+	loss_func = BCELoss(reduction='mean')
 	optimizer = SophiaG((p for p in model.parameters() if p.requires_grad), lr=1.0e-3)
 
 	log_interval = 1
 	eval_interval = 20
 	save_interval = 100
 
-	epoch = 0
-	import pdb; pdb.set_trace()
 	while True:
-		epoch_loss = 0.0
-		for idx, batch in enumerate(train_loader):
+		for batch in train_loader:
+			batch_start_time = time.perf_counter()
 			model.train()
 			optimizer.zero_grad()
 
 			input, output = batch
+			input = input.to(device, non_blocking=True)
+			output = output.to(device, non_blocking=True)
+
+			train_start_time = time.perf_counter()
+			transfer_time += train_start_time - batch_start_time
 
 			logits = model(input)
-			loss_val = loss_func(logits[:, -1, :output.size(1)], output)
+			loss_val = loss_func(logits, output)
 			epoch_loss += loss_val.item()
 
 			loss_val.backward()
 			optimizer.step()
 
-		if epoch % save_interval == 0:
-			filename = 'checkpoints_2layer_noprojv_nolinear/probe/epoch{}.pt'.format(epoch)
-			if len(argv) <= 1 or filename != argv[1]:
-				print('saving to "{}".'.format(filename))
-				torch.save(model, filename)
-				print('done saving model.')
+			num_batches += 1
+			if num_batches == STREAMING_BLOCK_SIZE // BATCH_SIZE:
+				if epoch % save_interval == 0:
+					ckpt_filename = 'probe/epoch{}.pt'.format(epoch)
+					print('saving to "{}".'.format(ckpt_filename))
+					torch.save((model,getstate(),np.random.get_state(),torch.get_rng_state()), ckpt_filename)
+					print('done saving model.')
+					stdout.flush()
 
-		if epoch % log_interval == 0:
-			print("epoch = {}, loss = {}".format(epoch, epoch_loss))
+				if epoch % log_interval == 0:
+					print("epoch = {}, training loss = {}".format(epoch, epoch_loss))
 
-		if epoch % eval_interval == 0:
-			evaluate_decoder(model, max_input_size)
+				if epoch % eval_interval == 0:
+					model.eval()
+					logits, _ = model(input)
+					training_acc = torch.sum(torch.argmax(logits[:,-1,:],dim=1) == output).item() / output.size(0)
+					print("training accuracy: %.2f±%.2f" % (training_acc, binomial_confidence_int(training_acc, output.size(0))))
+					del input, output
+					stdout.flush()
 
-			'''training_indices = torch.randint(dataset_size, (400,))
-			logits, _ = model(LongTensor(inputs[training_indices, :]).to(device))
-			predictions = torch.argmax(logits[:, -1, :], 1)
-			training_acc = sum([predictions[i] in valid_outputs[training_indices[i]] for i in range(400)]) / 400
-			print("training accuracy: %.2f±%.2f" % (training_acc, binomial_confidence_int(training_acc, 400)))'''
+					test_acc,test_loss,_ = evaluate_model(model, eval_inputs, eval_outputs)
+					print("test accuracy = %.2f±%.2f, test loss = %f" % (test_acc, binomial_confidence_int(test_acc, 1000), test_loss))
+					stdout.flush()
 
-		epoch += 1
+				epoch += 1
+				num_batches = 0
+				epoch_loss = 0.0
