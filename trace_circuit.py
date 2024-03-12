@@ -517,35 +517,41 @@ class TransformerTracer:
 			for src_row, element, activation in representations:
 				print('  Row {}, element {} has activation {}'.format(src_row, element, activation))
 
-		def trace_activation_forward(row, element):
-			representation = torch.zeros((n,d))
-			representation[row,element] = 1.0
-			for i in range(len(self.model.transformers)):
-				# compute the pre-attention layer norm
-				zero_representation = self.model.transformers[i].ln_attn.bias
-				attn_representation = ((representation - torch.mean(layer_inputs[i], dim=1).unsqueeze(1)) / torch.sqrt(torch.var(layer_inputs[i], dim=1, correction=0) + self.model.transformers[i].ln_attn.eps).unsqueeze(1)) * self.model.transformers[i].ln_attn.weight + self.model.transformers[i].ln_attn.bias
+		def trace_activation_forward(representation, num_layers):
+			representations = [representation]
+			attn_representations = []
+			for i in range(num_layers):
+				layer_norm_matrix = self.model.transformers[i].ln_attn.weight.unsqueeze(0).repeat((n,1)) / torch.sqrt(torch.var(layer_inputs[i], dim=1, correction=0) + self.model.transformers[i].ln_attn.eps).unsqueeze(1).repeat((1,d))
+				attn_representation = representation * layer_norm_matrix
+				attn_representations.append(attn_representation)
+				representation += torch.matmul(torch.matmul(torch.matmul(attn_matrices[i], attn_representation), self.model.transformers[i].attn.proj_v.weight.T), self.model.transformers[i].attn.linear.weight.T)
 
-				# compute the output of the attention layer
-				zero_representation = self.model.transformers[i].attn.proj_v(zero_representation)
-				zero_representation = self.model.transformers[i].attn.linear(zero_representation)
-				v_representation = self.model.transformers[i].attn.proj_v(attn_representation)
-				attn_out = self.model.transformers[i].attn.linear(torch.matmul(attn_matrices[i], v_representation))
-				attn_out -= zero_representation
-				representation += attn_out
+				if self.model.transformers[i].ff:
+					layer_norm_matrix = self.model.transformers[i].ln_ff.weight.unsqueeze(0).repeat((n,1)) / torch.sqrt(torch.var(ff_inputs[i], dim=1, correction=0) + self.model.transformers[i].ln_ff.eps).unsqueeze(1).repeat((1,d))
+					ff0_output = self.model.transformers[i].ff[0](self.model.transformers[i].ln_ff(ff_inputs[i]))
+					representation += torch.matmul((ff0_output > 0.0) * torch.matmul(representation * layer_norm_matrix, self.model.transformers[i].ff[0].weight.T), self.model.transformers[i].ff[3].weight.T)
+				representations.append(representation)
 
-				# compute the pre-FF layer norm
-				zero_representation = self.model.transformers[i].ln_ff.bias
-				ff_representation = ((representation - torch.mean(ff_inputs[i], dim=1).unsqueeze(1)) / torch.sqrt(torch.var(ff_inputs[i], dim=1, correction=0) + self.model.transformers[i].ln_ff.eps).unsqueeze(1)) * self.model.transformers[i].ln_ff.weight + self.model.transformers[i].ln_ff.bias
+			return attn_representations, representations
 
-				# compute the output of the FF layer
-				zero_representation = self.model.transformers[i].ff[0](zero_representation)
-				ff0_representation_output = self.model.transformers[i].ff[0](ff_representation)
-				ff0_output = self.model.transformers[i].ff[0](self.model.transformers[i].ln_ff(ff_inputs[i]))
-				import pdb; pdb.set_trace()
-				print('asd')
+		def check_copyr(i, dst, src, attn_inputs, attn_matrices, attn_representations):
+			attn_input = attn_inputs[i]
+			if not quiet:
+				print('Attention layer {} is copying row {} into row {} with weight {} because:'.format(i,src,dst,attn_matrices[i][dst,src]))
+			A = torch.matmul(self.model.transformers[i].attn.proj_q.weight.T, self.model.transformers[i].attn.proj_k.weight)
+			left = torch.matmul(attn_representations[i][:,dst,:], A)
+			products = torch.matmul(left, attn_representations[i][:,src,:].T)
+			#left = torch.matmul(torch.cat((attn_representations[i][:,dst,:], torch.ones((2*n,1))), 1), A_matrices[i])
+			#products = torch.matmul(left, torch.cat((attn_representations[i][:,src,:], torch.ones((2*n,1))), 1).T)
+			import pdb; pdb.set_trace()
 
 		#trace_activation(5, 35, [(40, attn_inputs[5][35,40]), (125, attn_inputs[5][35,125]), (128, attn_inputs[5][35,128])])
-		trace_activation_forward(90-3,136-3)
+		representation = torch.zeros((2*n,n,d))
+		for i in range(n):
+			representation[i,i,input[i]] = 1.0
+			representation[n+i,i,d-n+i] = 1.0
+		attn_representations, representations = trace_activation_forward(representation, len(self.model.transformers))
+		check_copyr(2, 65, 47, attn_inputs, attn_matrices, attn_representations)
 		import pdb; pdb.set_trace()
 
 		PADDING_TOKEN = (n - 5) // 3 + 3
