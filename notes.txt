@@ -862,7 +862,40 @@ attention layer 4 copies row 14 into 35 and the negativity of element 40 comes f
 
 
 
-interestingly, if we change the input into:
+repeating the input from above for convenience:
+[31, 31, 31, 31, 31, 31, 31, 30,  7, 23, 30,  9, 22, 30,  6,  4, 30, 6, 10, 30, 25, 19, 30, 17,  9, 30, 17, 16, 30,  1, 14, 30, 11, 21, 30, 26,  1, 30, 12, 11, 30, 14,  6, 30, 15, 25, 30, 24, 28, 30,  4, 17, 30, 19,  8, 30, 27, 26, 30, 27, 12, 30, 27,  5, 30, 22, 24, 30, 8,  3, 30, 18, 15, 30,  3,  7, 30,  3, 10, 30,  3,  2, 30, 21, 18, 32, 27, 28, 29, 27]
+
+27 -> 26 ->  1 -> 14 ->  6 ->  4 -> 17 ->  9 -> 22 -> 24 -> 28
+27 -> 12 -> 11 -> 21 -> 18 -> 15 -> 25 -> 19 ->  8 ->  3 ->  7 -> 23
+27 ->  5
+ 6 -> 10
+17 -> 16
+ 3 -> 10
+ 3 ->  2
+
+using new contribution representation analysis, using the following to compute the magnitude of the contribution from various inputs:
+  torch.linalg.vector_norm(representations[3][30,:,:], dim=1)
+we see that layer 5 copies row 35 into 89 because of the high contribution from the token value at position 51 (corresponding to the 17 in the edge 4 -> 17).
+
+layer 4 copies rows 14 and 41 into 35. row 14 has large contribution from the token value at position 51. why is 14 copied into 35? this is because row 14 has (relatively) high contribution from the token value at position 30 (corresponding to the 14 in the edge 1 -> 14), and row 35 has high contribution from the token value at position 30.
+
+why does row 14 have large contribution from the token value at position 51? and why does row 35 has large contribution from the token value at position 30? it is unclear why row 35 has large contribution from token value at position 30, before the attention layer, the contribution is very small, but attention layer 3 seems to copy from seemingly random source rows. it's possible these other rows are storing information about graph topology that is nonspecific to the original values at those rows. or perhaps these rows are being copied everywhere, and what we care about is the diff (i.e. the rows that are being selectively copied into specific destination rows). -> row 29 corresponds to the source vertex in the edge 1 -> 14, which connects the vertex at row 35 (27) with that at row 14 (6), but the attention matrix is copying row 29 more into rows 14, 17, 35, 41, and 56. how can we detect this?
+  row 65 (correponding to the 22 in the edge 22 -> 24) is copied into row 35 because of large contribution from the token value at position 12 (the 22 in the edge 9 -> 22) in row 35 and the large contribution from the position embedding 176-90=86 (the start vertex special token). why does row 35 have so much information from the end of the path?
+
+  row 50 (corresponding to the 4 in the edge 4 -> 17) is copied into row 35 because of large contribution from the token value at position 15 (the 4 in the edge 6 -> 4) in row 35 and the large contribution from the token value at position 50 in row 50. so this is a forward step (!).
+  row 53 (corresponding to the 19 in the edge 19 -> 8) is copied into row 35 because of large contribution from the token value at position 21 (corresponding to the 19 in the edge 25 -> 19) in row 35 and the large contribution from the token value at position 53 (corresponding to the 19 in the edge 19 -> 8). so this is also a forward step.
+  row 29 is copied into row 35 due to a forward step.
+row 14 has large contribution from the token value at position 51 because attention layer 3 copies from row 50 to row 14. and this copy is due to a backwards step.
+
+layer 2 anti-copies row 29 into row 35 because row 29 has large contribution from the token value at position 29 (the 1 in 1 -> 14) and row 35 has large contribution from the token value at position 36 (the 1 in 26 -> 1), so this is a backwards step that is split over layers 2 and 3 (since layer 3 then copies from many different locations). this is what leads to row 35 having large contribution from the token value at position 30 at the beginning of layer 4.
+
+how do we verify that the contributions are due to position and not the token value? consider the copy in layer 5 from row 35 into 89: this was due to high contribution from the token value at position 51 (the 14 in 1 -> 14). we can change the position of the edge 1 -> 14 and see how this affects the contribution. if we move the edge 1 -> 14 so that the 14 appears in position 48, we see that the copy from row 35 into 89 in layer 5 is due to high contribution from the token value at position 48. we can do this multiple times to get better confidence that this contribution encodes position rather than some other quantity.
+  -> but why would this contribution encode position and not token value? wouldn't there be identifiability issues if there are vertices of high degree? even if all vertices have degree 2 (in-degree 1 and out-degree 1), then you still can't implement a backwards/forwards step in the attention layer by using the token embeddings alone.
+  -> maybe it would help to train a linear probe to classify position? but note that each embedding can store multiple positions, especially after one or more backwards/forwards steps, so this becomes more similar to training a probe for reachability.
+
+
+
+(interestingly, if we change the input into:
 27 -> 26 ->  1 -> 14 ->  6 ->  4 -> 17 ->  9 -> 22 -> 24 -> 28
 27 -> 12 -> 11 -> 21 -> 18 -> 15 -> 25 -> 19 ->  8 ->  3
 27 ->  5 ->  7 -> 23
@@ -870,6 +903,61 @@ interestingly, if we change the input into:
 17 -> 16
  3 -> 10
  3 ->  2
-
 and the goal is 28, the model will incorrectly predict 5 (!)
-if the goal is 7, the model will incorrectly predict 26 (!)
+if the goal is 7, the model will incorrectly predict 26 (!))
+
+
+
+probing results on source vertices:
+(note the overall test accuracy of the network on graphs with lookahead=10 is 99%)
+first we check if the model is doing a backward search from the goal vertex: (the probe doesn't include the goal)
+layer 2 can decode
+  reachable_distance=-1 excluding start vertex with 100% accuracy, but not reachable_distance=-2
+  reachable_distance=-2 gets 96% (45% true positive rate, 100% true negative rate)
+layer 3 can decode
+  reachable_distance=-1 excluding start vertex with 100% accuracy (90% true positive rate, 100% true negative rate)
+  reachable_distance=-2 excluding start vertex with 99% accuracy (90% true positive rate, 100% true negative rate)
+  but only gets 95% for reachable_distance=-3 (60% true positive rate, 100% true negative rate)
+layer 4,
+  reachable_distance=-3 gets 97% (78% true positive rate, 100% true negative rate)
+  reachable_distance=-4 gets 95% (75% true positive rate, 99% true negative rate)
+  reachable_distance=-5 gets 91% (56% true positive rate, 99% true negative rate)
+  reachable_distance -8 gets % (% true positive rate, % true negative rate)
+layer 5,
+  reachable_distance -4 gets 95% (74% true positive rate, 100% true negative rate)
+  reachable_distance -5 gets 93% (73% true positive rate, 99% true negative rate)
+  reachable_distance -6 gets 90% (65% true positive rate, 98% true negative rate)
+  reachable_distance -7 gets 87% (60% true positive rate, 98% true negative rate)
+  reachable_distance -8 gets 84% (54% true positive rate, 97% true negative rate)
+  reachable_distance -10 gets 75% (50% true positive rate, 93% true negative rate)
+layer 6,
+  reachable_distance -4 gets 95% (70% true positive rate, 99% true negative rate)
+  reachable_distance -8 gets 83% (53% true positive rate, 97% true negative rate)
+
+check if the model is doing a forward search from the start vertex:
+layer 3, reachable_distance=+2 gets 87% (0% true positive rate, 100% true negative rate) (this predictor is just guessing 0 for all inputs) *if the probe doesn't include the start vertex*
+  if the probe does include the start vertex, it gets 87% accuracy (26% true positive rate, 100% true negative rate) (but this could just be identifying the start vertex and guessing 1 for only that vertex)
+layer 4, reachable_distance=+2 gets 93% (42% true positive rate, 100% true negative rate)
+  if the probe does include the start vertex, it gets 92% accuracy (57% true positive rate, 100% true negative rate)
+layer 5, reachable_distance=+2 gets 92% (57% true positive rate, 100% true negative rate)
+
+check if the model is doing a backward search from vertices at specific absolute positions, or from the kth vertex in the correct path, the probe gets 0% true positive rate and 100% true negative rate.
+
+probing results on source vertices:
+layer 2,
+  reachable_distance=-1 gets 96% (0% true positive rate, 100% true negative rate)
+layer 3,
+  reachable_distance=-1 gets 74% (79% true positive rate, 74% true negative rate)
+  reachable_distance=-2 gets 91% (32% true positive rate, 96% true negative rate)
+
+what if the model is doing a forward search from the start vertex: (the probe includes the start vertex)
+layer 2,
+  reachable_distance=+1 gets 95% (82% true positive rate, 96% true negative rate)
+layer 3,
+  reachable_distance=+1 gets 98% (59% true positive rate, 100% true negative rate)
+  reachable_distance=+2 gets 92% (36% true positive rate, 99% true negative rate)
+layer 4,
+  reachable_distance=+2 gets 88% (0% true positive rate, 100% true negative rate)
+  reachable_distance=+3 gets 80% (2% true positive rate, 99% true negative rate)
+layer 5,
+  reachable_distance=+3 gets 81% (0% true positive rate, 100% true negative rate)

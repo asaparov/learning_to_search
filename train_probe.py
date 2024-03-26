@@ -1,10 +1,12 @@
-from random import seed, randrange, Random
+from random import seed, randrange, getstate, Random
 import numpy as np
 import torch
 from torch import nn, LongTensor, FloatTensor
 from torch.nn import BCEWithLogitsLoss, Sigmoid
 from torch.utils.data import DataLoader
 from Sophia import SophiaG
+from sys import stdout
+from train import binomial_confidence_int
 import multiprocessing
 
 def build_module(name):
@@ -41,7 +43,10 @@ class TransformerProber(nn.Module):
 		for param in tfm_model.parameters():
 			param.requires_grad = False
 		self.probe_layer = probe_layer
-		self.decoder = nn.Linear(hidden_dim, hidden_dim)
+		n = tfm_model.positional_embedding.size(0)
+		self.decoder = nn.Linear(hidden_dim + n * hidden_dim, 1)
+		if probe_layer > len(tfm_model.transformers):
+			raise Exception('probe_layer must be <= number of layers')
 
 	def to(self, device):
 		super().to(device)
@@ -64,6 +69,7 @@ class TransformerProber(nn.Module):
 			pos = self.model.positional_embedding.unsqueeze(0).expand(x.shape[0], -1, -1)
 		x = torch.cat((x, pos), -1)
 		x = self.model.dropout_embedding(x)
+		input = x.clone()
 
 		'''print("embedded input:")
 		for i in range(x.size(0)):
@@ -80,7 +86,8 @@ class TransformerProber(nn.Module):
 			if i + 1 == self.probe_layer:
 				break
 
-		return self.decoder(x)
+		dec_input = torch.cat((x, input.reshape(input.size(0), input.size(1) * input.size(2)).unsqueeze(1).repeat((1,input.size(1),1))), dim=2)
+		return self.decoder(dec_input)
 
 
 def evaluate_decoder(model, max_input_size):
@@ -156,7 +163,10 @@ if __name__ == "__main__":
 		device = torch.device('cuda')
 
 	tfm_model, _, _, _ = torch.load(argv[1], map_location=device)
-	model = TransformerProber(tfm_model, probe_layer=1)
+	for transformer in tfm_model.transformers:
+		if not hasattr(transformer, 'pre_ln'):
+			transformer.pre_ln = True
+	model = TransformerProber(tfm_model, probe_layer=4)
 	model.to(device)
 
 	suffix = argv[1][argv[1].index('inputsize')+len('inputsize'):]
@@ -164,14 +174,15 @@ if __name__ == "__main__":
 
 	# reserve some data for validation
 	lookahead_steps = 10
-	reachable_distance = 4
-	start_vertex_index = max_input_size-1
+	reachable_distance = 8
+	start_vertex_index = 3
+	exclude_start_vertex = True
 	reserved_inputs = set()
 
 	# we are doing streaming training, so use an IterableDataset
 	from itertools import cycle
 	from threading import Lock
-	STREAMING_BLOCK_SIZE = 2 ** 18
+	STREAMING_BLOCK_SIZE = 2 ** 13
 	NUM_DATA_WORKERS = 2
 	seed_generator = Random(seed_value)
 	seed_generator_lock = Lock()
@@ -206,8 +217,7 @@ if __name__ == "__main__":
 				torch.manual_seed(new_seed)
 				np.random.seed(new_seed)
 
-				inputs, outputs, num_collisions = generator.generate_reachable_training_set(max_input_size, BATCH_SIZE, lookahead_steps, reserved_inputs, 1, reachable_distance, start_vertex_index)
-				import pdb; pdb.set_trace()
+				inputs, outputs, num_collisions = generator.generate_reachable_training_set(max_input_size, BATCH_SIZE, lookahead_steps, reserved_inputs, 1, reachable_distance, start_vertex_index, exclude_start_vertex)
 				if num_collisions != 0:
 					with self.collisions_lock:
 						self.total_collisions.value += num_collisions
@@ -223,17 +233,19 @@ if __name__ == "__main__":
 			return self.process_data(self.offset + worker_id)
 
 	epoch = 0
-	BATCH_SIZE = 2 ** 11
+	BATCH_SIZE = 2 ** 9
 	iterable_dataset = StreamingDataset(epoch * STREAMING_BLOCK_SIZE // BATCH_SIZE)
 	train_loader = DataLoader(iterable_dataset, batch_size=None, num_workers=NUM_DATA_WORKERS, pin_memory=True, prefetch_factor=8)
 
 	loss_func = BCEWithLogitsLoss(reduction='mean')
-	optimizer = SophiaG((p for p in model.parameters() if p.requires_grad), lr=1.0e-3)
+	optimizer = SophiaG((p for p in model.parameters() if p.requires_grad), lr=1.0e-4)
 
 	log_interval = 1
-	eval_interval = 20
-	save_interval = 100
+	eval_interval = 1
+	save_interval = 10
 
+	epoch_loss = 0.0
+	num_batches = 0
 	while True:
 		for batch in train_loader:
 			model.train()
@@ -245,9 +257,8 @@ if __name__ == "__main__":
 
 			logits = model(input)
 			# only take the predictions on source vertices
-			import pdb; pdb.set_trace()
-			logits = logits[:,range(2,max_input_size-5,3),:]
-			output = output[:,range(2,max_input_size-5,3),:]
+			logits = logits[:,range(2,max_input_size-5,3),-1]
+			output = output[:,range(2,max_input_size-5,3)]
 			loss_val = loss_func(logits, output)
 			epoch_loss += loss_val.item()
 
@@ -268,14 +279,24 @@ if __name__ == "__main__":
 
 				if epoch % eval_interval == 0:
 					model.eval()
-					logits, _ = model(input)
-					training_acc = torch.sum(torch.argmax(logits[:,-1,:],dim=1) == output).item() / output.size(0)
-					print("training accuracy: %.2f±%.2f" % (training_acc, binomial_confidence_int(training_acc, output.size(0))))
-					del input, output
+					logits = model(input)
+					training_preds = (logits[:,range(2,max_input_size-5,3),-1] > 0.5)
+					training_labels = (output == 1)
+					total_preds = training_preds.size(0) * training_preds.size(1)
+					training_acc = torch.sum(training_preds == training_labels).item() / total_preds
+					try:
+						print("training accuracy: %.2f±%.2f" % (training_acc, binomial_confidence_int(training_acc, total_preds)))
+						true_positive_acc = torch.sum(training_preds[output == 1]).item() / torch.sum(output == 1).item()
+						print("true positive rate: %.2f±%.2f" % (true_positive_acc, binomial_confidence_int(true_positive_acc, torch.sum(output == 1).item())))
+						true_negative_acc = torch.sum(training_preds[output == 0] == 0).item() / torch.sum(output == 0).item()
+						print("true negative rate: %.2f±%.2f" % (true_negative_acc, binomial_confidence_int(true_negative_acc, torch.sum(output == 0).item())))
+						del input, output
+					except ZeroDivisionError:
+						pass
 					stdout.flush()
 
-					test_acc,test_loss,_ = evaluate_model(model, eval_inputs, eval_outputs)
-					print("test accuracy = %.2f±%.2f, test loss = %f" % (test_acc, binomial_confidence_int(test_acc, 1000), test_loss))
+					#test_acc,test_loss,_ = evaluate_model(model, eval_inputs, eval_outputs)
+					#print("test accuracy = %.2f±%.2f, test loss = %f" % (test_acc, binomial_confidence_int(test_acc, 1000), test_loss))
 					stdout.flush()
 
 				epoch += 1

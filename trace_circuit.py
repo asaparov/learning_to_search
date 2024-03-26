@@ -520,30 +520,51 @@ class TransformerTracer:
 		def trace_activation_forward(representation, num_layers):
 			representation = representation.clone().detach()
 			representations = [representation.clone().detach()]
+			ff_representations = []
 			attn_representations = []
+			bias_contribution = torch.zeros(representation[0].shape)
 			for i in range(num_layers):
 				layer_norm_matrix = self.model.transformers[i].ln_attn.weight.unsqueeze(0).repeat((n,1)) / torch.sqrt(torch.var(layer_inputs[i], dim=1, correction=0) + self.model.transformers[i].ln_attn.eps).unsqueeze(1).repeat((1,d))
+				layer_norm_bias = -torch.mean(layer_inputs[i], dim=1).unsqueeze(1) * layer_norm_matrix + self.model.transformers[i].ln_attn.bias
 				attn_representation = representation * layer_norm_matrix
-				attn_representations.append(attn_representation)
+				attn_representations.append((attn_representation, bias_contribution * layer_norm_matrix + layer_norm_bias))
 				representation += torch.matmul(torch.matmul(torch.matmul(attn_matrices[i], attn_representation), self.model.transformers[i].attn.proj_v.weight.T), self.model.transformers[i].attn.linear.weight.T)
+
+				# compute the contribution from bias terms in the attention layer
+				bias_contribution += torch.matmul(torch.matmul(torch.matmul(attn_matrices[i], bias_contribution * layer_norm_matrix), self.model.transformers[i].attn.proj_v.weight.T), self.model.transformers[i].attn.linear.weight.T)
+				bias_contribution += torch.matmul(torch.matmul(torch.matmul(attn_matrices[i], layer_norm_bias), self.model.transformers[i].attn.proj_v.weight.T), self.model.transformers[i].attn.linear.weight.T)
+				bias_contribution += torch.matmul(self.model.transformers[i].attn.proj_v.bias.unsqueeze(0), self.model.transformers[i].attn.linear.weight.T).repeat((n,1))
+				bias_contribution += self.model.transformers[i].attn.linear.bias.unsqueeze(0).repeat((n,1))
+
+				ff_representations.append(representation.clone().detach())
 
 				if self.model.transformers[i].ff:
 					layer_norm_matrix = self.model.transformers[i].ln_ff.weight.unsqueeze(0).repeat((n,1)) / torch.sqrt(torch.var(ff_inputs[i], dim=1, correction=0) + self.model.transformers[i].ln_ff.eps).unsqueeze(1).repeat((1,d))
+					layer_norm_bias = -torch.mean(ff_inputs[i], dim=1).unsqueeze(1) * layer_norm_matrix + self.model.transformers[i].ln_ff.bias
 					ff0_output = self.model.transformers[i].ff[0](self.model.transformers[i].ln_ff(ff_inputs[i]))
 					representation += torch.matmul((ff0_output > 0.0) * torch.matmul(representation * layer_norm_matrix, self.model.transformers[i].ff[0].weight.T), self.model.transformers[i].ff[3].weight.T)
+
+					# compute the contribution from the bias terms in the FF layer
+					layer_norm_bias = -torch.mean(ff_inputs[i], dim=1).unsqueeze(1) * layer_norm_matrix + self.model.transformers[i].ln_ff.bias
+					bias_contribution += torch.matmul((ff0_output > 0.0) * torch.matmul(bias_contribution * layer_norm_matrix, self.model.transformers[i].ff[0].weight.T), self.model.transformers[i].ff[3].weight.T)
+					bias_contribution += torch.matmul((ff0_output > 0.0) * torch.matmul(layer_norm_bias, self.model.transformers[i].ff[0].weight.T), self.model.transformers[i].ff[3].weight.T)
+					bias_contribution += torch.matmul((ff0_output > 0.0) * self.model.transformers[i].ff[0].bias.unsqueeze(0), self.model.transformers[i].ff[3].weight.T)
+					bias_contribution += self.model.transformers[i].ff[3].bias.unsqueeze(0).repeat((n,1))
 				representations.append(representation.clone().detach())
 
-			return attn_representations, representations
+			return attn_representations, ff_representations, representations
 
 		def check_copyr(i, dst, src, attn_inputs, attn_matrices, attn_representations):
 			attn_input = attn_inputs[i]
+			attn_representation, attn_bias_contribution = attn_representations[i]
 			if not quiet:
 				print('Attention layer {} is copying row {} into row {} with weight {} because:'.format(i,src,dst,attn_matrices[i][dst,src]))
 			A = torch.matmul(self.model.transformers[i].attn.proj_q.weight.T, self.model.transformers[i].attn.proj_k.weight)
-			left = torch.matmul(attn_representations[i][:,dst,:], A)
-			products = torch.matmul(left, attn_representations[i][:,src,:].T)
-			#left = torch.matmul(torch.cat((attn_representations[i][:,dst,:], torch.ones((2*n,1))), 1), A_matrices[i])
-			#products = torch.matmul(left, torch.cat((attn_representations[i][:,src,:], torch.ones((2*n,1))), 1).T)
+			left = torch.matmul(attn_representation[:,dst,:], A)
+			products = torch.matmul(left, attn_representation[:,src,:].T)
+			bias_product = torch.dot(attn_bias_contribution[dst,:],attn_bias_contribution[src,:])
+			#left = torch.matmul(torch.cat((attn_representation[:,dst,:], torch.ones((2*n,1))), 1), A_matrices[i])
+			#products = torch.matmul(left, torch.cat((attn_representation[:,src,:], torch.ones((2*n,1))), 1).T)
 			import pdb; pdb.set_trace()
 
 		#trace_activation(5, 35, [(40, attn_inputs[5][35,40]), (125, attn_inputs[5][35,125]), (128, attn_inputs[5][35,128])])
@@ -551,8 +572,10 @@ class TransformerTracer:
 		for i in range(n):
 			representation[i,i,input[i]] = 1.0
 			representation[n+i,i,d-n+i] = 1.0
-		attn_representations, representations = trace_activation_forward(representation, len(self.model.transformers))
-		check_copyr(4, 35, 41, attn_inputs, attn_matrices, attn_representations)
+		attn_representations, ff_representations, representations = trace_activation_forward(representation, len(self.model.transformers))
+		check_copyr(5, 89, 35, attn_inputs, attn_matrices, attn_representations)
+
+		other_layer_inputs, other_attn_inputs, other_attn_pre_softmax, other_attn_matrices, other_v_outputs, other_attn_linear_inputs, other_attn_outputs, other_A_matrices, other_ff_inputs, other_ff_parameters, other_prediction = self.forward(x, mask, 0, False, [(4, 35, layer_inputs[4][35,:] - representations[4][30,35,:] + representations[3][30,35,:])])
 		import pdb; pdb.set_trace()
 
 		PADDING_TOKEN = (n - 5) // 3 + 3
@@ -805,12 +828,12 @@ if __name__ == "__main__":
 	#input = [46, 46, 46, 46, 46, 46, 46, 45, 31, 39, 45, 42,  4, 45, 21,  7, 45, 19, 20, 45, 13, 22, 45,  7, 42, 45, 20, 21, 45, 17, 19, 45, 17, 31, 45, 10, 14, 45, 39, 10, 45, 14, 13, 47, 17,  4, 44, 17]
 	#input = [62, 62, 62, 62, 62, 61, 15,  8, 61, 11, 18, 61,  9,  5, 61, 19, 14, 61, 19, 17, 61,  1, 11, 61,  6,  7, 61, 10,  3, 61,  2,  1, 61, 13, 10, 61, 12,  4, 61, 17, 16, 61,  7, 12, 61, 14,  2, 61,  3,  9, 61, 16, 15, 61, 18,  6, 61,  8, 13, 63, 19,  4, 60, 19]
 	#input = [44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 43, 21, 40, 43, 21, 22, 43, 22, 34, 43, 13,  3, 43, 31,  2, 43, 24, 13, 43,  4, 41, 43, 30, 31, 43, 17, 15, 43, 34, 38, 43,  3, 28, 43, 18, 17, 43, 14, 24, 43,  2,  4, 43, 32, 30, 43, 40, 18, 43, 15, 14, 43, 38, 32, 45, 21, 28, 42, 21]
-	input = [31, 31, 31, 31, 31, 31, 31, 30,  7, 23, 30,  9, 22, 30,  6,  4, 30, 6, 10, 30, 25, 19, 30, 17,  9, 30, 17, 16, 30,  1, 14, 30, 11, 21, 30, 26,  1, 30, 12, 11, 30, 14,  6, 30, 15, 25, 30, 24, 28, 30,  4, 17, 30, 19,  8, 30, 27, 26, 30, 27, 12, 30, 27,  5, 30, 22, 24, 30, 8,  3, 30, 18, 15, 30,  3,  7, 30,  3, 10, 30,  3,  2, 30, 21, 18, 32, 27, 28, 29, 27]
+	input = [31, 31, 31, 31, 31, 31, 31, 30,  7, 23, 30,  9, 22, 30,  6,  4, 30, 6, 10, 30, 25, 19, 30, 17,  9, 30, 17, 16, 30,  1, 14, 30, 11, 21, 30, 26,  1, 30, 12, 11, 30, 14,  6, 30, 15, 25, 30,  4, 17, 30, 24, 28, 30, 19,  8, 30, 27, 26, 30, 27, 12, 30, 27,  5, 30, 22, 24, 30, 8,  3, 30, 18, 15, 30,  3,  7, 30,  3, 10, 30,  3,  2, 30, 21, 18, 32, 27, 28, 29, 27]
 	input = torch.LongTensor(input).to(device)
 	other_input = input.clone().detach()
-	#other_input[-3] = 7
-	other_input[next(i for i in range(len(input)) if input[i] ==  1 and input[i+1] == 14) + 1] = 21
-	other_input[next(i for i in range(len(input)) if input[i] == 11 and input[i+1] == 21) + 1] = 14
+	other_input[-3] = 7
+	#other_input[next(i for i in range(len(input)) if input[i] ==  1 and input[i+1] == 14) + 1] = 21
+	#other_input[next(i for i in range(len(input)) if input[i] == 11 and input[i+1] == 21) + 1] = 14
 	#other_input[next(i for i in range(len(input)) if input[i] ==   6 and input[i+1] ==   4) + 0] = 18
 	#other_input[next(i for i in range(len(input)) if input[i] ==   6 and input[i+1] ==   4) + 1] = 15
 	#other_input[next(i for i in range(len(input)) if input[i] ==  18 and input[i+1] ==  15) + 0] =  6

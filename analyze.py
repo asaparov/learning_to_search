@@ -10,27 +10,57 @@ def perturb_vertex_ids(input, fix_index, num_examples, max_input_size):
 	EDGE_PREFIX_TOKEN = (max_input_size-5) // 3 + 2
 	max_vertex_id = (max_input_size-5) // 3
 
+	# compute the correct next vertex
+	graph = {}
+	for i in range(len(input)):
+		if input[i] == EDGE_PREFIX_TOKEN:
+			if int(input[i+1]) not in graph:
+				graph[int(input[i+1])] = [int(input[i+2])]
+			else:
+				graph[int(input[i+1])].append(int(input[i+2]))
+	useful_steps = []
+	for neighbor in graph[int(input[-1])]:
+		stack = [neighbor]
+		reachable = []
+		while len(stack) != 0:
+			current = stack.pop()
+			reachable.append(current)
+			if current not in graph:
+				continue
+			for child in graph[current]:
+				if child not in reachable:
+					stack.append(child)
+		if int(input[-3]) in reachable:
+			useful_steps.append(neighbor)
+	if len(useful_steps) == 0:
+		raise Exception('Given input has no path to goal vertex.')
+	elif len(useful_steps) != 1:
+		raise Exception('Given input has more than one next step to goal vertex.')
+
 	out = torch.empty((num_examples, input.shape[0]), dtype=torch.int64)
 	out_labels = torch.empty((num_examples), dtype=torch.int64)
 	out[0,:] = input
 	edge_indices = [i for i in range(len(input)) if input[i] == EDGE_PREFIX_TOKEN]
 	edge_count = len(edge_indices)
-	fixed_edge_index = next(i for i in range(len(edge_indices)) if fix_index >= edge_indices[i] and fix_index < edge_indices[i] + 3)
-	fixed_edge = edge_indices[fixed_edge_index]
+	if fix_index != None:
+		fixed_edge_index = next(i for i in range(len(edge_indices)) if fix_index >= edge_indices[i] and fix_index < edge_indices[i] + 3)
+		fixed_edge = edge_indices[fixed_edge_index]
 	padding_size = next(i for i in range(len(input)) if input[i] != PADDING_TOKEN)
 	out[:,:padding_size] = PADDING_TOKEN
-	out_labels[0] = out[0,fix_index+1]
+	out_labels[0] = useful_steps[0]
 	for i in range(1, num_examples):
 		id_map = list(range(1, max_vertex_id + 1))
 		shuffle(id_map)
 		id_map = [0] + id_map
-		del edge_indices[fixed_edge_index]
+		if fix_index != None:
+			del edge_indices[fixed_edge_index]
 		shuffle(edge_indices)
-		edge_indices.insert(fixed_edge_index, fixed_edge)
+		if fix_index != None:
+			edge_indices.insert(fixed_edge_index, fixed_edge)
 		for j in range(len(edge_indices)):
 			out[i,padding_size+(3*j):padding_size+(3*j)+3] = torch.LongTensor([EDGE_PREFIX_TOKEN, id_map[input[edge_indices[j]+1]], id_map[input[edge_indices[j]+2]]])
 		out[i,padding_size+(3*edge_count):] = torch.LongTensor([(id_map[v] if v <= max_vertex_id else v) for v in input[padding_size+(3*edge_count):]])
-		out_labels[i] = out[i,fix_index+1]
+		out_labels[i] = id_map[useful_steps[0]]
 	return out, out_labels
 
 def run_model(model, input, fix_index, max_input_size, num_perturbations=2**14):
@@ -49,7 +79,6 @@ def run_model(model, input, fix_index, max_input_size, num_perturbations=2**14):
 	print(padded_input)
 	perturbed_input, perturbed_output = perturb_vertex_ids(padded_input, fix_index, 1+num_perturbations, max_input_size)
 	predictions, _ = model(perturbed_input)
-	import pdb; pdb.set_trace()
 	if len(predictions.shape) == 3:
 		predictions = predictions[:, -1, :]
 		perturbed_output = perturbed_output.to(device)
@@ -217,7 +246,8 @@ if os.path.isfile(filepath):
 	#run_model(model, [22, 21,  5, 19, 21, 11,  5, 21, 10,  3, 21,  4, 10, 21,  9,  4, 21,  9, 11, 23,  9,  3, 20,  9], max_input_size=24)
 	#run_model(model, [22, 22, 22, 22, 22, 22, 22, 21, 1,  2, 21,  1,  4, 21,  2,  3, 21, 4,  5, 23,  1,  3, 20, 1], max_input_size=24)
 	#run_model(model, [46, 45,  3, 19, 45, 18, 39, 45, 36, 15, 45, 24, 42, 45, 37,  3, 45, 37, 36, 45, 23, 32, 45,  8, 24, 45, 19, 30, 45, 15, 23, 45, 39, 40, 45, 40, 34, 45, 30, 18, 45, 32,  8, 47, 37, 34, 44, 37], max_input_size=48)
-	#run_model(model, [43, 15, 34, 43, 30,  9, 43, 14, 22, 43,  8, 13, 43,  8,  2, 43, 26,  1, 43,  1, 14, 43, 36,  7, 43, 22,  4, 43, 22,  2, 43, 34, 26, 43, 34, 25, 43, 28, 30, 43, 16, 3, 43, 16, 32, 43, 13, 33, 43, 12, 15, 43, 25, 21, 43,  9, 36, 43, 3, 12, 43, 32,  8, 43, 33, 28, 45, 16,  4, 42, 16], fix_index=98, max_input_size=max_input_size, num_perturbations=0)
+	run_model(model, [31, 31, 31, 31, 31, 31, 31, 30,  7, 23, 30,  9, 22, 30,  6,  4, 30, 6, 10, 30, 25, 19, 30, 17,  9, 30, 17, 16, 30,  1, 14, 30, 11, 21, 30, 26,  1, 30, 12, 11, 30, 14,  6, 30, 15, 25, 30, 24, 28, 30,  4, 17, 30, 19,  8, 30, 27, 26, 30, 27, 12, 30, 27,  5, 30, 22, 24, 30, 8,  3, 30, 18, 15, 30,  3,  7, 30,  3, 10, 30,  3,  2, 30, 21, 18, 32, 27, 28, 29, 27], fix_index=None, max_input_size=max_input_size, num_perturbations=1000)
+	import pdb; pdb.set_trace()
 
 	seed(training_seed)
 	torch.manual_seed(training_seed)
@@ -236,7 +266,7 @@ if os.path.isfile(filepath):
 	NUM_TEST_SAMPLES = 1000
 	reserved_inputs = set()
 	print("Generating eval data...")
-	inputs,outputs = generate_eval_data(max_input_size, min_path_length=2, distance_from_start=1, distance_from_end=-1, lookahead_steps=13, num_paths_at_fork=None, num_samples=NUM_TEST_SAMPLES)
+	inputs,outputs = generate_eval_data(max_input_size, min_path_length=2, distance_from_start=1, distance_from_end=-1, lookahead_steps=10, num_paths_at_fork=None, num_samples=NUM_TEST_SAMPLES)
 	#generator.set_seed(get_seed(1))
 	#inputs, outputs, _, _ = generator.generate_training_set(max_input_size, NUM_TEST_SAMPLES, training_max_lookahead, reserved_inputs, 1, False)
 	print("Evaluating model...")

@@ -575,7 +575,7 @@ py::tuple generate_training_set(const unsigned int max_input_size, const uint64_
 	return py::make_tuple(inputs, outputs, valid_outputs, num_collisions);
 }
 
-py::tuple generate_reachable_training_set(const unsigned int max_input_size, const uint64_t dataset_size, const unsigned int lookahead, const py::object& reserved_inputs, const int distance_from_start, const int reachable_distance, const bool start_from_goal)
+py::tuple generate_reachable_training_set(const unsigned int max_input_size, const uint64_t dataset_size, const unsigned int lookahead, const py::object& reserved_inputs, const int distance_from_start, const int reachable_distance, const unsigned int start_vertex_index, const bool exclude_start_vertex)
 {
 	const unsigned int QUERY_PREFIX_TOKEN = (max_input_size-5) / 3 + 4;
 	const unsigned int PADDING_TOKEN = (max_input_size-5) / 3 + 3;
@@ -587,11 +587,12 @@ py::tuple generate_reachable_training_set(const unsigned int max_input_size, con
 	size_t input_shape[2]{dataset_size, max_input_size};
 	size_t output_shape[2]{dataset_size, max_input_size};
 	py::array_t<int64_t, py::array::c_style> inputs(input_shape);
-	py::array_t<int64_t, py::array::c_style> outputs(output_shape);
+	py::array_t<float, py::array::c_style> outputs(output_shape);
 	auto inputs_mem = inputs.mutable_unchecked<2>();
 	auto outputs_mem = outputs.mutable_unchecked<2>();
 	py::list valid_outputs;
 
+	unsigned int max_vertex_id = (max_input_size - 5) / 3;
 	while (num_generated < dataset_size) {
 		array<node> g(32);
 		node* start; node* end;
@@ -606,7 +607,7 @@ py::tuple generate_reachable_training_set(const unsigned int max_input_size, con
 			}
 
 			unsigned int num_vertices = std::min(lookahead * num_paths + 1 + randrange(0, 6), (max_input_size-5) / 3);
-			if (!generate_example(g, start, end, paths, num_vertices, 4, (max_input_size - 5) / 3, true, lookahead, num_paths)) {
+			if (!generate_example(g, start, end, paths, num_vertices, 4, max_vertex_id, true, lookahead, num_paths)) {
 				for (node& n : g) core::free(n);
 				for (array<node*>& a : paths) core::free(a);
 				g.length = 0; paths.length = 0;
@@ -635,26 +636,6 @@ py::tuple generate_reachable_training_set(const unsigned int max_input_size, con
 		}
 		shuffle(edges);
 
-		/* compute the set of reachable vertices */
-		array<unsigned int> reachable(16);
-		array<pair<unsigned int, unsigned int>> stack(16);
-		unsigned int start_vertex = start_from_goal ? end->id : start->id;
-		stack.add(make_pair(start_vertex, 0u));
-		while (stack.length != 0) {
-			pair<unsigned int, unsigned int> entry = stack.pop();
-			unsigned int current_vertex = entry.key;
-			unsigned int current_distance = entry.value;
-			if (!reachable.contains(current_vertex))
-				reachable.add(current_vertex);
-			if (reachable_distance > 0 && current_distance + 1 <= (unsigned int) reachable_distance) {
-				for (node* child : g[current_vertex].children)
-					stack.add(make_pair(child->id, current_distance + 1));
-			} else if (reachable_distance < 0 && current_distance + 1 <= (unsigned int) -reachable_distance) {
-				for (node* parent : g[current_vertex].parents)
-					stack.add(make_pair(parent->id, current_distance + 1));
-			}
-		}
-
 		array<unsigned int> prefix(max_input_size);
 		for (auto& entry : edges) {
 			prefix[prefix.length++] = EDGE_PREFIX_TOKEN;
@@ -680,6 +661,34 @@ py::tuple generate_reachable_training_set(const unsigned int max_input_size, con
 				example.length = prefix.length + j;
 				if (example.length > max_input_size)
 					continue;
+
+				/* compute the set of reachable vertices */
+				node** vertex_id_map = (node**) calloc(max_vertex_id + 1, sizeof(node*));
+				for (unsigned int i = 0; i < g.length; i++)
+					vertex_id_map[g[i].id] = &g[i];
+				array<unsigned int> reachable(16);
+				array<pair<unsigned int, unsigned int>> stack(16);
+				unsigned int start_vertex;
+				if (example.length < start_vertex_index)
+					start_vertex = start->id;
+				else start_vertex = example[example.length - start_vertex_index];
+				stack.add(make_pair(start_vertex, 0u));
+				while (stack.length != 0) {
+					pair<unsigned int, unsigned int> entry = stack.pop();
+					unsigned int current_vertex = entry.key;
+					unsigned int current_distance = entry.value;
+					if (!reachable.contains(current_vertex))
+						reachable.add(current_vertex);
+					if (reachable_distance > 0 && current_distance + 1 <= (unsigned int) reachable_distance) {
+						for (node* child : vertex_id_map[current_vertex]->children)
+							stack.add(make_pair(child->id, current_distance + 1));
+					} else if (reachable_distance < 0 && current_distance + 1 <= (unsigned int) -reachable_distance) {
+						for (node* parent : vertex_id_map[current_vertex]->parents)
+							stack.add(make_pair(parent->id, current_distance + 1));
+					}
+				}
+				if (exclude_start_vertex)
+					reachable.remove(reachable.index_of(start_vertex));
 
 				array<node*> useful_steps(8);
 				for (node* v : path[j-1]->children)
