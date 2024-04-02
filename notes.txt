@@ -874,7 +874,7 @@ repeating the input from above for convenience:
  3 ->  2
 
 using new contribution representation analysis, using the following to compute the magnitude of the contribution from various inputs:
-  torch.linalg.vector_norm(representations[3][30,:,:], dim=1)
+  torch.linalg.vector_norm(representations[3][30,:,:], dim=-1)
 we see that layer 5 copies row 35 into 89 because of the high contribution from the token value at position 51 (corresponding to the 17 in the edge 4 -> 17).
 
 layer 4 copies rows 14 and 41 into 35. row 14 has large contribution from the token value at position 51. why is 14 copied into 35? this is because row 14 has (relatively) high contribution from the token value at position 30 (corresponding to the 14 in the edge 1 -> 14), and row 35 has high contribution from the token value at position 30.
@@ -893,6 +893,11 @@ how do we verify that the contributions are due to position and not the token va
   -> but why would this contribution encode position and not token value? wouldn't there be identifiability issues if there are vertices of high degree? even if all vertices have degree 2 (in-degree 1 and out-degree 1), then you still can't implement a backwards/forwards step in the attention layer by using the token embeddings alone.
   -> maybe it would help to train a linear probe to classify position? but note that each embedding can store multiple positions, especially after one or more backwards/forwards steps, so this becomes more similar to training a probe for reachability.
 
+attention layer 4 copies row 14 into 35 due to high contribution from token at position 30 in both rows. so is this just a token matching step? how can we differentiate token matching from backwards/forwards steps?
+
+why does row 14 have high contribution from token at position 30? before attention layer 3, the rows with high contribution from token at position 30 are: 11, 32, 47, 53, 65, 68, 71, 88, 8, 14, 20, 23, 29, 74, 26. (most of these are due to forwards steps: rows 11, 26, 32, 47, 53, 68, 71, 88) attention layer 2 copies row 29 (which has high contribution from row 30) into a bunch of rows, including 26, 11, 32, 47, 53, 68, 71, 88, due to row 29 having high contribution from 29 and row x has high contribution from the token at x+1 where x is the dst row. so attention layers 2 and 3 collectively copied the contribution from token at position 30 (from row 29; which corresponds to the edge 1 -> 14) into row 14 (which corresponds to the edge 6 -> 4). so attention layers 2 and 3 are collectively performing a single forwards step.
+
+ -> it may become clearer by focusing the analysis on specific contributions, one at a time.
 
 
 (interestingly, if we change the input into:
