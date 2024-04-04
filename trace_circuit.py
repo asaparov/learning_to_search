@@ -526,12 +526,15 @@ class TransformerTracer:
 			representations = [representation.clone().detach()]
 			ff_representations = []
 			attn_representations = []
+			v_representations = []
 			bias_contribution = torch.zeros(representation[0].shape)
 			for i in range(num_layers):
 				layer_norm_matrix = self.model.transformers[i].ln_attn.weight.unsqueeze(0).repeat((n,1)) / torch.sqrt(torch.var(layer_inputs[i], dim=1, correction=0) + self.model.transformers[i].ln_attn.eps).unsqueeze(1).repeat((1,d))
 				layer_norm_bias = -torch.mean(layer_inputs[i], dim=1).unsqueeze(1) * layer_norm_matrix + self.model.transformers[i].ln_attn.bias
 				attn_representation = representation * layer_norm_matrix
+				v_representation = torch.matmul(attn_representation, self.model.transformers[i].attn.proj_v.weight.T)
 				attn_representations.append((attn_representation, bias_contribution * layer_norm_matrix + layer_norm_bias))
+				v_representations.append(v_representation)
 				representation += torch.matmul(torch.matmul(torch.matmul(attn_matrices[i], attn_representation), self.model.transformers[i].attn.proj_v.weight.T), self.model.transformers[i].attn.linear.weight.T)
 
 				# compute the contribution from bias terms in the attention layer
@@ -556,7 +559,7 @@ class TransformerTracer:
 					bias_contribution += self.model.transformers[i].ff[3].bias.unsqueeze(0).repeat((n,1))
 				representations.append(representation.clone().detach())
 
-			return attn_representations, ff_representations, representations
+			return attn_representations, v_representations, ff_representations, representations
 
 		def check_copyr(i, dst, src, attn_inputs, attn_matrices, attn_representations):
 			attn_input = attn_inputs[i]
@@ -605,13 +608,38 @@ class TransformerTracer:
 					out += token_to_str(input[position+2])
 			return out.strip()
 
-		def trace_contributions(start_layer, contributions, attn_inputs, attn_matrices, attn_representations):
+		start_index = torch.sum(input == PADDING_TOKEN)
+		num_edges = torch.sum(input == EDGE_PREFIX_TOKEN)
+
+		forward_edges = []
+		for i in range((n - 5) // 3 + 1):
+			forward_edges.append([])
+		for i in range(2, n-5, 3):
+			if i >= start_index:
+				forward_edges[input[i].item()].append(input[i+1].item())
+		def path_length(start, end):
+			if input[start] > (n - 5) // 3 or input[end] > (n - 5) // 3:
+				return -1
+			queue = [(input[start],0)]
+			best_distance = -1
+			while len(queue) != 0:
+				current, distance = queue.pop()
+				if current == input[end]:
+					if best_distance == -1 or distance < best_distance:
+						best_distance = distance
+					continue
+				for child in forward_edges[current]:
+					queue.append((child,distance+1))
+			return best_distance
+
+		def trace_contributions(start_layer, contributions, attn_inputs, attn_matrices, attn_representations, v_representations, contributions_to_search):
+			copy_graph = {}
 			for i in reversed(range(start_layer + 1)):
 				import pdb; pdb.set_trace()
 				new_contributions = []
 				inspected_copies = []
 				for row, contribution in contributions:
-					representation_norms = torch.linalg.vector_norm(representations[i][contribution,:,:], dim=1)
+					representation_norms = torch.linalg.vector_norm(v_representations[i][contribution,:,:], dim=-1)
 					inputs = representation_norms * attn_matrices[i][row,:]
 					inputs_with_residual = inputs.clone()
 					inputs_with_residual[row] += representation_norms[row]
@@ -620,27 +648,36 @@ class TransformerTracer:
 					#	src_indices = torch.nonzero(inputs_with_residual > 0.25 * torch.max(inputs_with_residual)).squeeze(1).tolist()
 					#else:
 					#	src_indices = torch.nonzero(inputs_with_residual > 0.5 * torch.max(inputs_with_residual)).squeeze(1).tolist()
-					src_indices = torch.nonzero(inputs_with_residual > 0.05 * torch.sum(inputs_with_residual)).squeeze(1).tolist()
+					src_indices = torch.nonzero(inputs_with_residual > 0.1 * torch.sum(inputs_with_residual)).squeeze(1).tolist()
 
 					# calculate why is each row in `src_indices` being copied into `row`
 					for j in range(len(src_indices)):
 						src_index = src_indices[j]
-						if (src_index,contribution) not in new_contributions:
-							new_contributions.append((src_index,contribution))
 						if (src_index,row) in inspected_copies:
 							continue
 						inspected_copies.append((src_index,row))
 
 						# first check if this contribution is due to residual connection
+						copy_type = None
 						if src_index == row and representation_norms[row] > 0.5 * torch.max(inputs_with_residual):
+							if (src_index,contribution) not in new_contributions:
+								new_contributions.append((src_index,contribution))
+
 							if contribution < n:
 								print('Residual at layer {} is copying row {} the contribution from token at position {} ({})'.format(i, src_index, contribution, get_token_value(contribution)))
+								copy_graph[(i,src_index)] = (i+1,row,0)
+								copy_type = 0
 							else:
 								print('Residual at layer {} is copying row {} the contribution from position {} ({})'.format(i, src_index, contribution - n, get_token_value(contribution - n)))
+								copy_graph[(i,src_index)] = (i+1,row,0)
+								copy_type = 0
 
-							# check if the attention layer's contribution is negligible relative to the residual
-							if representation_norms[row] > 0.5 * torch.sum(inputs_with_residual):
-								continue
+						# check if the attention layer's non-residual contribution is negligible
+						if src_index == row and inputs[row] <= 0.1 * torch.sum(inputs_with_residual):
+							continue
+
+						if (src_index,contribution) not in new_contributions:
+							new_contributions.append((src_index,contribution))
 
 						products, bias_product = check_copyr(i, row, src_index, attn_inputs, attn_matrices, attn_representations)
 						print('Attention layer {} is copying token at {} into token at {} with weight {:.2f} because:'.format(i, src_index, row, attn_matrices[i][row,src_index]))
@@ -661,58 +698,78 @@ class TransformerTracer:
 							else:
 								print('  and token at {} has high contribution from position {} (token: {})'.format(src_index, src_contribution - n, get_token_value(src_contribution - n)))
 								src_contribution_index = src_contribution - n
-							if dst_contribution_index % 3 == 2 and src_contribution_index % 3 == 0 and input[dst_contribution_index] == input[src_contribution_index] and input[dst_contribution_index] <= (n - 5) // 3:
+							if dst_contribution_index % 3 == 2 and src_contribution_index % 3 == 0 and input[dst_contribution_index] == input[src_contribution_index] and input[dst_contribution_index] <= (n - 5) // 3 and path_length(src_index, row) != -1:
 								# this is a forwards step
 								print(GREEN + '    This is a forwards step.' + END)
-							if dst_contribution_index % 3 == 0 and src_contribution_index % 3 == 2 and input[dst_contribution_index] == input[src_contribution_index] and input[dst_contribution_index] <= (n - 5) // 3:
+								copy_graph[(i,src_index)] = (i+1,row,1)
+							elif dst_contribution_index % 3 == 0 and src_contribution_index % 3 == 2 and input[dst_contribution_index] == input[src_contribution_index] and input[dst_contribution_index] <= (n - 5) // 3 and path_length(row, src_index) != -1:
 								# this is a backwards step
 								print(GREEN + '    This is a backwards step.' + END)
+								copy_graph[(i,src_index)] = (i+1,row,-1)
+								if copy_type == None:
+									copy_type = -1
+							elif dst_contribution_index == src_contribution_index - 1:
+								print(GREEN + '    This is a backwards step.' + END)
+								copy_graph[(i,src_index)] = (i+1,row,-1)
+								if copy_type == None:
+									copy_type = 1
+							elif dst_contribution_index == src_contribution_index + 1:
+								print(GREEN + '    This is a forwards step.' + END)
+								copy_graph[(i,src_index)] = (i+1,row,1)
+								if copy_type == None:
+									copy_type = 1
+							elif dst_contribution_index == src_contribution_index:
+								if (i,src_index) not in copy_graph:
+									copy_graph[(i,src_index)] = (i+1,row,2)
+								if copy_type == None:
+									copy_type = 2
+							else:
+								if (i,src_index) not in copy_graph:
+									copy_graph[(i,src_index)] = (i+1,row,None)
 							#new_contribution = (src_index,src_contribution.item())
 							#if new_contribution not in new_contributions:
 							#	new_contributions.append(new_contribution)
 							#new_contribution = (row,dst_contribution.item())
 							#if new_contribution not in new_contributions:
 							#	new_contributions.append(new_contribution)
+						if copy_type not in (None, 0) and i > 0:
+							if (i-1,row,dst_contribution.item()) not in contributions_to_search:
+								contributions_to_search.append((i-1,row,dst_contribution.item()))
+							if (i-1,src_index,src_contribution.item()) not in contributions_to_search:
+								contributions_to_search.append((i-1,src_index,src_contribution.item()))
 				contributions = new_contributions
+
+			if (0,48) in copy_graph:
+				# print the copy path
+				current_layer, current_row = (0,48)
+				while current_layer < start_layer:
+					next_layer, next_row, copy_type = copy_graph[(current_layer,current_row)]
+					if copy_type == 0:
+						print('Copy from row {} to row {} (residual)'.format(current_row, next_row))
+					elif copy_type == 1:
+						print('Copy from row {} to row {} (forward step)'.format(current_row, next_row))
+					elif copy_type == -1:
+						print('Copy from row {} to row {} (backward step)'.format(current_row, next_row))
+					elif copy_type == None:
+						print('Copy from row {} to row {} (unknown step)'.format(current_row, next_row))
+					current_layer, current_row = next_layer, next_row
 
 		#trace_activation(5, 35, [(40, attn_inputs[5][35,40]), (125, attn_inputs[5][35,125]), (128, attn_inputs[5][35,128])])
 		representation = torch.zeros((2*n,n,d))
 		for i in range(n):
 			representation[i,i,input[i]] = 1.0
 			representation[n+i,i,d-n+i] = 1.0
-		attn_representations, ff_representations, representations = trace_activation_forward(representation, len(self.model.transformers))
+		attn_representations, v_representations, ff_representations, representations = trace_activation_forward(representation, len(self.model.transformers))
 		prediction_index = int(torch.argmax(torch.linalg.vector_norm(representations[-1][:,:,:], dim=-1)[:n,n-1]))
 		assert input[prediction_index] == prediction
-		trace_contributions(len(self.model.transformers) - 1, [(n-1,prediction_index)], attn_inputs, attn_matrices, attn_representations)
-		#trace_contributions(4, [(35,48)], attn_inputs, attn_matrices, attn_representations)
+		contributions_to_search = []
+		trace_contributions(len(self.model.transformers) - 1, [(n-1,prediction_index)], attn_inputs, attn_matrices, attn_representations, v_representations, contributions_to_search)
+		#trace_contributions(4, [(35,48)], attn_inputs, attn_matrices, attn_representations, v_representations, contributions_to_search)
 		#check_copyr(5, 89, 35, attn_inputs, attn_matrices, attn_representations)
 
 		other_layer_inputs, other_attn_inputs, other_attn_pre_softmax, other_attn_matrices, other_v_outputs, other_attn_linear_inputs, other_attn_outputs, other_A_matrices, other_ff_inputs, other_ff_parameters, other_prediction = self.forward(x, mask, 0, False, [(4, 35, layer_inputs[4][35,:] - representations[4][30,35,:] + representations[3][30,35,:])])
 		import pdb; pdb.set_trace()
 
-		start_index = torch.sum(input == PADDING_TOKEN)
-		num_edges = torch.sum(input == EDGE_PREFIX_TOKEN)
-
-		forward_edges = []
-		for i in range((n - 5) // 3 + 1):
-			forward_edges.append([])
-		for i in range(2, n-5, 3):
-			if i >= start_index:
-				forward_edges[input[i].item()].append(input[i+1].item())
-		def path_length(start, end):
-			if input[start] > (90 - 5) // 3 or input[end] > (90 - 5) // 3:
-				return -1
-			queue = [(input[start],0)]
-			best_distance = -1
-			while len(queue) != 0:
-				current, distance = queue.pop()
-				if current == input[end]:
-					if best_distance == -1 or distance < best_distance:
-						best_distance = distance
-					continue
-				for child in forward_edges[current]:
-					queue.append((child,distance+1))
-			return best_distance
 		def compute_copy_distances(src_pos, dst_pos):
 			copy_distances = []
 			for k,copy_path in tracked_indices:
