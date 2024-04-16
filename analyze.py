@@ -241,6 +241,10 @@ if os.path.isfile(filepath):
 	suffix = filepath[filepath.index('maxlookahead')+len('maxlookahead'):]
 	training_max_lookahead = int(suffix[:suffix.index('_')])
 
+	for transformer in model.transformers:
+		if not hasattr(transformer, 'pre_ln'):
+			transformer.pre_ln = True
+
 	#model = ideal_model(max_input_size=max_input_size, num_layers=6, hidden_dim=16, bidirectional=True, absolute_pos_emb=True, learnable_token_emb=False)
 
 	#run_model(model, [22, 21,  5, 19, 21, 11,  5, 21, 10,  3, 21,  4, 10, 21,  9,  4, 21,  9, 11, 23,  9,  3, 20,  9], max_input_size=24)

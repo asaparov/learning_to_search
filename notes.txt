@@ -874,7 +874,7 @@ repeating the input from above for convenience:
  3 ->  2
 
 using new contribution representation analysis, using the following to compute the magnitude of the contribution from various inputs:
-  torch.linalg.vector_norm(representations[3][30,:,:], dim=1)
+  torch.linalg.vector_norm(representations[3][30,:,:], dim=-1)
 we see that layer 5 copies row 35 into 89 because of the high contribution from the token value at position 51 (corresponding to the 17 in the edge 4 -> 17).
 
 layer 4 copies rows 14 and 41 into 35. row 14 has large contribution from the token value at position 51. why is 14 copied into 35? this is because row 14 has (relatively) high contribution from the token value at position 30 (corresponding to the 14 in the edge 1 -> 14), and row 35 has high contribution from the token value at position 30.
@@ -893,6 +893,11 @@ how do we verify that the contributions are due to position and not the token va
   -> but why would this contribution encode position and not token value? wouldn't there be identifiability issues if there are vertices of high degree? even if all vertices have degree 2 (in-degree 1 and out-degree 1), then you still can't implement a backwards/forwards step in the attention layer by using the token embeddings alone.
   -> maybe it would help to train a linear probe to classify position? but note that each embedding can store multiple positions, especially after one or more backwards/forwards steps, so this becomes more similar to training a probe for reachability.
 
+attention layer 4 copies row 14 into 35 due to high contribution from token at position 30 in both rows. so is this just a token matching step? how can we differentiate token matching from backwards/forwards steps?
+
+why does row 14 have high contribution from token at position 30? before attention layer 3, the rows with high contribution from token at position 30 are: 11, 32, 47, 53, 65, 68, 71, 88, 8, 14, 20, 23, 29, 74, 26. (most of these are due to forwards steps: rows 11, 26, 32, 47, 53, 68, 71, 88) attention layer 2 copies row 29 (which has high contribution from row 30) into a bunch of rows, including 26, 11, 32, 47, 53, 68, 71, 88, due to row 29 having high contribution from 29 and row x has high contribution from the token at x+1 where x is the dst row. so attention layers 2 and 3 collectively copied the contribution from token at position 30 (from row 29; which corresponds to the edge 1 -> 14) into row 14 (which corresponds to the edge 6 -> 4). so attention layers 2 and 3 are collectively performing a single forwards step.
+
+ -> it may become clearer by focusing the analysis on specific contributions, one at a time.
 
 
 (interestingly, if we change the input into:
@@ -961,3 +966,22 @@ layer 4,
   reachable_distance=+3 gets 80% (2% true positive rate, 99% true negative rate)
 layer 5,
   reachable_distance=+3 gets 81% (0% true positive rate, 100% true negative rate)
+
+
+
+
+
+Gameplan for new analysis method:
+
+ 1. first, for a given input and specific output representation (a n x d matrix; which contains all zeros except for a 1 in the output prediction in the last row), we need to reconstruct the attention copy tree: for each layer, how much does the input contribute to the final output prediction? and where does this contribution come from (from which rows does the previous attention layer copy this contribution)?
+
+ 2. explain the attention copies
+
+if we have a set of contribution vectors written as rows in the matrix C (which has dimension m x d, where m is the number of contributors), and we have some representation vector r, how do we find the linear combination of the rows of C that equal r? that is, what is the value of a such that a*C = r? but how is this actually useful? for a dot product in the attention mechanism, we compute: r_dst * A * r_src^T where r is the input representation to the attention layer (after layer norm). we can decompose r_dst in terms of the contributions C at the input of this operation, and similarly decompose r_dst * A to see how the A matrix has transformed the representation of r_dst.
+
+layer 0 copies the target vertex of each edge into the source vertex. it does so by looking at the position encodings: each position that corresponds to the position of a source vertex will copy from the position that is 1 greater.
+
+layer 1 performs a token matching step. all source vertices will copy from themselves.
+
+layer 2 is performing an inverse backwards step, copying the representation of 11 to essentially all other tokens except the token at position 23, which corresponds to the edge 17 -> 9. this operation does not seem to be uniform at all positions (e.g. it does this inverse backwards step at positions 11, 14, and 20, but not 17).
+  -> but performing the contribution analysis here, we find that the most significant contributors to the negative dot product sum between 23 and 11 (corresponding to the low attention weight from 11 to 23) is due to the token embedding, and not the position embedding. how is the token embedding storing information about the position embedding here?
