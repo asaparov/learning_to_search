@@ -966,3 +966,22 @@ layer 4,
   reachable_distance=+3 gets 80% (2% true positive rate, 99% true negative rate)
 layer 5,
   reachable_distance=+3 gets 81% (0% true positive rate, 100% true negative rate)
+
+
+
+
+
+Gameplan for new analysis method:
+
+ 1. first, for a given input and specific output representation (a n x d matrix; which contains all zeros except for a 1 in the output prediction in the last row), we need to reconstruct the attention copy tree: for each layer, how much does the input contribute to the final output prediction? and where does this contribution come from (from which rows does the previous attention layer copy this contribution)?
+
+ 2. explain the attention copies
+
+if we have a set of contribution vectors written as rows in the matrix C (which has dimension m x d, where m is the number of contributors), and we have some representation vector r, how do we find the linear combination of the rows of C that equal r? that is, what is the value of a such that a*C = r? but how is this actually useful? for a dot product in the attention mechanism, we compute: r_dst * A * r_src^T where r is the input representation to the attention layer (after layer norm). we can decompose r_dst in terms of the contributions C at the input of this operation, and similarly decompose r_dst * A to see how the A matrix has transformed the representation of r_dst.
+
+layer 0 copies the target vertex of each edge into the source vertex. it does so by looking at the position encodings: each position that corresponds to the position of a source vertex will copy from the position that is 1 greater.
+
+layer 1 performs a token matching step. all source vertices will copy from themselves.
+
+layer 2 is performing an inverse backwards step, copying the representation of 11 to essentially all other tokens except the token at position 23, which corresponds to the edge 17 -> 9. this operation does not seem to be uniform at all positions (e.g. it does this inverse backwards step at positions 11, 14, and 20, but not 17).
+  -> but performing the contribution analysis here, we find that the most significant contributors to the negative dot product sum between 23 and 11 (corresponding to the low attention weight from 11 to 23) is due to the token embedding, and not the position embedding. how is the token embedding storing information about the position embedding here?
