@@ -529,6 +529,7 @@ class TransformerTracer:
 			attn_out_representations = []
 			bias_contribution = torch.zeros(representation[0].shape)
 			bias_representations = [bias_contribution.clone().detach()]
+			ff_bias_representations = []
 			for i in range(start_layer, end_layer + 1):
 				layer_norm_matrix = self.model.transformers[i].ln_attn.weight.unsqueeze(0).repeat((n,1)) / torch.sqrt(torch.var(layer_inputs[i], dim=1, correction=0) + self.model.transformers[i].ln_attn.eps).unsqueeze(1).repeat((1,d))
 				layer_norm_bias = -torch.mean(layer_inputs[i], dim=1).unsqueeze(1) * layer_norm_matrix + self.model.transformers[i].ln_attn.bias
@@ -545,6 +546,7 @@ class TransformerTracer:
 				bias_contribution += self.model.transformers[i].attn.linear.bias.unsqueeze(0).repeat((n,1))
 
 				ff_representations.append(representation.clone().detach())
+				ff_bias_representations.append(bias_contribution.clone().detach())
 
 				if self.model.transformers[i].ff:
 					layer_norm_matrix = self.model.transformers[i].ln_ff.weight.unsqueeze(0).repeat((n,1)) / torch.sqrt(torch.var(ff_inputs[i], dim=1, correction=0) + self.model.transformers[i].ln_ff.eps).unsqueeze(1).repeat((1,d))
@@ -561,7 +563,7 @@ class TransformerTracer:
 				representations.append(representation.clone().detach())
 				bias_representations.append(bias_contribution.clone().detach())
 
-			return attn_representations, attn_out_representations, ff_representations, representations, bias_representations
+			return attn_representations, attn_out_representations, ff_representations, representations, bias_representations, ff_bias_representations
 
 		def check_copyr(i, dst, src, attn_inputs, attn_matrices, attn_representations):
 			attn_input = attn_inputs[i]
@@ -783,7 +785,7 @@ class TransformerTracer:
 				representation = torch.zeros((n,n,d))
 				for j in range(n):
 					representation[j,j,:] = layer_inputs[i][j,:]
-				attn_representations, _, _, representations, bias_representations = trace_activation_forward(representation, i, target_layer, layer_inputs, ff_inputs)
+				attn_representations, _, _, representations, bias_representations, _ = trace_activation_forward(representation, i, target_layer, layer_inputs, ff_inputs)
 				contribution_list.append((attn_representations, representations, bias_representations))
 
 			if output_type == 'prediction':
@@ -852,8 +854,8 @@ class TransformerTracer:
 		for i in range(n):
 			representation[i,i,input[i]] = 1.0
 			representation[n+i,i,d-n+i] = 1.0
-		attn_representations, attn_out_representations, ff_representations, representations, bias_representations = trace_activation_forward(representation, 0, len(self.model.transformers) - 1, layer_inputs, ff_inputs)
-		other_attn_representations, other_attn_out_representations, other_ff_representations, other_representations, other_bias_representations = trace_activation_forward(representation, 0, len(self.model.transformers) - 1, other_layer_inputs, other_ff_inputs)
+		attn_representations, attn_out_representations, ff_representations, representations, bias_representations, ff_bias_representations = trace_activation_forward(representation, 0, len(self.model.transformers) - 1, layer_inputs, ff_inputs)
+		other_attn_representations, other_attn_out_representations, other_ff_representations, other_representations, other_bias_representations, other_ff_bias_representations = trace_activation_forward(representation, 0, len(self.model.transformers) - 1, other_layer_inputs, other_ff_inputs)
 		prediction_index = int(torch.argmax(torch.linalg.vector_norm(representations[-1][:,:,:], dim=-1)[:n,n-1]))
 		assert input[prediction_index] == prediction
 		contributions_to_search = []
