@@ -536,6 +536,9 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 			reserved_inputs.add(tuple([x for x in inputs[i,:] if x != PADDING_TOKEN]))
 		if lookahead == None:
 			eval_inputs, eval_outputs = inputs, outputs
+	if BATCH_SIZE < eval_inputs.shape[0]:
+		eval_inputs = eval_inputs[:BATCH_SIZE,:]
+		eval_outputs = eval_outputs[:BATCH_SIZE]
 
 	train_filename = 'train{}_inputsize{}_maxlookahead{}_{}seed{}.pkl'.format(dataset_size, max_input_size, max_lookahead, 'padded_' if add_padding else '', seed_value)
 	if dataset_size != -1:

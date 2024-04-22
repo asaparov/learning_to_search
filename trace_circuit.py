@@ -104,7 +104,7 @@ class TransformerTracer:
 		self.algorithm = [AlgorithmStep() for i in range(len(self.model.transformers))]
 
 	def compute_attention(self, layer_index: int, attn_layer, x: torch.Tensor, mask: torch.Tensor):
-		n, d = x.shape[0], x.shape[1]
+		n, d = x.shape[-2], x.shape[-1]
 		k_params = {k:v for k,v in attn_layer.proj_k.named_parameters()}
 		q_params = {k:v for k,v in attn_layer.proj_q.named_parameters()}
 		P_k = k_params['weight']
@@ -112,7 +112,7 @@ class TransformerTracer:
 		U_k = torch.cat((P_k,k_params['bias'].unsqueeze(1)),1)
 		U_q = torch.cat((P_q,q_params['bias'].unsqueeze(1)),1)
 		A = torch.matmul(U_q.transpose(-2,-1),U_k)
-		x_prime = torch.cat((x, torch.ones((n,1))), 1)
+		x_prime = torch.cat((x, torch.ones(x.shape[:-1] + (1,))), -1)
 		QK = torch.matmul(torch.matmul(x_prime, A), x_prime.transpose(-2,-1)) / math.sqrt(d)
 		attn_pre_softmax = QK + mask.type_as(QK) * QK.new_tensor(-1e4)
 		attn = attn_layer.attn.dropout(attn_pre_softmax.softmax(-1))
@@ -128,7 +128,7 @@ class TransformerTracer:
 			out = new_x
 		return out, attn_pre_softmax, attn, v, new_x, A
 
-	def forward(self, x: torch.Tensor, mask: torch.Tensor, start_layer: int, start_at_ff: bool, perturbations):
+	def forward(self, x: torch.Tensor, mask: torch.Tensor, start_layer: int, start_at_ff: bool, end_layer: int, perturbations):
 		# Apply transformer layers sequentially.
 		layer_inputs = [None] * start_layer
 		attn_inputs = [None] * start_layer
@@ -141,7 +141,7 @@ class TransformerTracer:
 		ff_inputs = [None] * start_layer
 		ff_parameters = [None] * start_layer
 		current_layer = start_layer
-		for transformer in self.model.transformers[start_layer:]:
+		for transformer in self.model.transformers[start_layer:end_layer+1]:
 			# Layer normalizations are performed before the layers respectively.
 			if perturbations != None:
 				for (perturb_layer, perturb_index, perturb_vec) in perturbations:
@@ -278,7 +278,7 @@ class TransformerTracer:
 		if len(x.shape) == 2:
 			pos = self.model.positional_embedding
 		else:
-			pos = self.model.positional_embedding.unsqueeze(0).expand(n, -1, -1)
+			pos = self.model.positional_embedding.unsqueeze(0).expand(x.shape[0], -1, -1)
 		x = torch.cat((x, pos), -1)
 		x = self.model.dropout_embedding(x)
 		d = x.shape[1]
@@ -289,13 +289,13 @@ class TransformerTracer:
 		if len(other_x.shape) == 2:
 			pos = self.model.positional_embedding
 		else:
-			pos = self.model.positional_embedding.unsqueeze(0).expand(n, -1, -1)
+			pos = self.model.positional_embedding.unsqueeze(0).expand(other_x.shape[0], -1, -1)
 		other_x = torch.cat((other_x, pos), -1)
 		other_x = self.model.dropout_embedding(other_x)
 
-		other_layer_inputs, other_attn_inputs, other_attn_pre_softmax, other_attn_matrices, other_v_outputs, other_attn_linear_inputs, other_attn_outputs, other_A_matrices, other_ff_inputs, other_ff_parameters, other_prediction = self.forward(other_x, mask, 0, False, None)
+		other_layer_inputs, other_attn_inputs, other_attn_pre_softmax, other_attn_matrices, other_v_outputs, other_attn_linear_inputs, other_attn_outputs, other_A_matrices, other_ff_inputs, other_ff_parameters, other_prediction = self.forward(other_x, mask, 0, False, len(self.model.transformers)-1, None)
 
-		layer_inputs, attn_inputs, attn_pre_softmax, attn_matrices, v_outputs, attn_linear_inputs, attn_outputs, A_matrices, ff_inputs, ff_parameters, prediction = self.forward(x, mask, 0, False, None)
+		layer_inputs, attn_inputs, attn_pre_softmax, attn_matrices, v_outputs, attn_linear_inputs, attn_outputs, A_matrices, ff_inputs, ff_parameters, prediction = self.forward(x, mask, 0, False, len(self.model.transformers)-1, None)
 		#[(3,65,other_layer_inputs[3][65,:]),(3,68,other_layer_inputs[3][68,:])]
 		#[(4,23,other_layer_inputs[4][23,:]),(4,20,other_layer_inputs[4][20,:])]
 		#[(5,89,other_layer_inputs[5][89,:])]
@@ -843,6 +843,138 @@ class TransformerTracer:
 							print("  Attention layer {} copies contribution from row {} to row {}. (contribution: {:.2f})".format(i, next_row, row, products[next_row]/np.sum(np.maximum(products,0))))
 
 				current_rows = next_rows
+
+		def activation_path_attn(i, dst, src):
+			A = torch.matmul(self.model.transformers[i].attn.proj_q.weight.T, self.model.transformers[i].attn.proj_k.weight)
+			old_product = torch.dot(torch.matmul(attn_inputs[i][dst,:], A), attn_inputs[i][src,:])
+
+			# create perturbed inputs where each input swaps the position of one edge
+			edge_indices = [i + 1 for i in range(len(input)) if input[i] == EDGE_PREFIX_TOKEN]
+			'''other_inputs = input.repeat((len(edge_indices), 1))
+			for j in range(len(edge_indices)):
+				if j != len(edge_indices) - 1:
+					# swap the current edge with the last edge
+					other_inputs[j,edge_indices[j]] = input[edge_indices[-1]]
+					other_inputs[j,edge_indices[j]+1] = input[edge_indices[-1]+1]
+					other_inputs[j,edge_indices[-1]] = input[edge_indices[j]]
+					other_inputs[j,edge_indices[-1]+1] = input[edge_indices[j]+1]
+				else:
+					# swap the current edge with the 2nd to last edge
+					other_inputs[j,edge_indices[j]] = input[edge_indices[-2]]
+					other_inputs[j,edge_indices[j]+1] = input[edge_indices[-2]+1]
+					other_inputs[j,edge_indices[-2]] = input[edge_indices[j]]
+					other_inputs[j,edge_indices[-2]+1] = input[edge_indices[j]+1]'''
+
+			# create perturbed inputs where each input swaps the position of one token
+			last_edge_index = edge_indices[-1]
+			other_inputs = input.repeat((n,1))
+			'''for j in range(n):
+				if input[j] in (PADDING_TOKEN, QUERY_PREFIX_TOKEN, PATH_PREFIX_TOKEN):
+					continue
+				if j < last_edge_index or j > last_edge_index + 2:
+					src_edge_index = last_edge_index
+				else:
+					src_edge_index = edge_indices[-2]
+				offset = (src_edge_index % 3) - (j % 3)
+				if offset > 1:
+					offset -= 3
+				other_inputs[j,j] = input[src_edge_index - offset]
+				other_inputs[j,src_edge_index - offset] = input[j]'''
+
+			# perform forward pass on other_inputs
+			other_inputs = self.model.token_embedding[other_inputs]
+			if len(other_inputs.shape) == 2:
+				pos = self.model.positional_embedding
+			else:
+				pos = self.model.positional_embedding.unsqueeze(0).expand(other_inputs.shape[0], -1, -1)
+			other_inputs = torch.cat((other_inputs, pos), -1)
+			other_inputs = self.model.dropout_embedding(other_inputs)
+
+			# perturb the position embeddings
+			for j in range(n):
+				if input[j] in (PADDING_TOKEN, QUERY_PREFIX_TOKEN, PATH_PREFIX_TOKEN):
+					continue
+				if j < last_edge_index or j > last_edge_index + 2:
+					src_edge_index = last_edge_index
+				else:
+					src_edge_index = edge_indices[-2]
+				offset = (src_edge_index % 3) - (j % 3)
+				if offset > 1:
+					offset -= 3
+				temp = other_inputs[j,j,d-n:].clone().detach()
+				other_inputs[j,j,d-n:] = other_inputs[j,src_edge_index - offset,d-n:].clone().detach()
+				other_inputs[j,src_edge_index - offset,d-n:] = temp
+
+			perturb_layer_inputs, perturb_attn_inputs, perturb_attn_pre_softmax, perturb_attn_matrices, perturb_v_outputs, perturb_attn_linear_inputs, perturb_attn_outputs, perturb_A_matrices, perturb_ff_inputs, perturb_ff_parameters, perturb_prediction = self.forward(other_inputs, mask, 0, False, i, None)
+
+			# try computing the attention dot product but with perturbed dst embeddings
+			new_src_products = torch.matmul(torch.matmul(attn_inputs[i][dst,:], A), perturb_attn_inputs[i][:,src,:].T)
+			new_dst_products = torch.matmul(torch.matmul(perturb_attn_inputs[i][:,dst,:], A), attn_inputs[i][src,:])
+
+			# TODO: this assumes this is a positive copy; implement corresponding logic for negative copies
+			sorted_src_products = torch.sort(torch.clamp(new_src_products, max=old_product))
+			sorted_dst_products = torch.sort(torch.clamp(new_dst_products, max=old_product))
+			src_gaps = torch.nonzero(sorted_src_products.values[1:] - sorted_src_products.values[:-1] > 0.1 * torch.abs(old_product))
+			dst_gaps = torch.nonzero(sorted_dst_products.values[1:] - sorted_dst_products.values[:-1] > 0.1 * torch.abs(old_product))
+			print('Layer {} copies token at {} into token at {} with weight {}.'.format(i, src, dst, attn_matrices[i][dst,src]))
+			if len(src_gaps) == 0:
+				# TODO: all `new_src_products` are very close to old_product
+				import pdb; pdb.set_trace()
+				raise Exception('Not implemented.')
+			else:
+				src_dependencies = sorted_src_products.indices[:src_gaps[-1]+1]
+				print('  src dependencies: ' + ', '.join([get_token_value(dep) for dep in src_dependencies]))
+			if len(dst_gaps) == 0:
+				# TODO: all `new_dst_products` are very close to old_product
+				import pdb; pdb.set_trace()
+				raise Exception('Not implemented.')
+			else:
+				dst_dependencies = sorted_dst_products.indices[:dst_gaps[-1]+1]
+				print('  dst dependencies: ' + ', '.join([get_token_value(dep) for dep in dst_dependencies]))
+
+			if i > 1:
+				for dep in src_dependencies:
+					print('src dependency on ' + get_token_value(dep) + ' comes from:')
+					queue = [(src,i-1)]
+					while len(queue) != 0:
+						(row,layer) = queue[0]
+						del queue[0]
+						weighted_deviations = torch.sum(torch.abs(perturb_attn_inputs[layer][dep,:,:] - attn_inputs[layer][:,:]), dim=-1) * attn_matrices[layer][row,:]
+						prev_rows = torch.nonzero(weighted_deviations > 0.4 * torch.max(weighted_deviations)).squeeze().tolist()
+						if type(prev_rows) == int:
+							prev_rows = [prev_rows]
+						print('  Layer {} copies rows {} into row {}.'.format(layer, prev_rows, row))
+						if layer == 0:
+							continue
+						for prev_row in prev_rows:
+							queue.append((prev_row,layer-1))
+				for dep in dst_dependencies:
+					print('dst dependency on ' + get_token_value(dep) + ' comes from:')
+					queue = [(dst,i-1)]
+					while len(queue) != 0:
+						(row,layer) = queue[0]
+						del queue[0]
+						weighted_deviations = torch.sum(torch.abs(perturb_attn_inputs[layer][dep,:,:] - attn_inputs[layer][:,:]), dim=-1) * attn_matrices[layer][row,:]
+						prev_rows = torch.nonzero(weighted_deviations > 0.4 * torch.max(weighted_deviations)).squeeze().tolist()
+						if type(prev_rows) == int:
+							prev_rows = [prev_rows]
+						print('  Layer {} copies rows {} into row {}.'.format(layer, prev_rows, row))
+						if layer == 0:
+							continue
+						for prev_row in prev_rows:
+							queue.append((prev_row,layer-1))
+
+			import pdb; pdb.set_trace()
+
+		activation_path_attn(5, 89, 35)
+		#activation_path_attn(4, 89, 23)
+		#activation_path_attn(4, 35, 14)
+		#activation_path_attn(4, 35, 41)
+		#activation_path_attn(3, 23, 11)
+		#activation_path_attn(3, 23, 23)
+		#activation_path_attn(3, 23, 32)
+		#activation_path_attn(3, 23, 88)
+		#activation_path_attn(0, 11, 12)
 
 		#trace_activation(5, 35, [(40, attn_inputs[5][35,40]), (125, attn_inputs[5][35,125]), (128, attn_inputs[5][35,128])])
 		#trace_representation(len(self.model.transformers)-1, n-1, 'prediction')
