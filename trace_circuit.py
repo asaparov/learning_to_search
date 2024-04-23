@@ -855,37 +855,43 @@ class TransformerTracer:
 			new_src_products = torch.matmul(torch.matmul(attn_inputs[i][dst,:], A), perturb_attn_inputs[i][:,src,:].T)
 			new_dst_products = torch.matmul(torch.matmul(perturb_attn_inputs[i][:,dst,:], A), attn_inputs[i][src,:])
 
-			# TODO: this assumes this is a positive copy; implement corresponding logic for negative copies
-			sorted_src_products = torch.sort(torch.clamp(new_src_products, max=old_product))
-			sorted_dst_products = torch.sort(torch.clamp(new_dst_products, max=old_product))
-			src_gaps = torch.nonzero(sorted_src_products.values[1:] - sorted_src_products.values[:-1] > 0.05 * torch.abs(old_product))
-			dst_gaps = torch.nonzero(sorted_dst_products.values[1:] - sorted_dst_products.values[:-1] > 0.05 * torch.abs(old_product))
+			is_negative_copy = (attn_matrices[i][dst,src] < 0.01)
+			if is_negative_copy:
+				sorted_src_products = torch.sort(torch.clamp(new_src_products, min=old_product), descending=True)
+				sorted_dst_products = torch.sort(torch.clamp(new_dst_products, min=old_product), descending=True)
+				src_gaps = torch.nonzero(sorted_src_products.values[1:] - sorted_src_products.values[:-1] < -0.05 * torch.abs(old_product))
+				dst_gaps = torch.nonzero(sorted_dst_products.values[1:] - sorted_dst_products.values[:-1] < -0.05 * torch.abs(old_product))
+			else:
+				sorted_src_products = torch.sort(torch.clamp(new_src_products, max=old_product))
+				sorted_dst_products = torch.sort(torch.clamp(new_dst_products, max=old_product))
+				src_gaps = torch.nonzero(sorted_src_products.values[1:] - sorted_src_products.values[:-1] > 0.05 * torch.abs(old_product))
+				dst_gaps = torch.nonzero(sorted_dst_products.values[1:] - sorted_dst_products.values[:-1] > 0.05 * torch.abs(old_product))
 			print('Layer {} copies token at {} into token at {} with weight {}.'.format(i, src, dst, attn_matrices[i][dst,src]))
 			if len(src_gaps) == 0:
-				# TODO: all `new_src_products` are very close to old_product
-				import pdb; pdb.set_trace()
-				raise Exception('Not implemented.')
+				print('  src dependencies: []')
+				src_dependencies = []
 			else:
 				src_dependencies = sorted_src_products.indices[:src_gaps[-1]+1]
 				print('  src dependencies: ' + ', '.join([get_token_value(dep) for dep in src_dependencies]))
 			if len(dst_gaps) == 0:
-				# TODO: all `new_dst_products` are very close to old_product
-				import pdb; pdb.set_trace()
-				raise Exception('Not implemented.')
+				print('  dst dependencies: []')
+				dst_dependencies = []
 			else:
 				dst_dependencies = sorted_dst_products.indices[:dst_gaps[-1]+1]
 				print('  dst dependencies: ' + ', '.join([get_token_value(dep) for dep in dst_dependencies]))
 
 			for src_dep in src_dependencies:
 				for dst_dep in dst_dependencies:
-					#if src_dep < n - 1 and input[src_dep+1] == input[dst_dep]:
-					#	pass
+					if src_dep >= n and dst_dep >= n and src_dep-n < n-1 and input[src_dep-n+1] == input[dst_dep-n]:
+						print('This is a forwards step. ({} and {})'.format(get_token_value(src_dep), get_token_value(dst_dep)))
+					if src_dep >= n and dst_dep >= n and dst_dep-n < n-1 and input[dst_dep-n+1] == input[src_dep-n]:
+						print('This is a backwards step. ({} and {})'.format(get_token_value(src_dep), get_token_value(dst_dep)))
 					if src_dep < n and dst_dep < n and src_dep == dst_dep:
-						print('This is a token matching step.')
+						print('This is a token matching step. ({})'.format(get_token_value(src_dep)))
 
 			return src_dependencies, dst_dependencies
 
-		def activation_path_attn(i, dst, src):
+		def activation_patch_attn(i, dst, src):
 			# create perturbed inputs where each input swaps the position of one edge
 			edge_indices = [i + 1 for i in range(len(input)) if input[i] == EDGE_PREFIX_TOKEN]
 			other_inputs = input.repeat((len(edge_indices), 1))
@@ -920,23 +926,27 @@ class TransformerTracer:
 			new_src_products = torch.matmul(torch.matmul(attn_inputs[i][dst,:], A), perturb_attn_inputs[i][:,src,:].T)
 			new_dst_products = torch.matmul(torch.matmul(perturb_attn_inputs[i][:,dst,:], A), attn_inputs[i][src,:])
 
-			# TODO: this assumes this is a positive copy; implement corresponding logic for negative copies
-			sorted_src_products = torch.sort(torch.clamp(new_src_products, max=old_product))
-			sorted_dst_products = torch.sort(torch.clamp(new_dst_products, max=old_product))
-			src_gaps = torch.nonzero(sorted_src_products.values[1:] - sorted_src_products.values[:-1] > 0.02 * torch.abs(old_product))
-			dst_gaps = torch.nonzero(sorted_dst_products.values[1:] - sorted_dst_products.values[:-1] > 0.02 * torch.abs(old_product))
+			is_negative_copy = (attn_matrices[i][dst,src] < 0.01)
+			if is_negative_copy:
+				sorted_src_products = torch.sort(torch.clamp(new_src_products, min=old_product), descending=True)
+				sorted_dst_products = torch.sort(torch.clamp(new_dst_products, min=old_product), descending=True)
+				src_gaps = torch.nonzero(sorted_src_products.values[1:] - sorted_src_products.values[:-1] < -0.02 * torch.abs(old_product))
+				dst_gaps = torch.nonzero(sorted_dst_products.values[1:] - sorted_dst_products.values[:-1] < -0.02 * torch.abs(old_product))
+			else:
+				sorted_src_products = torch.sort(torch.clamp(new_src_products, max=old_product))
+				sorted_dst_products = torch.sort(torch.clamp(new_dst_products, max=old_product))
+				src_gaps = torch.nonzero(sorted_src_products.values[1:] - sorted_src_products.values[:-1] > 0.02 * torch.abs(old_product))
+				dst_gaps = torch.nonzero(sorted_dst_products.values[1:] - sorted_dst_products.values[:-1] > 0.02 * torch.abs(old_product))
 			print('Layer {} copies token at {} into token at {} with weight {}.'.format(i, src, dst, attn_matrices[i][dst,src]))
 			if len(src_gaps) == 0:
-				# TODO: all `new_src_products` are very close to old_product
-				import pdb; pdb.set_trace()
-				raise Exception('Not implemented.')
+				print('  src dependencies: []')
+				src_dependencies = []
 			else:
 				src_dependencies = sorted_src_products.indices[:src_gaps[-1]+1]
 				print('  src dependencies: ' + ', '.join([get_token_value(edge_indices[dep]+n) for dep in src_dependencies]))
 			if len(dst_gaps) == 0:
-				# TODO: all `new_dst_products` are very close to old_product
-				import pdb; pdb.set_trace()
-				raise Exception('Not implemented.')
+				print('  dst dependencies: []')
+				dst_dependencies = []
 			else:
 				dst_dependencies = sorted_dst_products.indices[:dst_gaps[-1]+1]
 				print('  dst dependencies: ' + ', '.join([get_token_value(edge_indices[dep]+n) for dep in dst_dependencies]))
@@ -1032,16 +1042,17 @@ class TransformerTracer:
 
 			import pdb; pdb.set_trace()
 
-		#activation_path_attn(5, 89, 35)
-		#activation_path_attn(4, 89, 23)
-		activation_path_attn(4, 35, 14)
-		#activation_path_attn(4, 35, 41)
-		#activation_path_attn(3, 23, 11)
-		#activation_path_attn(3, 23, 23)
-		#activation_path_attn(3, 23, 32)
-		#activation_path_attn(3, 23, 88)
-		#activation_path_attn(1, 11, 11)
-		#activation_path_attn(0, 11, 12)
+		#activation_patch_attn(5, 89, 35)
+		#activation_patch_attn(4, 89, 23)
+		#activation_patch_attn(4, 35, 14)
+		#activation_patch_attn(4, 35, 41)
+		#activation_patch_attn(3, 23, 11)
+		#activation_patch_attn(3, 23, 23)
+		#activation_patch_attn(3, 23, 32)
+		#activation_patch_attn(3, 23, 88)
+		activation_patch_attn(2, 23, 11)
+		#activation_patch_attn(1, 11, 11)
+		#activation_patch_attn(0, 11, 12)
 
 		#trace_activation(5, 35, [(40, attn_inputs[5][35,40]), (125, attn_inputs[5][35,125]), (128, attn_inputs[5][35,128])])
 		#trace_representation(len(self.model.transformers)-1, n-1, 'prediction')
