@@ -591,7 +591,11 @@ class TransformerTracer:
 		GREEN = '\033[92m'
 		END = '\033[0m'
 
-		def get_token_value(position):
+		def get_token_value(token):
+			if token < n:
+				return BOLD + GREEN + token_to_str(input[token]) + END
+
+			position = token - n
 			if position % 3 == 2:
 				out = token_to_str(input[position-1]) + ' '
 				out += BOLD + BLUE + token_to_str(input[position]) + END + ' '
@@ -844,13 +848,47 @@ class TransformerTracer:
 
 				current_rows = next_rows
 
-		def activation_path_attn(i, dst, src):
-			A = torch.matmul(self.model.transformers[i].attn.proj_q.weight.T, self.model.transformers[i].attn.proj_k.weight)
+		def classify_attn_op(i, dst, src, perturb_attn_inputs):
+			# try computing the attention dot product but with perturbed dst embeddings
+			A = A_matrices[i][:-1,:-1]
 			old_product = torch.dot(torch.matmul(attn_inputs[i][dst,:], A), attn_inputs[i][src,:])
+			new_src_products = torch.matmul(torch.matmul(attn_inputs[i][dst,:], A), perturb_attn_inputs[i][:,src,:].T)
+			new_dst_products = torch.matmul(torch.matmul(perturb_attn_inputs[i][:,dst,:], A), attn_inputs[i][src,:])
 
+			# TODO: this assumes this is a positive copy; implement corresponding logic for negative copies
+			sorted_src_products = torch.sort(torch.clamp(new_src_products, max=old_product))
+			sorted_dst_products = torch.sort(torch.clamp(new_dst_products, max=old_product))
+			src_gaps = torch.nonzero(sorted_src_products.values[1:] - sorted_src_products.values[:-1] > 0.05 * torch.abs(old_product))
+			dst_gaps = torch.nonzero(sorted_dst_products.values[1:] - sorted_dst_products.values[:-1] > 0.05 * torch.abs(old_product))
+			print('Layer {} copies token at {} into token at {} with weight {}.'.format(i, src, dst, attn_matrices[i][dst,src]))
+			if len(src_gaps) == 0:
+				# TODO: all `new_src_products` are very close to old_product
+				import pdb; pdb.set_trace()
+				raise Exception('Not implemented.')
+			else:
+				src_dependencies = sorted_src_products.indices[:src_gaps[-1]+1]
+				print('  src dependencies: ' + ', '.join([get_token_value(dep) for dep in src_dependencies]))
+			if len(dst_gaps) == 0:
+				# TODO: all `new_dst_products` are very close to old_product
+				import pdb; pdb.set_trace()
+				raise Exception('Not implemented.')
+			else:
+				dst_dependencies = sorted_dst_products.indices[:dst_gaps[-1]+1]
+				print('  dst dependencies: ' + ', '.join([get_token_value(dep) for dep in dst_dependencies]))
+
+			for src_dep in src_dependencies:
+				for dst_dep in dst_dependencies:
+					#if src_dep < n - 1 and input[src_dep+1] == input[dst_dep]:
+					#	pass
+					if src_dep < n and dst_dep < n and src_dep == dst_dep:
+						print('This is a token matching step.')
+
+			return src_dependencies, dst_dependencies
+
+		def activation_path_attn(i, dst, src):
 			# create perturbed inputs where each input swaps the position of one edge
 			edge_indices = [i + 1 for i in range(len(input)) if input[i] == EDGE_PREFIX_TOKEN]
-			'''other_inputs = input.repeat((len(edge_indices), 1))
+			other_inputs = input.repeat((len(edge_indices), 1))
 			for j in range(len(edge_indices)):
 				if j != len(edge_indices) - 1:
 					# swap the current edge with the last edge
@@ -863,11 +901,51 @@ class TransformerTracer:
 					other_inputs[j,edge_indices[j]] = input[edge_indices[-2]]
 					other_inputs[j,edge_indices[j]+1] = input[edge_indices[-2]+1]
 					other_inputs[j,edge_indices[-2]] = input[edge_indices[j]]
-					other_inputs[j,edge_indices[-2]+1] = input[edge_indices[j]+1]'''
+					other_inputs[j,edge_indices[-2]+1] = input[edge_indices[j]+1]
+
+			# perform forward pass on other_inputs
+			other_inputs = self.model.token_embedding[other_inputs]
+			if len(other_inputs.shape) == 2:
+				pos = self.model.positional_embedding
+			else:
+				pos = self.model.positional_embedding.unsqueeze(0).expand(other_inputs.shape[0], -1, -1)
+			other_inputs = torch.cat((other_inputs, pos), -1)
+			other_inputs = self.model.dropout_embedding(other_inputs)
+
+			perturb_layer_inputs, perturb_attn_inputs, perturb_attn_pre_softmax, perturb_attn_matrices, perturb_v_outputs, perturb_attn_linear_inputs, perturb_attn_outputs, perturb_A_matrices, perturb_ff_inputs, perturb_ff_parameters, perturb_prediction = self.forward(other_inputs, mask, 0, False, i, None)
+
+			# try computing the attention dot product but with perturbed dst embeddings
+			A = A_matrices[i][:-1,:-1]
+			old_product = torch.dot(torch.matmul(attn_inputs[i][dst,:], A), attn_inputs[i][src,:])
+			new_src_products = torch.matmul(torch.matmul(attn_inputs[i][dst,:], A), perturb_attn_inputs[i][:,src,:].T)
+			new_dst_products = torch.matmul(torch.matmul(perturb_attn_inputs[i][:,dst,:], A), attn_inputs[i][src,:])
+
+			# TODO: this assumes this is a positive copy; implement corresponding logic for negative copies
+			sorted_src_products = torch.sort(torch.clamp(new_src_products, max=old_product))
+			sorted_dst_products = torch.sort(torch.clamp(new_dst_products, max=old_product))
+			src_gaps = torch.nonzero(sorted_src_products.values[1:] - sorted_src_products.values[:-1] > 0.02 * torch.abs(old_product))
+			dst_gaps = torch.nonzero(sorted_dst_products.values[1:] - sorted_dst_products.values[:-1] > 0.02 * torch.abs(old_product))
+			print('Layer {} copies token at {} into token at {} with weight {}.'.format(i, src, dst, attn_matrices[i][dst,src]))
+			if len(src_gaps) == 0:
+				# TODO: all `new_src_products` are very close to old_product
+				import pdb; pdb.set_trace()
+				raise Exception('Not implemented.')
+			else:
+				src_dependencies = sorted_src_products.indices[:src_gaps[-1]+1]
+				print('  src dependencies: ' + ', '.join([get_token_value(edge_indices[dep]+n) for dep in src_dependencies]))
+			if len(dst_gaps) == 0:
+				# TODO: all `new_dst_products` are very close to old_product
+				import pdb; pdb.set_trace()
+				raise Exception('Not implemented.')
+			else:
+				dst_dependencies = sorted_dst_products.indices[:dst_gaps[-1]+1]
+				print('  dst dependencies: ' + ', '.join([get_token_value(edge_indices[dep]+n) for dep in dst_dependencies]))
+
+			import pdb; pdb.set_trace()
 
 			# create perturbed inputs where each input swaps the position of one token
 			last_edge_index = edge_indices[-1]
-			other_inputs = input.repeat((n,1))
+			other_inputs = input.repeat((2*n,1))
 			'''for j in range(n):
 				if input[j] in (PADDING_TOKEN, QUERY_PREFIX_TOKEN, PATH_PREFIX_TOKEN):
 					continue
@@ -901,48 +979,30 @@ class TransformerTracer:
 				offset = (src_edge_index % 3) - (j % 3)
 				if offset > 1:
 					offset -= 3
-				temp = other_inputs[j,j,d-n:].clone().detach()
-				other_inputs[j,j,d-n:] = other_inputs[j,src_edge_index - offset,d-n:].clone().detach()
-				other_inputs[j,src_edge_index - offset,d-n:] = temp
+				other_inputs[j,j,:d-n] = other_inputs[j,src_edge_index - offset,:d-n].clone().detach()
+				other_inputs[n+j,j,d-n:] = other_inputs[n+j,src_edge_index - offset,d-n:].clone().detach()
 
 			perturb_layer_inputs, perturb_attn_inputs, perturb_attn_pre_softmax, perturb_attn_matrices, perturb_v_outputs, perturb_attn_linear_inputs, perturb_attn_outputs, perturb_A_matrices, perturb_ff_inputs, perturb_ff_parameters, perturb_prediction = self.forward(other_inputs, mask, 0, False, i, None)
 
-			# try computing the attention dot product but with perturbed dst embeddings
-			new_src_products = torch.matmul(torch.matmul(attn_inputs[i][dst,:], A), perturb_attn_inputs[i][:,src,:].T)
-			new_dst_products = torch.matmul(torch.matmul(perturb_attn_inputs[i][:,dst,:], A), attn_inputs[i][src,:])
-
-			# TODO: this assumes this is a positive copy; implement corresponding logic for negative copies
-			sorted_src_products = torch.sort(torch.clamp(new_src_products, max=old_product))
-			sorted_dst_products = torch.sort(torch.clamp(new_dst_products, max=old_product))
-			src_gaps = torch.nonzero(sorted_src_products.values[1:] - sorted_src_products.values[:-1] > 0.1 * torch.abs(old_product))
-			dst_gaps = torch.nonzero(sorted_dst_products.values[1:] - sorted_dst_products.values[:-1] > 0.1 * torch.abs(old_product))
-			print('Layer {} copies token at {} into token at {} with weight {}.'.format(i, src, dst, attn_matrices[i][dst,src]))
-			if len(src_gaps) == 0:
-				# TODO: all `new_src_products` are very close to old_product
-				import pdb; pdb.set_trace()
-				raise Exception('Not implemented.')
-			else:
-				src_dependencies = sorted_src_products.indices[:src_gaps[-1]+1]
-				print('  src dependencies: ' + ', '.join([get_token_value(dep) for dep in src_dependencies]))
-			if len(dst_gaps) == 0:
-				# TODO: all `new_dst_products` are very close to old_product
-				import pdb; pdb.set_trace()
-				raise Exception('Not implemented.')
-			else:
-				dst_dependencies = sorted_dst_products.indices[:dst_gaps[-1]+1]
-				print('  dst dependencies: ' + ', '.join([get_token_value(dep) for dep in dst_dependencies]))
+			src_dependencies, dst_dependencies = classify_attn_op(i, dst, src, perturb_attn_inputs)
 
 			if i > 1:
 				for dep in src_dependencies:
 					print('src dependency on ' + get_token_value(dep) + ' comes from:')
 					queue = [(src,i-1)]
+					copies = []
 					while len(queue) != 0:
 						(row,layer) = queue[0]
 						del queue[0]
-						weighted_deviations = torch.sum(torch.abs(perturb_attn_inputs[layer][dep,:,:] - attn_inputs[layer][:,:]), dim=-1) * attn_matrices[layer][row,:]
+						abs_deviations = torch.sum(torch.abs(perturb_attn_inputs[layer][dep,:,:] - attn_inputs[layer][:,:]), dim=-1)
+						weighted_deviations = abs_deviations * attn_matrices[layer][row,:]
+						weighted_deviations[row] += abs_deviations[row]
 						prev_rows = torch.nonzero(weighted_deviations > 0.4 * torch.max(weighted_deviations)).squeeze().tolist()
 						if type(prev_rows) == int:
 							prev_rows = [prev_rows]
+						if (layer, prev_rows, row) in copies:
+							continue
+						copies.append((layer, prev_rows, row))
 						print('  Layer {} copies rows {} into row {}.'.format(layer, prev_rows, row))
 						if layer == 0:
 							continue
@@ -951,13 +1011,19 @@ class TransformerTracer:
 				for dep in dst_dependencies:
 					print('dst dependency on ' + get_token_value(dep) + ' comes from:')
 					queue = [(dst,i-1)]
+					copies = []
 					while len(queue) != 0:
 						(row,layer) = queue[0]
 						del queue[0]
-						weighted_deviations = torch.sum(torch.abs(perturb_attn_inputs[layer][dep,:,:] - attn_inputs[layer][:,:]), dim=-1) * attn_matrices[layer][row,:]
+						abs_deviations = torch.sum(torch.abs(perturb_attn_inputs[layer][dep,:,:] - attn_inputs[layer][:,:]), dim=-1)
+						weighted_deviations = abs_deviations * attn_matrices[layer][row,:]
+						weighted_deviations[row] += abs_deviations[row]
 						prev_rows = torch.nonzero(weighted_deviations > 0.4 * torch.max(weighted_deviations)).squeeze().tolist()
 						if type(prev_rows) == int:
 							prev_rows = [prev_rows]
+						if (layer, prev_rows, row) in copies:
+							continue
+						copies.append((layer, prev_rows, row))
 						print('  Layer {} copies rows {} into row {}.'.format(layer, prev_rows, row))
 						if layer == 0:
 							continue
@@ -966,14 +1032,15 @@ class TransformerTracer:
 
 			import pdb; pdb.set_trace()
 
-		activation_path_attn(5, 89, 35)
+		#activation_path_attn(5, 89, 35)
 		#activation_path_attn(4, 89, 23)
-		#activation_path_attn(4, 35, 14)
+		activation_path_attn(4, 35, 14)
 		#activation_path_attn(4, 35, 41)
 		#activation_path_attn(3, 23, 11)
 		#activation_path_attn(3, 23, 23)
 		#activation_path_attn(3, 23, 32)
 		#activation_path_attn(3, 23, 88)
+		#activation_path_attn(1, 11, 11)
 		#activation_path_attn(0, 11, 12)
 
 		#trace_activation(5, 35, [(40, attn_inputs[5][35,40]), (125, attn_inputs[5][35,125]), (128, attn_inputs[5][35,128])])
