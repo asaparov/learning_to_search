@@ -189,16 +189,13 @@ class TransformerTracer:
 		if self.model.ln_head:
 			x = self.model.ln_head(x)
 		if self.model.positional_embedding is not None:
-			if len(x.shape) == 2:
-				x = x[:,:-self.model.positional_embedding.shape[0]]
-			else:
-				x = x[:,:,:-self.model.positional_embedding.shape[0]]
+			x = x[...,:-self.model.positional_embedding.shape[0]]
 		if type(self.model.token_embedding) == TokenEmbedding:
 			x = self.model.token_embedding(x, transposed=True)
 		else:
 			x = torch.matmul(x, self.model.token_embedding.transpose(0, 1))
 
-		prediction = torch.argmax(x[-1,:token_dim]).tolist()
+		prediction = torch.argmax(x[...,-1,:token_dim], dim=-1).tolist()
 
 		return layer_inputs, attn_inputs, attn_pre_softmax, attn_matrices, v_outputs, attn_linear_inputs, attn_outputs, A_matrices, ff_inputs, ff_parameters, prediction
 
@@ -894,37 +891,36 @@ class TransformerTracer:
 		def activation_patch_attn(i, dst, src):
 			# create perturbed inputs where each input swaps the position of one edge
 			edge_indices = [i + 1 for i in range(len(input)) if input[i] == EDGE_PREFIX_TOKEN]
-			other_inputs = input.repeat((len(edge_indices), 1))
+			other_inputs = input.repeat((len(edge_indices),len(edge_indices)-1, 1))
 			for j in range(len(edge_indices)):
-				if j != len(edge_indices) - 1:
+				for k in range(len(edge_indices)):
+					if j == k:
+						continue
 					# swap the current edge with the last edge
-					other_inputs[j,edge_indices[j]] = input[edge_indices[-1]]
-					other_inputs[j,edge_indices[j]+1] = input[edge_indices[-1]+1]
-					other_inputs[j,edge_indices[-1]] = input[edge_indices[j]]
-					other_inputs[j,edge_indices[-1]+1] = input[edge_indices[j]+1]
-				else:
-					# swap the current edge with the 2nd to last edge
-					other_inputs[j,edge_indices[j]] = input[edge_indices[-2]]
-					other_inputs[j,edge_indices[j]+1] = input[edge_indices[-2]+1]
-					other_inputs[j,edge_indices[-2]] = input[edge_indices[j]]
-					other_inputs[j,edge_indices[-2]+1] = input[edge_indices[j]+1]
+					k_idx = (k if k < j else k - 1)
+					other_inputs[j,k_idx,edge_indices[j]] = input[edge_indices[k]]
+					other_inputs[j,k_idx,edge_indices[j]+1] = input[edge_indices[k]+1]
+					other_inputs[j,k_idx,edge_indices[k]] = input[edge_indices[j]]
+					other_inputs[j,k_idx,edge_indices[k]+1] = input[edge_indices[j]+1]
 
 			# perform forward pass on other_inputs
 			other_inputs = self.model.token_embedding[other_inputs]
 			if len(other_inputs.shape) == 2:
 				pos = self.model.positional_embedding
 			else:
-				pos = self.model.positional_embedding.unsqueeze(0).expand(other_inputs.shape[0], -1, -1)
+				pos = self.model.positional_embedding.unsqueeze(0).expand(other_inputs.shape[0:-2] + (-1,-1))
 			other_inputs = torch.cat((other_inputs, pos), -1)
 			other_inputs = self.model.dropout_embedding(other_inputs)
 
 			perturb_layer_inputs, perturb_attn_inputs, perturb_attn_pre_softmax, perturb_attn_matrices, perturb_v_outputs, perturb_attn_linear_inputs, perturb_attn_outputs, perturb_A_matrices, perturb_ff_inputs, perturb_ff_parameters, perturb_prediction = self.forward(other_inputs, mask, 0, False, i, None)
+			perturb_attn_inputs = [torch.mean(p, dim=1) for p in perturb_attn_inputs]
 
 			# try computing the attention dot product but with perturbed dst embeddings
 			A = A_matrices[i][:-1,:-1]
 			old_product = torch.dot(torch.matmul(attn_inputs[i][dst,:], A), attn_inputs[i][src,:])
 			new_src_products = torch.matmul(torch.matmul(attn_inputs[i][dst,:], A), perturb_attn_inputs[i][:,src,:].T)
 			new_dst_products = torch.matmul(torch.matmul(perturb_attn_inputs[i][:,dst,:], A), attn_inputs[i][src,:])
+			import pdb; pdb.set_trace()
 
 			is_negative_copy = (attn_matrices[i][dst,src] < 0.01)
 			if is_negative_copy:
@@ -1042,7 +1038,7 @@ class TransformerTracer:
 
 			import pdb; pdb.set_trace()
 
-		#activation_patch_attn(5, 89, 35)
+		activation_patch_attn(5, 89, 35)
 		#activation_patch_attn(4, 89, 23)
 		#activation_patch_attn(4, 35, 14)
 		#activation_patch_attn(4, 35, 41)
@@ -1050,7 +1046,7 @@ class TransformerTracer:
 		#activation_patch_attn(3, 23, 23)
 		#activation_patch_attn(3, 23, 32)
 		#activation_patch_attn(3, 23, 88)
-		activation_patch_attn(2, 23, 11)
+		#activation_patch_attn(2, 23, 11)
 		#activation_patch_attn(1, 11, 11)
 		#activation_patch_attn(0, 11, 12)
 
