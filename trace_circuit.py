@@ -891,17 +891,16 @@ class TransformerTracer:
 		def activation_patch_attn(i, dst, src):
 			# create perturbed inputs where each input swaps the position of one edge
 			edge_indices = [i + 1 for i in range(len(input)) if input[i] == EDGE_PREFIX_TOKEN]
-			other_inputs = input.repeat((len(edge_indices),len(edge_indices)-1, 1))
+			other_inputs = input.repeat((len(edge_indices), 1))
+			swap_edge_idx = len(edge_indices) - 2
 			for j in range(len(edge_indices)):
-				for k in range(len(edge_indices)):
-					if j == k:
-						continue
-					# swap the current edge with the last edge
-					k_idx = (k if k < j else k - 1)
-					other_inputs[j,k_idx,edge_indices[j]] = input[edge_indices[k]]
-					other_inputs[j,k_idx,edge_indices[j]+1] = input[edge_indices[k]+1]
-					other_inputs[j,k_idx,edge_indices[k]] = input[edge_indices[j]]
-					other_inputs[j,k_idx,edge_indices[k]+1] = input[edge_indices[j]+1]
+				if j == swap_edge_idx:
+					continue
+				# swap the current edge with the last edge
+				other_inputs[j,edge_indices[j]] = input[edge_indices[swap_edge_idx]]
+				other_inputs[j,edge_indices[j]+1] = input[edge_indices[swap_edge_idx]+1]
+				other_inputs[j,edge_indices[swap_edge_idx]] = input[edge_indices[j]]
+				other_inputs[j,edge_indices[swap_edge_idx]+1] = input[edge_indices[j]+1]
 
 			# perform forward pass on other_inputs
 			other_inputs = self.model.token_embedding[other_inputs]
@@ -913,7 +912,6 @@ class TransformerTracer:
 			other_inputs = self.model.dropout_embedding(other_inputs)
 
 			perturb_layer_inputs, perturb_attn_inputs, perturb_attn_pre_softmax, perturb_attn_matrices, perturb_v_outputs, perturb_attn_linear_inputs, perturb_attn_outputs, perturb_A_matrices, perturb_ff_inputs, perturb_ff_parameters, perturb_prediction = self.forward(other_inputs, mask, 0, False, i, None)
-			perturb_attn_inputs = [torch.mean(p, dim=1) for p in perturb_attn_inputs]
 
 			# try computing the attention dot product but with perturbed dst embeddings
 			A = A_matrices[i][:-1,:-1]
