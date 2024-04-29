@@ -226,6 +226,81 @@ def ideal_model(max_input_size, num_layers, hidden_dim, bidirectional, absolute_
 				transformer.attn.linear.weight = torch.nn.Parameter(torch.eye(transformer.attn.linear.weight.size(0)))
 	return model
 
+def print_graph(input):
+	n = len(input)
+	QUERY_PREFIX_TOKEN = (n-5) // 3 + 4
+	PADDING_TOKEN = (n-5) // 3 + 3
+	EDGE_PREFIX_TOKEN = (n-5) // 3 + 2
+
+	start_index = np.sum(input == PADDING_TOKEN)
+	num_edges = np.sum(input == EDGE_PREFIX_TOKEN)
+
+	forward_edges = []
+	for i in range((n - 5) // 3 + 1):
+		forward_edges.append([])
+	for i in range(2, n-5, 3):
+		if i >= start_index:
+			forward_edges[input[i].item()].append(input[i+1].item())
+
+	# find the major paths from the start vertex in the graph
+	queue = [(input[-1].item(),None,0)]
+	distances_from_start = {}
+	while len(queue) != 0:
+		current, parent, distance = queue.pop()
+		if current not in distances_from_start or distance < distances_from_start[current][0]:
+			distances_from_start[current] = distance, parent
+		else:
+			continue
+		for child in forward_edges[current]:
+			queue.append((child,current,distance+1))
+	# find the vertices with distance at least that from the start to the goal vertex
+	goal = input[np.nonzero(input == QUERY_PREFIX_TOKEN)[0]+2].item()
+	goal_distance,_ = distances_from_start[goal]
+	furthest_vertices = []
+	for vertex,(distance,_) in distances_from_start.items():
+		if distance == goal_distance:
+			furthest_vertices.append(vertex)
+	# compute the paths to each furthest vertex
+	forks = {}
+	for v in furthest_vertices:
+		current = v
+		path = [current]
+		while True:
+			_,parent = distances_from_start[current]
+			if parent == None:
+				break
+			path.append(parent)
+			current = parent
+		forks[v] = list(reversed(path))
+
+	printed_edges = []
+	goal_fork = forks[goal]
+	del forks[goal]
+	for i in range(len(goal_fork) - 1):
+		if i == 0:
+			print(goal_fork[i], end='')
+		print(' -> ' + str(goal_fork[i+1]), end='')
+		printed_edges.append((goal_fork[i],goal_fork[i+1]))
+	for _,fork in forks.items():
+		first_vertex = True
+		for i in range(len(fork) - 1):
+			if (fork[i],fork[i+1]) in printed_edges:
+				first_vertex = True
+				continue
+			if first_vertex:
+				print('\n' + str(fork[i]), end='')
+				first_vertex = False
+			print(' -> ' + str(fork[i+1]), end='')
+			printed_edges.append((fork[i],fork[i+1]))
+	print('\n', end='')
+	for src in range(len(forward_edges)):
+		for dst in forward_edges[src]:
+			if (src,dst) not in printed_edges:
+				print(str(src) + ' -> ' + str(dst))
+				printed_edges.append((src,dst))
+	print('Goal: ' + str(goal))
+
+
 from sys import argv
 import os
 filepath = argv[1]
@@ -250,8 +325,7 @@ if os.path.isfile(filepath):
 	#run_model(model, [22, 21,  5, 19, 21, 11,  5, 21, 10,  3, 21,  4, 10, 21,  9,  4, 21,  9, 11, 23,  9,  3, 20,  9], max_input_size=24)
 	#run_model(model, [22, 22, 22, 22, 22, 22, 22, 21, 1,  2, 21,  1,  4, 21,  2,  3, 21, 4,  5, 23,  1,  3, 20, 1], max_input_size=24)
 	#run_model(model, [46, 45,  3, 19, 45, 18, 39, 45, 36, 15, 45, 24, 42, 45, 37,  3, 45, 37, 36, 45, 23, 32, 45,  8, 24, 45, 19, 30, 45, 15, 23, 45, 39, 40, 45, 40, 34, 45, 30, 18, 45, 32,  8, 47, 37, 34, 44, 37], max_input_size=48)
-	run_model(model, [31, 31, 31, 31, 31, 31, 31, 30,  7, 23, 30,  9, 22, 30,  6,  4, 30, 6, 10, 30, 25, 19, 30, 17,  9, 30, 17, 16, 30,  1, 14, 30, 11, 21, 30, 26,  1, 30, 12, 11, 30, 14,  6, 30, 15, 25, 30, 24, 28, 30,  4, 17, 30, 19,  8, 30, 27, 26, 30, 27, 12, 30, 27,  5, 30, 22, 24, 30, 8,  3, 30, 18, 15, 30,  3,  7, 30,  3, 10, 30,  3,  2, 30, 21, 18, 32, 27, 28, 29, 27], fix_index=None, max_input_size=max_input_size, num_perturbations=1000)
-	import pdb; pdb.set_trace()
+	#run_model(model, [31, 31, 31, 31, 31, 31, 31, 30,  7, 23, 30,  9, 22, 30,  6,  4, 30, 6, 10, 30, 25, 19, 30, 17,  9, 30, 17, 16, 30,  1, 14, 30, 11, 21, 30, 26,  1, 30, 12, 11, 30, 14,  6, 30, 15, 25, 30, 24, 28, 30,  4, 17, 30, 19,  8, 30, 27, 26, 30, 27, 12, 30, 27,  5, 30, 22, 24, 30, 8,  3, 30, 18, 15, 30,  3,  7, 30,  3, 10, 30,  3,  2, 30, 21, 18, 32, 27, 28, 29, 27], fix_index=None, max_input_size=max_input_size, num_perturbations=1000)
 
 	seed(training_seed)
 	torch.manual_seed(training_seed)
@@ -280,7 +354,7 @@ if os.path.isfile(filepath):
 	incorrect_indices = np.nonzero(predictions != outputs)[0]
 	np.set_printoptions(threshold=10_000)
 	for incorrect_index in incorrect_indices:
-		print(inputs[incorrect_index, :])
+		print_graph(inputs[incorrect_index, :])
 		print("Expected answer: {}, predicted answer: {}\n".format(outputs[incorrect_index], predictions[incorrect_index]))
 	print("Test accuracy = %.2f±%.2f, test loss = %f" % (test_acc, binomial_confidence_int(test_acc, 1000), test_loss))
 

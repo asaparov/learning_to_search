@@ -637,6 +637,39 @@ class TransformerTracer:
 					queue.append((child,distance+1))
 			return best_distance
 
+		# find the major paths from the start vertex in the graph
+		queue = [(input[-1].item(),None,0)]
+		distances_from_start = {}
+		while len(queue) != 0:
+			current, parent, distance = queue.pop()
+			if current not in distances_from_start or distance < distances_from_start[current][0]:
+				distances_from_start[current] = distance, parent
+			else:
+				continue
+			for child in forward_edges[current]:
+				queue.append((child,current,distance+1))
+		# find the vertices with distance at least that from the start to the goal vertex
+		goal = input[torch.nonzero(input == QUERY_PREFIX_TOKEN)+2].item()
+		goal_distance,_ = distances_from_start[goal]
+		furthest_vertices = []
+		for vertex,(distance,_) in distances_from_start.items():
+			if distance == goal_distance:
+				furthest_vertices.append(vertex)
+		# compute the paths to each furthest vertex
+		forks = {}
+		for v in furthest_vertices:
+			current = v
+			path = [current]
+			while True:
+				_,parent = distances_from_start[current]
+				if parent == None:
+					break
+				path.append(parent)
+				current = parent
+			forks[v] = list(reversed(path))
+		correct_fork = forks[goal]
+		other_fork = next(path for v,path in forks.items() if v != goal)
+
 		def trace_contributions(start_layer, contributions, attn_inputs, attn_matrices, attn_representations, attn_out_representations, contributions_to_search):
 			copy_graph = {}
 			for i in reversed(range(start_layer + 1)):
@@ -853,46 +886,33 @@ class TransformerTracer:
 			new_dst_products = torch.matmul(torch.matmul(perturb_attn_inputs[i][:,dst,:], A), attn_inputs[i][src,:])
 
 			is_negative_copy = (attn_matrices[i][dst,src] < 0.01)
-			if is_negative_copy:
-				sorted_src_products = torch.sort(torch.clamp(new_src_products, min=old_product), descending=True)
-				sorted_dst_products = torch.sort(torch.clamp(new_dst_products, min=old_product), descending=True)
-				src_gaps = torch.nonzero(sorted_src_products.values[1:] - sorted_src_products.values[:-1] < -0.05 * torch.abs(old_product))
-				dst_gaps = torch.nonzero(sorted_dst_products.values[1:] - sorted_dst_products.values[:-1] < -0.05 * torch.abs(old_product))
-			else:
-				sorted_src_products = torch.sort(torch.clamp(new_src_products, max=old_product))
-				sorted_dst_products = torch.sort(torch.clamp(new_dst_products, max=old_product))
-				src_gaps = torch.nonzero(sorted_src_products.values[1:] - sorted_src_products.values[:-1] > 0.05 * torch.abs(old_product))
-				dst_gaps = torch.nonzero(sorted_dst_products.values[1:] - sorted_dst_products.values[:-1] > 0.05 * torch.abs(old_product))
 			print('Layer {} copies token at {} into token at {} with weight {}.'.format(i, src, dst, attn_matrices[i][dst,src]))
-			if len(src_gaps) == 0:
-				print('  src dependencies: []')
-				src_dependencies = []
+			if is_negative_copy:
+				src_dependencies = torch.nonzero(new_src_products > old_product + math.sqrt(d) / 2)
+				dst_dependencies = torch.nonzero(new_dst_products > old_product + math.sqrt(d) / 2)
 			else:
-				src_dependencies = sorted_src_products.indices[:src_gaps[-1]+1]
-				print('  src dependencies: ' + ', '.join([get_token_value(dep) for dep in src_dependencies]))
-			if len(dst_gaps) == 0:
-				print('  dst dependencies: []')
-				dst_dependencies = []
-			else:
-				dst_dependencies = sorted_dst_products.indices[:dst_gaps[-1]+1]
-				print('  dst dependencies: ' + ', '.join([get_token_value(dep) for dep in dst_dependencies]))
+				src_dependencies = torch.nonzero(new_src_products < old_product - math.sqrt(d) / 2)
+				dst_dependencies = torch.nonzero(new_dst_products < old_product - math.sqrt(d) / 2)
+			print('  src dependencies: ' + ', '.join([get_token_value(dep) for dep in src_dependencies]))
+			print('  dst dependencies: ' + ', '.join([get_token_value(dep) for dep in dst_dependencies]))
 
-			for src_dep in src_dependencies:
+			'''for src_dep in src_dependencies:
 				for dst_dep in dst_dependencies:
 					if src_dep >= n and dst_dep >= n and src_dep-n < n-1 and input[src_dep-n+1] == input[dst_dep-n]:
 						print('This is a forwards step. ({} and {})'.format(get_token_value(src_dep), get_token_value(dst_dep)))
 					if src_dep >= n and dst_dep >= n and dst_dep-n < n-1 and input[dst_dep-n+1] == input[src_dep-n]:
 						print('This is a backwards step. ({} and {})'.format(get_token_value(src_dep), get_token_value(dst_dep)))
 					if src_dep < n and dst_dep < n and src_dep == dst_dep:
-						print('This is a token matching step. ({})'.format(get_token_value(src_dep)))
+						print('This is a token matching step. ({})'.format(get_token_value(src_dep)))'''
 
+			import pdb; pdb.set_trace()
 			return src_dependencies, dst_dependencies
 
 		def activation_patch_attn(i, dst, src):
 			# create perturbed inputs where each input swaps the position of one edge
 			edge_indices = [i + 1 for i in range(len(input)) if input[i] == EDGE_PREFIX_TOKEN]
 			other_inputs = input.repeat((len(edge_indices), 1))
-			swap_edge_idx = len(edge_indices) - 2
+			swap_edge_idx = len(edge_indices) - 1
 			for j in range(len(edge_indices)):
 				if j == swap_edge_idx:
 					continue
@@ -918,43 +938,62 @@ class TransformerTracer:
 			old_product = torch.dot(torch.matmul(attn_inputs[i][dst,:], A), attn_inputs[i][src,:])
 			new_src_products = torch.matmul(torch.matmul(attn_inputs[i][dst,:], A), perturb_attn_inputs[i][:,src,:].T)
 			new_dst_products = torch.matmul(torch.matmul(perturb_attn_inputs[i][:,dst,:], A), attn_inputs[i][src,:])
-			import pdb; pdb.set_trace()
 
 			is_negative_copy = (attn_matrices[i][dst,src] < 0.01)
 			if is_negative_copy:
-				sorted_src_products = torch.sort(torch.clamp(new_src_products, min=old_product), descending=True)
-				sorted_dst_products = torch.sort(torch.clamp(new_dst_products, min=old_product), descending=True)
-				src_gaps = torch.nonzero(sorted_src_products.values[1:] - sorted_src_products.values[:-1] < -0.02 * torch.abs(old_product))
-				dst_gaps = torch.nonzero(sorted_dst_products.values[1:] - sorted_dst_products.values[:-1] < -0.02 * torch.abs(old_product))
+				src_dependencies = torch.nonzero(new_src_products > old_product + math.sqrt(d) / 2)
+				dst_dependencies = torch.nonzero(new_dst_products > old_product + math.sqrt(d) / 2)
 			else:
-				sorted_src_products = torch.sort(torch.clamp(new_src_products, max=old_product))
-				sorted_dst_products = torch.sort(torch.clamp(new_dst_products, max=old_product))
-				src_gaps = torch.nonzero(sorted_src_products.values[1:] - sorted_src_products.values[:-1] > 0.02 * torch.abs(old_product))
-				dst_gaps = torch.nonzero(sorted_dst_products.values[1:] - sorted_dst_products.values[:-1] > 0.02 * torch.abs(old_product))
-			print('Layer {} copies token at {} into token at {} with weight {}.'.format(i, src, dst, attn_matrices[i][dst,src]))
-			if len(src_gaps) == 0:
-				print('  src dependencies: []')
-				src_dependencies = []
+				src_dependencies = torch.nonzero(new_src_products < old_product - math.sqrt(d) / 2)
+				dst_dependencies = torch.nonzero(new_dst_products < old_product - math.sqrt(d) / 2)
+			print('  src dependencies: ' + ', '.join([get_token_value(edge_indices[dep]+n) for dep in src_dependencies]))
+			print('  dst dependencies: ' + ', '.join([get_token_value(edge_indices[dep]+n) for dep in dst_dependencies]))
+
+			import pdb; pdb.set_trace()
+
+			# create perturbed inputs where each input replaces every occurrence of a token with an unused token
+			max_vertex_id = (n - 5) // 3
+			unused_id = next(t for t in range(1, max_vertex_id + 1) if t not in input)
+			other_inputs = input.repeat(max_vertex_id + 1, 1)
+			for j in range(max_vertex_id + 1):
+				other_inputs[j,input == j] = unused_id
+
+			# perform forward pass on other_inputs
+			other_inputs = self.model.token_embedding[other_inputs]
+			if len(other_inputs.shape) == 2:
+				pos = self.model.positional_embedding
 			else:
-				src_dependencies = sorted_src_products.indices[:src_gaps[-1]+1]
-				print('  src dependencies: ' + ', '.join([get_token_value(edge_indices[dep]+n) for dep in src_dependencies]))
-			if len(dst_gaps) == 0:
-				print('  dst dependencies: []')
-				dst_dependencies = []
+				pos = self.model.positional_embedding.unsqueeze(0).expand(other_inputs.shape[0:-2] + (-1,-1))
+			other_inputs = torch.cat((other_inputs, pos), -1)
+			other_inputs = self.model.dropout_embedding(other_inputs)
+
+			perturb_layer_inputs, perturb_attn_inputs, perturb_attn_pre_softmax, perturb_attn_matrices, perturb_v_outputs, perturb_attn_linear_inputs, perturb_attn_outputs, perturb_A_matrices, perturb_ff_inputs, perturb_ff_parameters, perturb_prediction = self.forward(other_inputs, mask, 0, False, i, None)
+
+			# try computing the attention dot product but with perturbed dst embeddings
+			A = A_matrices[i][:-1,:-1]
+			old_product = torch.dot(torch.matmul(attn_inputs[i][dst,:], A), attn_inputs[i][src,:])
+			new_src_products = torch.matmul(torch.matmul(attn_inputs[i][dst,:], A), perturb_attn_inputs[i][:,src,:].T)
+			new_dst_products = torch.matmul(torch.matmul(perturb_attn_inputs[i][:,dst,:], A), attn_inputs[i][src,:])
+
+			is_negative_copy = (attn_matrices[i][dst,src] < 0.01)
+			if is_negative_copy:
+				src_dependencies = torch.nonzero(new_src_products > old_product + math.sqrt(d) / 2)
+				dst_dependencies = torch.nonzero(new_dst_products > old_product + math.sqrt(d) / 2)
 			else:
-				dst_dependencies = sorted_dst_products.indices[:dst_gaps[-1]+1]
-				print('  dst dependencies: ' + ', '.join([get_token_value(edge_indices[dep]+n) for dep in dst_dependencies]))
+				src_dependencies = torch.nonzero(new_src_products < old_product - math.sqrt(d) / 2)
+				dst_dependencies = torch.nonzero(new_dst_products < old_product - math.sqrt(d) / 2)
+			print('  src dependencies: ' + ', '.join([get_token_value(edge_indices[dep]+n) for dep in src_dependencies]))
+			print('  dst dependencies: ' + ', '.join([get_token_value(edge_indices[dep]+n) for dep in dst_dependencies]))
 
 			import pdb; pdb.set_trace()
 
 			# create perturbed inputs where each input swaps the position of one token
-			last_edge_index = edge_indices[-1]
 			other_inputs = input.repeat((2*n,1))
 			'''for j in range(n):
 				if input[j] in (PADDING_TOKEN, QUERY_PREFIX_TOKEN, PATH_PREFIX_TOKEN):
 					continue
-				if j < last_edge_index or j > last_edge_index + 2:
-					src_edge_index = last_edge_index
+				if j < edge_indices[-1] or j > edge_indices[-1] + 2:
+					src_edge_index = edge_indices[-1]
 				else:
 					src_edge_index = edge_indices[-2]
 				offset = (src_edge_index % 3) - (j % 3)
@@ -976,15 +1015,15 @@ class TransformerTracer:
 			for j in range(n):
 				if input[j] in (PADDING_TOKEN, QUERY_PREFIX_TOKEN, PATH_PREFIX_TOKEN):
 					continue
-				if j < last_edge_index or j > last_edge_index + 2:
-					src_edge_index = last_edge_index
+				if j < edge_indices[-1] or j > edge_indices[-1] + 2:
+					src_edge_index = edge_indices[-1]
 				else:
 					src_edge_index = edge_indices[-2]
 				offset = (src_edge_index % 3) - (j % 3)
 				if offset > 1:
 					offset -= 3
-				other_inputs[j,j,:d-n] = other_inputs[j,src_edge_index - offset,:d-n].clone().detach()
-				other_inputs[n+j,j,d-n:] = other_inputs[n+j,src_edge_index - offset,d-n:].clone().detach()
+				other_inputs[j,j,:d-n] = other_inputs[j,j,:d-n].clone().detach()
+				other_inputs[n+j,j,d-n:] = other_inputs[n+j,j,d-n:].clone().detach()
 
 			perturb_layer_inputs, perturb_attn_inputs, perturb_attn_pre_softmax, perturb_attn_matrices, perturb_v_outputs, perturb_attn_linear_inputs, perturb_attn_outputs, perturb_A_matrices, perturb_ff_inputs, perturb_ff_parameters, perturb_prediction = self.forward(other_inputs, mask, 0, False, i, None)
 

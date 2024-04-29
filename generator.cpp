@@ -175,24 +175,73 @@ bool generate_graph_with_lookahead(array<node>& vertices, node*& start, node*& e
 	}
 	end = &vertices[std::max(1u, lookahead)];
 
+	/* sample some parent/ancestor vertices */
+	unsigned int ancestor_count = (num_vertices - index) / 2;
+	constexpr float ALPHA = 0.5f;
+	unsigned int* in_degrees = (unsigned int*) calloc(index + ancestor_count, sizeof(unsigned int));
+	if (in_degrees == nullptr) return false;
+	for (unsigned int i = 0; i < index + ancestor_count; i++)
+		in_degrees[i] = ALPHA + vertices[i].parents.length;
+	for (unsigned int i = 0; i < ancestor_count; i++) {
+		/* sample the number of child vertices */
+		unsigned int num_children;
+		if (sample_uniform<float>() < 0.15f)
+			num_children = 1;
+		else
+			num_children = randrange(1, max_num_parents);
+		num_children = std::min(num_children, index);
+
+		array<float> probabilities(index);
+		float total_probability = 0.0f;
+		for (unsigned int j = 0; j < index; j++) {
+			probabilities[j] = in_degrees[j];
+			total_probability += probabilities[j];
+		}
+		probabilities.length = index;
+
+		array<unsigned int> sampled_children(std::max(1u, num_children));
+		for (unsigned int j = 0; j < num_children; j++) {
+			unsigned int u = sample_categorical(probabilities.data, total_probability, probabilities.length);
+			sampled_children.add(u);
+			total_probability -= probabilities[u];
+			probabilities[u] = 0.0f;
+		}
+
+		for (unsigned int child_id : sampled_children) {
+			vertices[index].children.add(&vertices[child_id]);
+			vertices[child_id].parents.add(&vertices[index]);
+		}
+		index += 1;
+	}
+	free(in_degrees);
+
+	unsigned int* out_degrees = (unsigned int*) calloc(index + ancestor_count, sizeof(unsigned int));
+	if (out_degrees == nullptr) return false;
+	for (unsigned int i = 0; i < index + ancestor_count; i++)
+		out_degrees[i] = ALPHA + vertices[i].children.length;
 	for (unsigned int i = index; i < num_vertices; i++) {
 		/* sample the number of parent vertices */
 		unsigned int num_parents;
-		if (sample_uniform(1) == 1)
+		if (sample_uniform<float>() < 0.15f)
 			num_parents = 1;
 		else
 			num_parents = randrange(1, max_num_parents);
 		num_parents = std::min(num_parents, i);
 
-		array<unsigned int> potential_parents(i);
-		for (unsigned int j = 0; j < i; j++) potential_parents[j] = j;
-		potential_parents.length = i;
+		array<float> probabilities(i);
+		float total_probability = 0.0f;
+		for (unsigned int j = 0; j < i; j++) {
+			probabilities[j] = out_degrees[j];
+			total_probability += probabilities[j];
+		}
+		probabilities.length = i;
 
 		array<unsigned int> sampled_parents(std::max(1u, num_parents));
 		for (unsigned int j = 0; j < num_parents; j++) {
-			unsigned int u = sample_uniform(potential_parents.length);
-			sampled_parents.add(potential_parents[u]);
-			potential_parents.remove(u);
+			unsigned int u = sample_categorical(probabilities.data, total_probability, probabilities.length);
+			sampled_parents.add(u);
+			total_probability -= probabilities[u];
+			probabilities[u] = 0.0f;
 		}
 
 		for (unsigned int parent_id : sampled_parents) {
@@ -200,6 +249,7 @@ bool generate_graph_with_lookahead(array<node>& vertices, node*& start, node*& e
 			vertices[i].parents.add(&vertices[parent_id]);
 		}
 	}
+	free(out_degrees);
 
 	/* remove any correlation between graph topology and vertex IDs by shuffling the vertices */
 	unsigned int* new_indices = (unsigned int*) alloca(sizeof(unsigned int) * (max_vertex_id + 1));

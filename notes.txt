@@ -698,7 +698,7 @@ we fixed this by tweaking the FF-layer. by changing k in the function f(x) = x -
 
 analyzing the unablated max_input_length = 90 model with 6 layers, max train lookahead = 10, seed = 2:
 looking at the input:
-[31, 31, 31, 31, 31, 31, 31, 30,  7, 23, 30,  9, 22, 30,  6,  4, 30, 6, 10, 30, 25, 19, 30, 17,  9, 30, 17, 16, 30,  1, 14, 30, 11, 21, 30, 26,  1, 30, 12, 11, 30, 14,  6, 30, 15, 25, 30, 24, 28, 30,  4, 17, 30, 19,  8, 30, 27, 26, 30, 27, 12, 30, 27,  5, 30, 22, 24, 30, 8,  3, 30, 18, 15, 30,  3,  7, 30,  3, 10, 30,  3,  2, 30, 21, 18, 32, 27, 28, 29, 27]
+[31, 31, 31, 31, 31, 31, 31, 30,  7, 23, 30,  9, 22, 30,  6,  4, 30, 6, 10, 30, 25, 19, 30, 17,  9, 30, 17, 16, 30,  1, 14, 30, 11, 21, 30, 26,  1, 30, 12, 11, 30, 14,  6, 30, 15, 25, 30,  4, 17, 30, 24, 28, 30, 19,  8, 30, 27, 26, 30, 27, 12, 30, 27,  5, 30, 22, 24, 30, 8,  3, 30, 18, 15, 30,  3,  7, 30,  3, 10, 30,  3,  2, 30, 21, 18, 32, 27, 28, 29, 27]
 
 27 -> 26 ->  1 -> 14 ->  6 ->  4 -> 17 ->  9 -> 22 -> 24 -> 28
 27 -> 12 -> 11 -> 21 -> 18 -> 15 -> 25 -> 19 ->  8 ->  3 ->  7 -> 23
@@ -863,7 +863,7 @@ attention layer 4 copies row 14 into 35 and the negativity of element 40 comes f
 
 
 repeating the input from above for convenience:
-[31, 31, 31, 31, 31, 31, 31, 30,  7, 23, 30,  9, 22, 30,  6,  4, 30, 6, 10, 30, 25, 19, 30, 17,  9, 30, 17, 16, 30,  1, 14, 30, 11, 21, 30, 26,  1, 30, 12, 11, 30, 14,  6, 30, 15, 25, 30, 24, 28, 30,  4, 17, 30, 19,  8, 30, 27, 26, 30, 27, 12, 30, 27,  5, 30, 22, 24, 30, 8,  3, 30, 18, 15, 30,  3,  7, 30,  3, 10, 30,  3,  2, 30, 21, 18, 32, 27, 28, 29, 27]
+[31, 31, 31, 31, 31, 31, 31, 30,  7, 23, 30,  9, 22, 30,  6,  4, 30, 6, 10, 30, 25, 19, 30, 17,  9, 30, 17, 16, 30,  1, 14, 30, 11, 21, 30, 26,  1, 30, 12, 11, 30, 14,  6, 30, 15, 25, 30,  4, 17, 30, 24, 28, 30, 19,  8, 30, 27, 26, 30, 27, 12, 30, 27,  5, 30, 22, 24, 30, 8,  3, 30, 18, 15, 30,  3,  7, 30,  3, 10, 30,  3,  2, 30, 21, 18, 32, 27, 28, 29, 27]
 
 27 -> 26 ->  1 -> 14 ->  6 ->  4 -> 17 ->  9 -> 22 -> 24 -> 28
 27 -> 12 -> 11 -> 21 -> 18 -> 15 -> 25 -> 19 ->  8 ->  3 ->  7 -> 23
@@ -988,7 +988,7 @@ layer 2 is performing an inverse backwards step, copying the representation of 1
 
 
 repeating the input from above for convenience:
-[31, 31, 31, 31, 31, 31, 31, 30,  7, 23, 30,  9, 22, 30,  6,  4, 30, 6, 10, 30, 25, 19, 30, 17,  9, 30, 17, 16, 30,  1, 14, 30, 11, 21, 30, 26,  1, 30, 12, 11, 30, 14,  6, 30, 15, 25, 30, 24, 28, 30,  4, 17, 30, 19,  8, 30, 27, 26, 30, 27, 12, 30, 27,  5, 30, 22, 24, 30, 8,  3, 30, 18, 15, 30,  3,  7, 30,  3, 10, 30,  3,  2, 30, 21, 18, 32, 27, 28, 29, 27]
+[31, 31, 31, 31, 31, 31, 31, 30,  7, 23, 30,  9, 22, 30,  6,  4, 30, 6, 10, 30, 25, 19, 30, 17,  9, 30, 17, 16, 30,  1, 14, 30, 11, 21, 30, 26,  1, 30, 12, 11, 30, 14,  6, 30, 15, 25, 30,  4, 17, 30, 24, 28, 30, 19,  8, 30, 27, 26, 30, 27, 12, 30, 27,  5, 30, 22, 24, 30, 8,  3, 30, 18, 15, 30,  3,  7, 30,  3, 10, 30,  3,  2, 30, 21, 18, 32, 27, 28, 29, 27]
 
 27 -> 26 ->  1 -> 14 ->  6 ->  4 -> 17 ->  9 -> 22 -> 24 -> 28
 27 -> 12 -> 11 -> 21 -> 18 -> 15 -> 25 -> 19 ->  8 ->  3 ->  7 -> 23
@@ -1002,6 +1002,7 @@ performing the activation patching analysis on the final layer's copy from 35 to
   row 35's embedding depends on the edges 6 -> 4, 6 -> 10, 1 -> 14, 26 -> 1, 14 -> 6, 4 -> 17, 27 -> 26 (these are all 7 vertices on the first portion of the path to the goal).
   row 89's embedding depends on the edges 17 -> 9, 24 -> 28, 22 -> 24, 9 -> 22 (these are all 5 vertices on the second portion of the path to the goal)
  -> but how do we know when these dependencies were copied into rows 35 and 89? sometimes it's easy. layer 4 copies row 23 into 89 with weight 0.97.
+  -> if we do edge swapping perturbations, we see the source embedding depends heavily on the edge 26 -> 1 but not really much else. the destination embedding doesn't seem to be affected by any edge swaps.
 
 analyzing layer 4's copy from 23 to 89:
   row 23's embedding depends on the edges 17 -> 9, 24 -> 28, 22 -> 24, 9 -> 22 (these are all 5 vertices on the second portion of the path to the goal), and the goal 28
@@ -1009,3 +1010,12 @@ analyzing layer 4's copy from 23 to 89:
 
 analyzing layer 3's copy from 11,23,29,32,53 into 23:
   which one of these copies are actually important? we could try zeroing out each of the attention copies. but this would require many more forward passes (n per layer). we could also measure the MAD of the representation at each row at each layer between the perturbed and unperturbed outputs.
+
+how do perturbations affect forward or backwards steps? suppose we have a copy from vertex A to vertex B. there is a path from A to B in the graph. suppose there is some intermediate edge C -> D along the path from A to B. Before the attention operation, the embedding for vertex A contains the representation of the position of D but not C. similarly, suppose that the embedding for vertex C contains the representation of the position of A but not D. suppose the attention operation increments the position of the source vertex, then it would copy the representation of C into that of B (i.e. backwards step). the result is B contains the representation of the positions of A, C, D, and B.
+  if instead the representation of A contains the representation of the position of C, the representation of D contains the position of B, and the attention operation decrements the position of the source matrix, then it would copy the representation of D into that of A (and C) (i.e. a forwards step). the result is A contains representations of the positions of A, C, D, and B.
+  -> so how would swapping this edge at this layer affect the copy? take the example of the backwards step w.l.o.g. if the edge C -> D is swapped with any edge not along the path from A to B, then A would contain the representation of the perturbed position of D, and the perturbed C would contain the representation of A, but the vertices at C and D's old position would not contain the representation of B (but they may contain the representation of A depending on the distance from A to C/D).
+  -> for source perturbations: so long as the incremented positions of any representation of the perturbed C does not match the unperturbed position of any vertex on the path from D to B (this would not happen if the swapped edge is not on the path from D to B), then C would not be copied into B and the backwards step would not occur.
+  -> for dst perturbations: so long as the incremented positions of any represnetation of the original C does not match the perturbed position of any vertex on the path from D to B (this would not happen if the swapped edge is not on the path from A to C), then C would not be copied into B and the backwards step would not occur.
+
+what the last layer could be doing if not a forwards/backwards step: computing the intersection between vertices with a path to the goal, and the valid vertices from the start vertex. if so, what effects should each perturbation have? the copy from the set of valid vertices from the start vertex can be implemented by mapping the position representation of the start vertex to that of the current vertex (this can be an identity operation on the start vertex's position). how could we test for this? if we perturb the start vertex or the first vertex along the path (after the start vertex), then the source vertex's representation should no longer match with the old dst vertex.
+  -> we do indeed observe this. the second part of this operation is to compute the intersection with the set of vertices with a path to the goal.

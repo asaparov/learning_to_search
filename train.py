@@ -9,7 +9,7 @@ from torch import nn, Tensor, LongTensor
 import torch.nn.functional as F
 from torch.nn import CrossEntropyLoss
 from torch.utils.data import Dataset, DataLoader
-from gpt2 import Transformer, ToeplitzMode
+from gpt2 import Transformer, ToeplitzMode, AblationMode
 from Sophia import SophiaG
 import time
 import multiprocessing
@@ -155,17 +155,41 @@ def generate_graph_with_lookahead(num_vertices, max_num_parents, max_vertex_id, 
 		start = vertices[choice([0] + list(range(index - num_prefix_vertices, index)))]
 	end = vertices[max(1, lookahead)]
 
+	# sample some parent/ancestor vertices
+	ancestor_count = (num_vertices - index) // 2
+	alpha = 0.5
+	in_degrees = np.array([alpha + len(vertex.parents) for vertex in vertices[:index+ancestor_count]])
+	for i in range(ancestor_count):
+		# sample the number of child vertices
+		if uniform(0, 1) < 0.15:
+			num_children = 1
+		else:
+			num_children = randrange(1, max_num_parents)
+		num_children = min(num_children, index)
+
+		probabilities = in_degrees[:index].copy()
+		probabilities /= np.sum(probabilities)
+		for child_id in np.random.choice(index, num_children, replace=False, p=probabilities):
+			vertices[index].children.append(vertices[child_id])
+			vertices[child_id].parents.append(vertices[index])
+			in_degrees[child_id] += 1
+		index += 1
+
+	out_degrees = np.array([alpha + len(vertex.children) for vertex in vertices[:num_vertices]])
 	for i in range(index, num_vertices):
 		# sample the number of parent vertices
-		if choice([True, False]):
+		if uniform(0, 1) < 0.15:
 			num_parents = 1
 		else:
 			num_parents = randrange(1, max_num_parents)
 		num_parents = min(num_parents, i)
 
-		for parent_id in sample(range(i), num_parents):
+		probabilities = out_degrees[:i].copy()
+		probabilities /= np.sum(probabilities)
+		for parent_id in np.random.choice(i, num_parents, replace=False, p=probabilities):
 			vertices[parent_id].children.append(vertices[i])
 			vertices[i].parents.append(vertices[parent_id])
+			out_degrees[parent_id] += 1
 
 	# remove any correlation between graph topology and vertex IDs by shuffling the vertices
 	new_indices = list(range(max_vertex_id + 1))
@@ -577,8 +601,10 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 		filename += '_noAPE'
 	if learnable_token_emb:
 		filename += '_learntokemb'
-	if not ablate:
+	if ablate == "none":
 		filename += '_unablated'
+	elif ablate == "attn_linear":
+		filename += '_ablateattnlinear'
 	if toeplitz_attn:
 		filename += '_toeplitz'
 		if toeplitz_pos_only:
@@ -609,6 +635,12 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 			toeplitz = ToeplitzMode.BLOCK
 		else:
 			toeplitz = ToeplitzMode.NONE
+		if ablate == "none":
+			ablation_mode = AblationMode.NO_ABLATION
+		elif ablate == "attn_linear":
+			ablation_mode = AblationMode.ABLATE_ATTN_LINEAR
+		elif ablate == "attn_linear_projv":
+			ablation_mode = AblationMode.ABLATE_ATTN_LINEAR_PROJV
 		model = Transformer(
 				layers=nlayers,
 				pad_idx=PADDING_TOKEN,
@@ -621,7 +653,7 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 				bidirectional=bidirectional,
 				absolute_pos_emb=absolute_pos_emb,
 				learn_token_emb=learnable_token_emb,
-				ablate=ablate,
+				ablate=ablation_mode,
 				toeplitz=toeplitz,
 				pre_ln=pre_ln)
 		epoch = 0
@@ -850,7 +882,7 @@ if __name__ == "__main__":
 	parser.add_argument("--toeplitz-reg", type=float, required=True, default=0.0)
 	parser.add_argument("--toeplitz-pos-only", type=parse_bool_arg, required=True, metavar="'y/n'")
 	parser.add_argument("--add-padding", type=parse_bool_arg, required=True, metavar="'y/n'")
-	parser.add_argument("--ablate", type=parse_bool_arg, required=True, metavar="'y/n'")
+	parser.add_argument("--ablate", type=str, default="none", choices=["none", "attn_linear", "attn_linear_projv"])
 	parser.add_argument("--preLN", type=parse_bool_arg, required=True, metavar="'y/n'")
 	args = parser.parse_args()
 

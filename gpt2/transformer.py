@@ -4,6 +4,13 @@ import torch.utils.checkpoint
 from torch.nn import LayerNorm
 from gpt2 import AttentionLayer, Past, PadMasking, FutureMasking, PositionalEmbedding, TokenEmbedding, PositionwiseFeedForward, ToeplitzMode
 from typing import Optional, Tuple, List, Union
+from enum import Enum
+
+
+class AblationMode(Enum):
+    NO_ABLATION = 0,
+    ABLATE_ATTN_LINEAR = 1,
+    ABLATE_ATTN_LINEAR_PROJV = 2
 
 
 class TransformerLayer(nn.Module):
@@ -26,12 +33,11 @@ class TransformerLayer(nn.Module):
                  rate: int,
                  dropout: float = 0.1,
                  feedforward: bool = True,
-                 ablate: bool = False,
-                 linear: bool = True,
+                 ablate: AblationMode = AblationMode.NO_ABLATION,
                  toeplitz: ToeplitzMode = ToeplitzMode.NONE,
                  pre_ln: bool = True):
         super().__init__()
-        self.attn = AttentionLayer(heads, dims, token_dims, pos_dims, dropout, ablate, linear, toeplitz)
+        self.attn = AttentionLayer(heads, dims, token_dims, pos_dims, dropout, ablate == AblationMode.ABLATE_ATTN_LINEAR_PROJV, ablate == AblationMode.NO_ABLATION, toeplitz)
         self.ln_attn = LayerNorm(dims)
         if feedforward:
             self.ff = PositionwiseFeedForward(dims, rate, dropout)
@@ -89,7 +95,7 @@ class Transformer(nn.Module):
                  bidirectional: bool = True,
                  absolute_pos_emb: bool = True,
                  learn_token_emb: bool = False,
-                 ablate: bool = True,
+                 ablate: AblationMode = AblationMode.ABLATE_ATTN_LINEAR_PROJV,
                  toeplitz: ToeplitzMode = ToeplitzMode.NONE,
                  pre_ln: bool = True):
         super().__init__()
@@ -119,7 +125,7 @@ class Transformer(nn.Module):
             token_dim = words
             position_dim = 0
         self.transformers = nn.ModuleList([
-            TransformerLayer(heads, embedding_dim, token_dim, position_dim, rate, dropout, l != layers - 1 if ablate else True, ablate, not ablate, toeplitz, pre_ln)
+            TransformerLayer(heads, embedding_dim, token_dim, position_dim, rate, dropout, True if ablate == AblationMode.NO_ABLATION else l != layers - 1, ablate, toeplitz, pre_ln)
             for l in range(layers)])
         if pre_ln:
             self.ln_head = LayerNorm(embedding_dim)
