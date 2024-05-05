@@ -527,7 +527,7 @@ def generate_training_set(max_input_size, dataset_size, max_lookahead, reserved_
 
 	return inputs, outputs, valid_outputs, num_collisions
 
-def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidden_dim, bidirectional, absolute_pos_emb, learnable_token_emb, toeplitz_attn, toeplitz_reg, toeplitz_pos_only, add_padding, ablate, pre_ln):
+def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidden_dim, bidirectional, absolute_pos_emb, learnable_token_emb, toeplitz_attn, toeplitz_reg, toeplitz_pos_only, add_padding, ablate, pre_ln, use_curriculum_learning):
 	generator.set_seed(seed_value)
 	seed(seed_value)
 	torch.manual_seed(seed_value)
@@ -536,6 +536,11 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 	BATCH_SIZE = 2 ** 11
 	print('Number of available CPUs: {}'.format(len(sched_getaffinity(0))))
 	stdout.flush()
+
+	if use_curriculum_learning and dataset_size != -1:
+		print('ERROR: Curriculum learning is only supported with streaming training (i.e. dataset_size = -1).')
+		stdout.flush()
+		return
 
 	# first reserve some data for OOD testing
 	random_state = getstate()
@@ -618,6 +623,8 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 		filename += '_postLN'
 	if add_padding:
 		filename += '_padded'
+	if use_curriculum_learning:
+		filename += '_curriculum'
 	if isdir(filename):
 		existing_epochs = [int(ckpt[(ckpt.rfind('epoch') + len('epoch')):-len('.pt')]) for ckpt in listdir(filename) if ckpt.startswith('epoch')]
 	else:
@@ -685,6 +692,7 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 		seed_generator = Random(seed_value)
 		seed_generator_lock = Lock()
 		seed_values = []
+		lookahead = 1 if use_curriculum_learning else max_lookahead
 
 		def get_seed(index):
 			if index < len(seed_values):
@@ -717,7 +725,7 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 					np.random.seed(new_seed)
 
 					generate_start_time = time.perf_counter()
-					inputs, outputs, valid_outputs, num_collisions = generator.generate_training_set(max_input_size, BATCH_SIZE, max_lookahead, reserved_inputs, dist_from_start, True)
+					inputs, outputs, valid_outputs, num_collisions = generator.generate_training_set(max_input_size, BATCH_SIZE, lookahead, reserved_inputs, dist_from_start, True)
 					if num_collisions != 0:
 						with self.collisions_lock:
 							self.total_collisions.value += num_collisions
@@ -834,6 +842,9 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 					logits, _ = model(input)
 					training_acc = torch.sum(torch.argmax(logits[:,-1,:],dim=1) == output).item() / output.size(0)
 					print("training accuracy: %.2f±%.2f" % (training_acc, binomial_confidence_int(training_acc, output.size(0))))
+					if use_curriculum_learning and lookahead < max_lookahead and training_acc > 0.99:
+						lookahead += 1
+						print("Training accuracy is sufficiently high. Increasing training lookahead to {}.".format(lookahead))
 					del input, output
 					stdout.flush()
 
@@ -884,6 +895,7 @@ if __name__ == "__main__":
 	parser.add_argument("--add-padding", type=parse_bool_arg, required=True, metavar="'y/n'")
 	parser.add_argument("--ablate", type=str, default="none", choices=["none", "attn_linear", "attn_linear_projv"])
 	parser.add_argument("--preLN", type=parse_bool_arg, required=True, metavar="'y/n'")
+	parser.add_argument("--curriculum", type=parse_bool_arg, required=True, metavar="'y/n'")
 	args = parser.parse_args()
 
 	train(
@@ -901,4 +913,5 @@ if __name__ == "__main__":
 		toeplitz_pos_only=args.toeplitz_pos_only,
 		add_padding=args.add_padding,
 		ablate=args.ablate,
-		pre_ln=args.preLN)
+		pre_ln=args.preLN,
+		use_curriculum_learning=args.curriculum)
