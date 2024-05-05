@@ -683,6 +683,12 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 	eval_interval = 1
 	save_interval = 1
 
+	initial_lookahead = 1 if use_curriculum_learning else max_lookahead
+	if hasattr(model, 'lookahead'):
+		initial_lookahead = model.lookahead
+	else:
+		model.lookahead = initial_lookahead
+
 	if dataset_size == -1:
 		# we are doing streaming training, so use an IterableDataset
 		from itertools import cycle
@@ -692,7 +698,6 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 		seed_generator = Random(seed_value)
 		seed_generator_lock = Lock()
 		seed_values = []
-		lookahead = 1 if use_curriculum_learning else max_lookahead
 
 		def get_seed(index):
 			if index < len(seed_values):
@@ -704,9 +709,10 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 			return seed_values[index]
 
 		class StreamingDataset(torch.utils.data.IterableDataset):
-			def __init__(self, offset):
+			def __init__(self, offset, lookahead):
 				super(StreamingDataset).__init__()
 				self.offset = offset
+				self.lookahead = lookahead
 
 				self.multiprocessing_manager = multiprocessing.Manager()
 				self.total_collisions = self.multiprocessing_manager.Value(int, 0)
@@ -725,7 +731,7 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 					np.random.seed(new_seed)
 
 					generate_start_time = time.perf_counter()
-					inputs, outputs, valid_outputs, num_collisions = generator.generate_training_set(max_input_size, BATCH_SIZE, lookahead, reserved_inputs, dist_from_start, True)
+					inputs, outputs, valid_outputs, num_collisions = generator.generate_training_set(max_input_size, BATCH_SIZE, self.lookahead, reserved_inputs, dist_from_start, True)
 					if num_collisions != 0:
 						with self.collisions_lock:
 							self.total_collisions.value += num_collisions
@@ -744,7 +750,7 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 				worker_id = worker_info.id
 				return self.process_data(self.offset + worker_id)
 
-		iterable_dataset = StreamingDataset(epoch * STREAMING_BLOCK_SIZE // BATCH_SIZE)
+		iterable_dataset = StreamingDataset(epoch * STREAMING_BLOCK_SIZE // BATCH_SIZE, model.lookahead)
 		train_loader = DataLoader(iterable_dataset, batch_size=None, num_workers=NUM_DATA_WORKERS, pin_memory=True, prefetch_factor=8)
 
 	while True:
@@ -755,6 +761,7 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 		epoch_loss = 0.0
 		num_batches = 0
 		effective_dataset_size = (STREAMING_BLOCK_SIZE if dataset_size == -1 else dataset_size)
+		reinit_data_loader = False
 		for batch in (train_loader if dataset_size == -1 else cycle(train_loader)):
 			batch_start_time = time.perf_counter()
 			model.train()
@@ -808,17 +815,6 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 				#print('[MAIN] Time to train: {}s'.format(time4 - time3))
 				#stdout.flush()
 
-				if epoch % save_interval == 0:
-					ckpt_filename = filename + '/epoch{}.pt'.format(epoch)
-					print('saving to "{}".'.format(ckpt_filename))
-					torch.save((model,getstate(),np.random.get_state(),torch.get_rng_state()), ckpt_filename)
-					print('done saving model.')
-					stdout.flush()
-
-					#time5 = time.perf_counter()
-					#print('[MAIN] Time to save model: {}s'.format(time5 - time4))
-					#stdout.flush()
-
 				if epoch % log_interval == 0:
 					elapsed_time = time.perf_counter() - start_time
 					print("epoch = {}, training loss = {}".format(epoch, epoch_loss))
@@ -842,9 +838,6 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 					logits, _ = model(input)
 					training_acc = torch.sum(torch.argmax(logits[:,-1,:],dim=1) == output).item() / output.size(0)
 					print("training accuracy: %.2f±%.2f" % (training_acc, binomial_confidence_int(training_acc, output.size(0))))
-					if use_curriculum_learning and lookahead < max_lookahead and training_acc > 0.99:
-						lookahead += 1
-						print("Training accuracy is sufficiently high. Increasing training lookahead to {}.".format(lookahead))
 					del input, output
 					stdout.flush()
 
@@ -855,17 +848,41 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 					#print('[MAIN] Time to evaluate model: {}s'.format(time6 - time5))
 					#stdout.flush()
 
+					if use_curriculum_learning and model.lookahead < max_lookahead and training_acc > 0.99:
+						model.lookahead += 1
+						print("Training accuracy is sufficiently high. Increasing training lookahead to {}.".format(model.lookahead))
+						reinit_data_loader = True
+						break
+
+				if epoch % save_interval == 0:
+					ckpt_filename = filename + '/epoch{}.pt'.format(epoch)
+					print('saving to "{}".'.format(ckpt_filename))
+					torch.save((model,getstate(),np.random.get_state(),torch.get_rng_state()), ckpt_filename)
+					print('done saving model.')
+					stdout.flush()
+
+					#time5 = time.perf_counter()
+					#print('[MAIN] Time to save model: {}s'.format(time5 - time4))
+					#stdout.flush()
+
 				#time7 = time.perf_counter()
 				#print('[MAIN] Total time for epoch: {}s'.format(time7 - time1))
 				#stdout.flush()
 				epoch += 1
 				num_batches = 0
 				epoch_loss = 0.0
+				if reinit_data_loader:
+					break
 
 			#if device.type == 'cuda':
 			#	torch.cuda.synchronize(device)
 			log_end_time = time.perf_counter()
 			log_time += log_end_time - log_start_time
+
+		if reinit_data_loader:
+			iterable_dataset = StreamingDataset(epoch * STREAMING_BLOCK_SIZE // BATCH_SIZE, model.lookahead)
+			train_loader = DataLoader(iterable_dataset, batch_size=None, num_workers=NUM_DATA_WORKERS, pin_memory=True, prefetch_factor=8)
+			reinit_data_loader = False
 
 if __name__ == "__main__":
 	import argparse
