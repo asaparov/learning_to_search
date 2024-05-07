@@ -19,6 +19,212 @@ def normalize_conditions(conditions):
 		conditions[i] = (row2,col2,sign2,row1,col1,sign1)
 	conditions.sort()
 
+def compute_attention(layer_index: int, attn_layer, x: torch.Tensor, mask: torch.Tensor):
+	n, d = x.shape[-2], x.shape[-1]
+	k_params = {k:v for k,v in attn_layer.proj_k.named_parameters()}
+	q_params = {k:v for k,v in attn_layer.proj_q.named_parameters()}
+	P_k = k_params['weight']
+	P_q = q_params['weight']
+	U_k = torch.cat((P_k,k_params['bias'].unsqueeze(1)),1)
+	U_q = torch.cat((P_q,q_params['bias'].unsqueeze(1)),1)
+	A = torch.matmul(U_q.transpose(-2,-1),U_k)
+	x_prime = torch.cat((x, torch.ones(x.shape[:-1] + (1,))), -1)
+	QK = torch.matmul(torch.matmul(x_prime, A), x_prime.transpose(-2,-1)) / math.sqrt(d)
+	attn_pre_softmax = QK + mask.type_as(QK) * QK.new_tensor(-1e4)
+	attn = attn_layer.attn.dropout(attn_pre_softmax.softmax(-1))
+
+	if attn_layer.proj_v:
+		v = attn_layer.proj_v(x)
+	else:
+		v = x
+	new_x = torch.matmul(attn, v)
+	if attn_layer.linear:
+		out = attn_layer.linear(new_x)
+	else:
+		out = new_x
+	return out, attn_pre_softmax, attn, v, new_x, A
+
+def forward(model, x: torch.Tensor, mask: torch.Tensor, start_layer: int, start_at_ff: bool, end_layer: int, perturbations):
+	# Apply transformer layers sequentially.
+	layer_inputs = [None] * start_layer
+	attn_inputs = [None] * start_layer
+	attn_matrices = [None] * start_layer
+	v_outputs = [None] * start_layer
+	attn_linear_inputs = [None] * start_layer
+	attn_outputs = [None] * start_layer
+	attn_pre_softmax = [None] * start_layer
+	A_matrices = [None] * start_layer
+	ff_inputs = [None] * start_layer
+	ff_parameters = [None] * start_layer
+	current_layer = start_layer
+	for transformer in model.transformers[start_layer:end_layer+1]:
+		# Layer normalizations are performed before the layers respectively.
+		if perturbations != None:
+			for (perturb_layer, perturb_index, perturb_vec) in perturbations:
+				if current_layer == perturb_layer:
+					if perturb_index == -1:
+						x[0:,:] = perturb_vec[0:,:]
+					else:
+						x[perturb_index,:] = perturb_vec
+		if start_at_ff:
+			layer_inputs.append(None)
+			attn_inputs.append(None)
+			v_outputs.append(None)
+			attn_matrices.append(None)
+			attn_linear_inputs.append(None)
+			A_matrices.append(None)
+			start_at_ff = False
+		else:
+			layer_inputs.append(x)
+			a = transformer.ln_attn(x)
+			attn_inputs.append(a)
+			if transformer.attn.proj_v:
+				a, pre_softmax, attn_matrix, v, attn_linear_input, A = compute_attention(current_layer, transformer.attn, a, mask)
+			else:
+				a, pre_softmax, attn_matrix, v, attn_linear_input, A = compute_attention(current_layer, transformer.attn, x, mask)
+			v_outputs.append(v)
+			attn_matrices.append(attn_matrix)
+			attn_pre_softmax.append(pre_softmax)
+			attn_linear_inputs.append(attn_linear_input)
+			attn_outputs.append(a)
+			A_matrices.append(A)
+			x = x + a
+
+		ff_inputs.append(x)
+		if transformer.ff:
+			x = x + transformer.ff(transformer.ln_ff(x))
+			ff_params = {k:v for k,v in transformer.ff.named_parameters()}
+			ff_parameters.append((ff_params['0.weight'].T, ff_params['3.weight'].T, ff_params['0.bias'], ff_params['3.bias']))
+		else:
+			ff_parameters.append((None, None, None, None))
+		#print(x[-1,:])
+		current_layer += 1
+	layer_inputs.append(x)
+	token_dim = model.token_embedding.shape[0]
+
+	if model.ln_head:
+		x = model.ln_head(x)
+	if model.positional_embedding is not None:
+		x = x[...,:-model.positional_embedding.shape[0]]
+	if type(model.token_embedding) == TokenEmbedding:
+		x = model.token_embedding(x, transposed=True)
+	else:
+		x = torch.matmul(x, model.token_embedding.transpose(0, 1))
+
+	prediction = torch.argmax(x[...,-1,:token_dim], dim=-1).tolist()
+
+	return layer_inputs, attn_inputs, attn_pre_softmax, attn_matrices, v_outputs, attn_linear_inputs, attn_outputs, A_matrices, ff_inputs, ff_parameters, prediction
+
+class TransformerProber(nn.Module):
+	def __init__(self, tfm_model, probe_layer):
+		super().__init__()
+		d = tfm_model.ln_head.normalized_shape[0]
+		self.model = tfm_model
+		for param in tfm_model.parameters():
+			param.requires_grad = False
+		self.probe_layer = probe_layer
+		n = tfm_model.positional_embedding.size(0)
+		self.A_ops = [nn.parameter.Parameter(torch.empty((d,d)))]
+		if probe_layer > len(tfm_model.transformers):
+			raise Exception('probe_layer must be <= number of layers')
+
+	def reset_parameters(self) -> None:
+		for A_op in self.A_ops:
+			nn.init.kaiming_uniform_(A_op, a=math.sqrt(5))
+
+	def to(self, device):
+		super().to(device)
+		for A_op in self.A_ops:
+			A_op.to(device)
+
+	def forward(self, x: torch.Tensor):
+		d = self.model.ln_head.normalized_shape[0]
+		n = self.model.positional_embedding.size(0)
+		QUERY_PREFIX_TOKEN = (n - 5) // 3 + 4
+		PADDING_TOKEN = (n - 5) // 3 + 3
+		EDGE_PREFIX_TOKEN = (n - 5) // 3 + 2
+		PATH_PREFIX_TOKEN = (n - 5) // 3 + 1
+
+		other_inputs = x.repeat((3*n+1,1))
+
+		# create perturbed inputs where each input replaces every occurrence of a token value with an unused token value
+		max_vertex_id = (n - 5) // 3
+		unused_id = next(t for t in range(1, max_vertex_id + 1) if t not in x)
+		for j in range(max_vertex_id + 1):
+			other_inputs[j,x == j] = unused_id
+
+		# create perturbed inputs where each input swaps the position of one token
+		other_inputs = self.model.token_embedding[other_inputs]
+		if len(other_inputs.shape) == 2:
+			pos = self.model.positional_embedding
+		else:
+			pos = self.model.positional_embedding.unsqueeze(0).expand(other_inputs.shape[0], -1, -1)
+		other_inputs = torch.cat((other_inputs, pos), -1)
+		other_inputs = self.model.dropout_embedding(other_inputs)
+
+		# perturb the position embeddings
+		edge_indices = [i + 1 for i in range(len(x)) if x[i] == EDGE_PREFIX_TOKEN]
+		for j in range(n):
+			if x[j] in (PADDING_TOKEN, QUERY_PREFIX_TOKEN, PATH_PREFIX_TOKEN):
+				continue
+			if j < edge_indices[-1] or j > edge_indices[-1] + 2:
+				src_edge_index = edge_indices[-1]
+			else:
+				src_edge_index = edge_indices[-2]
+			offset = (src_edge_index % 3) - (j % 3)
+			if offset > 1:
+				offset -= 3
+			other_inputs[n+j,j,:d-n] = 0
+			other_inputs[n+j,j,unused_id] = 1
+			other_inputs[2*n+j,j,d-n:] = other_inputs[n+j,src_edge_index-offset,d-n:].clone().detach()
+
+		# Create masking tensor.
+		mask = self.model.pad_masking(x, 0)
+		if not self.model.bidirectional:
+			mask = mask + self.model.future_masking(x, 0)
+
+		# perform forward pass on original input
+		x = self.model.token_embedding[x]
+		if len(x.shape) == 2:
+			pos = self.model.positional_embedding
+		else:
+			pos = self.model.positional_embedding.unsqueeze(0).expand(x.shape[0], -1, -1)
+		x = torch.cat((x, pos), -1)
+		x = self.model.dropout_embedding(x)
+		_,attn_inputs,_,_,_,_,_,A_matrices,_,_,_ = forward(self.model, x, mask, 0, False, self.probe_layer, None)
+
+		# perform forward pass on other_inputs
+		_,perturb_attn_inputs,_,_,_,_,_,_,_,_,_ = forward(self.model, other_inputs, mask, 0, False, self.probe_layer, None)
+
+		y = x.clone().detach()
+		perturb_y = other_inputs.clone().detach()
+		mixed_A_predictions = []
+		mixed_A_labels = []
+		for i in range(self.probe_layer + 1):
+			left_mixed_a = torch.matmul(torch.matmul(perturb_y, self.A_ops[i]), y.transpose(-2,-1))
+			right_mixed_a = torch.matmul(torch.matmul(y, self.A_ops[i]), perturb_y.transpose(-2,-1))
+			mixed_A_predictions.append((left_mixed_a,right_mixed_a))
+
+			A = A_matrices[i][:-1,:-1]
+			left_mixed_a_label = torch.matmul(torch.matmul(perturb_attn_inputs[i], A), attn_inputs[i].T)
+			right_mixed_a_label = torch.matmul(torch.matmul(attn_inputs[i], A), torch.permute(perturb_attn_inputs[i],(0,2,1)))
+			mixed_A_labels.append((left_mixed_a_label,right_mixed_a_label))
+			break
+
+			a = torch.matmul(torch.matmul(y, self.A_ops[i]), y.transpose(-2,-1))
+			if mask is not None:
+				a += mask.type_as(a) * a.new_tensor(-1e9)
+			a = a.softmax(-1)
+			y += torch.matmul(a, y)
+
+			perturb_a = torch.matmul(torch.matmul(perturb_y, self.A_ops[i]), perturb_y.transpose(-2,-1))
+			if mask is not None:
+				perturb_a += mask.type_as(perturb_a) * perturb_a.new_tensor(-1e9)
+			perturb_a = perturb_a.softmax(-1)
+			perturb_y += torch.matmul(perturb_a, perturb_y)
+
+		return mixed_A_predictions, mixed_A_labels
+
 class AlgorithmCase:
 	def __init__(self, conditions, then, inputs):
 		# `conditions` is a list of tuples (x_i,y_i,z_i,u_i,v_i,w_i), representing a conjunction of conditions checking if x_i[y_i] is large if `z_i == True`, or x_i[y_i] is small if `z_i == False`, and u_i[v_i] is large if `w_i == True`, or u_i[v_i] is small if `w_i == False`
@@ -103,109 +309,13 @@ class TransformerTracer:
 		self.model.eval()
 		self.algorithm = [AlgorithmStep() for i in range(len(self.model.transformers))]
 
-	def compute_attention(self, layer_index: int, attn_layer, x: torch.Tensor, mask: torch.Tensor):
-		n, d = x.shape[-2], x.shape[-1]
-		k_params = {k:v for k,v in attn_layer.proj_k.named_parameters()}
-		q_params = {k:v for k,v in attn_layer.proj_q.named_parameters()}
-		P_k = k_params['weight']
-		P_q = q_params['weight']
-		U_k = torch.cat((P_k,k_params['bias'].unsqueeze(1)),1)
-		U_q = torch.cat((P_q,q_params['bias'].unsqueeze(1)),1)
-		A = torch.matmul(U_q.transpose(-2,-1),U_k)
-		x_prime = torch.cat((x, torch.ones(x.shape[:-1] + (1,))), -1)
-		QK = torch.matmul(torch.matmul(x_prime, A), x_prime.transpose(-2,-1)) / math.sqrt(d)
-		attn_pre_softmax = QK + mask.type_as(QK) * QK.new_tensor(-1e4)
-		attn = attn_layer.attn.dropout(attn_pre_softmax.softmax(-1))
-
-		if attn_layer.proj_v:
-			v = attn_layer.proj_v(x)
-		else:
-			v = x
-		new_x = torch.matmul(attn, v)
-		if attn_layer.linear:
-			out = attn_layer.linear(new_x)
-		else:
-			out = new_x
-		return out, attn_pre_softmax, attn, v, new_x, A
-
-	def forward(self, x: torch.Tensor, mask: torch.Tensor, start_layer: int, start_at_ff: bool, end_layer: int, perturbations):
-		# Apply transformer layers sequentially.
-		layer_inputs = [None] * start_layer
-		attn_inputs = [None] * start_layer
-		attn_matrices = [None] * start_layer
-		v_outputs = [None] * start_layer
-		attn_linear_inputs = [None] * start_layer
-		attn_outputs = [None] * start_layer
-		attn_pre_softmax = [None] * start_layer
-		A_matrices = [None] * start_layer
-		ff_inputs = [None] * start_layer
-		ff_parameters = [None] * start_layer
-		current_layer = start_layer
-		for transformer in self.model.transformers[start_layer:end_layer+1]:
-			# Layer normalizations are performed before the layers respectively.
-			if perturbations != None:
-				for (perturb_layer, perturb_index, perturb_vec) in perturbations:
-					if current_layer == perturb_layer:
-						if perturb_index == -1:
-							x[0:,:] = perturb_vec[0:,:]
-						else:
-							x[perturb_index,:] = perturb_vec
-			if start_at_ff:
-				layer_inputs.append(None)
-				attn_inputs.append(None)
-				v_outputs.append(None)
-				attn_matrices.append(None)
-				attn_linear_inputs.append(None)
-				A_matrices.append(None)
-				start_at_ff = False
-			else:
-				layer_inputs.append(x)
-				a = transformer.ln_attn(x)
-				attn_inputs.append(a)
-				if transformer.attn.proj_v:
-					a, pre_softmax, attn_matrix, v, attn_linear_input, A = self.compute_attention(current_layer, transformer.attn, a, mask)
-				else:
-					a, pre_softmax, attn_matrix, v, attn_linear_input, A = self.compute_attention(current_layer, transformer.attn, x, mask)
-				v_outputs.append(v)
-				attn_matrices.append(attn_matrix)
-				attn_pre_softmax.append(pre_softmax)
-				attn_linear_inputs.append(attn_linear_input)
-				attn_outputs.append(a)
-				A_matrices.append(A)
-				x = x + a
-
-			ff_inputs.append(x)
-			if transformer.ff:
-				x = x + transformer.ff(transformer.ln_ff(x))
-				ff_params = {k:v for k,v in transformer.ff.named_parameters()}
-				ff_parameters.append((ff_params['0.weight'].T, ff_params['3.weight'].T, ff_params['0.bias'], ff_params['3.bias']))
-			else:
-				ff_parameters.append((None, None, None, None))
-			#print(x[-1,:])
-			current_layer += 1
-		layer_inputs.append(x)
-		token_dim = self.model.token_embedding.shape[0]
-
-		if self.model.ln_head:
-			x = self.model.ln_head(x)
-		if self.model.positional_embedding is not None:
-			x = x[...,:-self.model.positional_embedding.shape[0]]
-		if type(self.model.token_embedding) == TokenEmbedding:
-			x = self.model.token_embedding(x, transposed=True)
-		else:
-			x = torch.matmul(x, self.model.token_embedding.transpose(0, 1))
-
-		prediction = torch.argmax(x[...,-1,:token_dim], dim=-1).tolist()
-
-		return layer_inputs, attn_inputs, attn_pre_softmax, attn_matrices, v_outputs, attn_linear_inputs, attn_outputs, A_matrices, ff_inputs, ff_parameters, prediction
-
 	'''def input_derivatives(self, x: torch.Tensor, mask: torch.Tensor, dx: float, start_layer: int, start_at_ff: bool, old_prediction: int, last_layer_output: torch.Tensor):
 		dfdx = torch.empty(x.shape)
 		for i in range(x.size(0)):
 			for j in range(x.size(1)):
 				new_x = x.clone().detach()
 				new_x[i,j] += dx
-				layer_inputs, _, _, _, _, _, _, _, _, _, _ = self.forward(new_x, mask, start_layer, start_at_ff)
+				layer_inputs, _, _, _, _, _, _, _, _, _, _ = forward(self.model, new_x, mask, start_layer, start_at_ff)
 				dfdx[i,j] = (layer_inputs[-1][-1,old_prediction] - last_layer_output[-1,old_prediction]) / dx
 		return dfdx'''
 
@@ -290,9 +400,9 @@ class TransformerTracer:
 		other_x = torch.cat((other_x, pos), -1)
 		other_x = self.model.dropout_embedding(other_x)
 
-		other_layer_inputs, other_attn_inputs, other_attn_pre_softmax, other_attn_matrices, other_v_outputs, other_attn_linear_inputs, other_attn_outputs, other_A_matrices, other_ff_inputs, other_ff_parameters, other_prediction = self.forward(other_x, mask, 0, False, len(self.model.transformers)-1, None)
+		other_layer_inputs, other_attn_inputs, other_attn_pre_softmax, other_attn_matrices, other_v_outputs, other_attn_linear_inputs, other_attn_outputs, other_A_matrices, other_ff_inputs, other_ff_parameters, other_prediction = forward(self.model, other_x, mask, 0, False, len(self.model.transformers)-1, None)
 
-		layer_inputs, attn_inputs, attn_pre_softmax, attn_matrices, v_outputs, attn_linear_inputs, attn_outputs, A_matrices, ff_inputs, ff_parameters, prediction = self.forward(x, mask, 0, False, len(self.model.transformers)-1, None)
+		layer_inputs, attn_inputs, attn_pre_softmax, attn_matrices, v_outputs, attn_linear_inputs, attn_outputs, A_matrices, ff_inputs, ff_parameters, prediction = forward(self.model, x, mask, 0, False, len(self.model.transformers)-1, None)
 		#[(3,65,other_layer_inputs[3][65,:]),(3,68,other_layer_inputs[3][68,:])]
 		#[(4,23,other_layer_inputs[4][23,:]),(4,20,other_layer_inputs[4][20,:])]
 		#[(5,89,other_layer_inputs[5][89,:])]
@@ -931,11 +1041,12 @@ class TransformerTracer:
 			other_inputs = torch.cat((other_inputs, pos), -1)
 			other_inputs = self.model.dropout_embedding(other_inputs)
 
-			perturb_layer_inputs, perturb_attn_inputs, perturb_attn_pre_softmax, perturb_attn_matrices, perturb_v_outputs, perturb_attn_linear_inputs, perturb_attn_outputs, perturb_A_matrices, perturb_ff_inputs, perturb_ff_parameters, perturb_prediction = self.forward(other_inputs, mask, 0, False, i, None)
+			perturb_layer_inputs, perturb_attn_inputs, perturb_attn_pre_softmax, perturb_attn_matrices, perturb_v_outputs, perturb_attn_linear_inputs, perturb_attn_outputs, perturb_A_matrices, perturb_ff_inputs, perturb_ff_parameters, perturb_prediction = forward(self.model, other_inputs, mask, 0, False, i, None)
 
 			# try computing the attention dot product but with perturbed dst embeddings
 			A = A_matrices[i][:-1,:-1]
 			old_product = torch.dot(torch.matmul(attn_inputs[i][dst,:], A), attn_inputs[i][src,:])
+			import pdb; pdb.set_trace()
 			new_src_products = torch.matmul(torch.matmul(attn_inputs[i][dst,:], A), perturb_attn_inputs[i][:,src,:].T)
 			new_dst_products = torch.matmul(torch.matmul(perturb_attn_inputs[i][:,dst,:], A), attn_inputs[i][src,:])
 
@@ -951,7 +1062,7 @@ class TransformerTracer:
 
 			import pdb; pdb.set_trace()
 
-			# create perturbed inputs where each input replaces every occurrence of a token with an unused token
+			# create perturbed inputs where each input replaces every occurrence of a token value with an unused token value
 			max_vertex_id = (n - 5) // 3
 			unused_id = next(t for t in range(1, max_vertex_id + 1) if t not in input)
 			other_inputs = input.repeat(max_vertex_id + 1, 1)
@@ -967,7 +1078,7 @@ class TransformerTracer:
 			other_inputs = torch.cat((other_inputs, pos), -1)
 			other_inputs = self.model.dropout_embedding(other_inputs)
 
-			perturb_layer_inputs, perturb_attn_inputs, perturb_attn_pre_softmax, perturb_attn_matrices, perturb_v_outputs, perturb_attn_linear_inputs, perturb_attn_outputs, perturb_A_matrices, perturb_ff_inputs, perturb_ff_parameters, perturb_prediction = self.forward(other_inputs, mask, 0, False, i, None)
+			perturb_layer_inputs, perturb_attn_inputs, perturb_attn_pre_softmax, perturb_attn_matrices, perturb_v_outputs, perturb_attn_linear_inputs, perturb_attn_outputs, perturb_A_matrices, perturb_ff_inputs, perturb_ff_parameters, perturb_prediction = forward(self.model, other_inputs, mask, 0, False, i, None)
 
 			# try computing the attention dot product but with perturbed dst embeddings
 			A = A_matrices[i][:-1,:-1]
@@ -1002,7 +1113,6 @@ class TransformerTracer:
 				other_inputs[j,j] = input[src_edge_index - offset]
 				other_inputs[j,src_edge_index - offset] = input[j]'''
 
-			# perform forward pass on other_inputs
 			other_inputs = self.model.token_embedding[other_inputs]
 			if len(other_inputs.shape) == 2:
 				pos = self.model.positional_embedding
@@ -1022,10 +1132,11 @@ class TransformerTracer:
 				offset = (src_edge_index % 3) - (j % 3)
 				if offset > 1:
 					offset -= 3
-				other_inputs[j,j,:d-n] = other_inputs[j,j,:d-n].clone().detach()
-				other_inputs[n+j,j,d-n:] = other_inputs[n+j,j,d-n:].clone().detach()
+				other_inputs[j,j,:d-n] = other_inputs[j,src_edge_index-offset,:d-n].clone().detach()
+				other_inputs[n+j,j,d-n:] = other_inputs[n+j,src_edge_index-offset,d-n:].clone().detach()
 
-			perturb_layer_inputs, perturb_attn_inputs, perturb_attn_pre_softmax, perturb_attn_matrices, perturb_v_outputs, perturb_attn_linear_inputs, perturb_attn_outputs, perturb_A_matrices, perturb_ff_inputs, perturb_ff_parameters, perturb_prediction = self.forward(other_inputs, mask, 0, False, i, None)
+			# perform forward pass on other_inputs
+			perturb_layer_inputs, perturb_attn_inputs, perturb_attn_pre_softmax, perturb_attn_matrices, perturb_v_outputs, perturb_attn_linear_inputs, perturb_attn_outputs, perturb_A_matrices, perturb_ff_inputs, perturb_ff_parameters, perturb_prediction = forward(self.model, other_inputs, mask, 0, False, i, None)
 
 			src_dependencies, dst_dependencies = classify_attn_op(i, dst, src, perturb_attn_inputs)
 
@@ -1075,6 +1186,25 @@ class TransformerTracer:
 
 			import pdb; pdb.set_trace()
 
+		probe_model = TransformerProber(self.model, 0)
+		probe_model.to(device)
+		probe_model.reset_parameters()
+		from Sophia import SophiaG
+		optimizer = SophiaG((p for p in probe_model.A_ops), lr=1.0e-1)
+		loss_func = torch.nn.MSELoss()
+		import pdb; pdb.set_trace()
+		while True:
+			probe_model.train()
+			optimizer.zero_grad()
+
+			torch.autograd.set_detect_anomaly(True)
+			A_predictions, A_labels = probe_model(input)
+			loss = sum([loss_func(A_predictions[i][0], A_labels[i][0]) + loss_func(A_predictions[i][1], A_labels[i][1]) for i in range(len(A_labels))])
+
+			loss.backward()
+			optimizer.step()
+			print('loss: {}'.format(loss.item()))
+
 		activation_patch_attn(5, 89, 35)
 		#activation_patch_attn(4, 89, 23)
 		#activation_patch_attn(4, 35, 14)
@@ -1110,7 +1240,7 @@ class TransformerTracer:
 		import pdb; pdb.set_trace()
 		trace_contributions(1, [(11,23)], attn_inputs, attn_matrices, attn_representations, attn_out_representations, contributions_to_search)
 
-		other_layer_inputs, other_attn_inputs, other_attn_pre_softmax, other_attn_matrices, other_v_outputs, other_attn_linear_inputs, other_attn_outputs, other_A_matrices, other_ff_inputs, other_ff_parameters, other_prediction = self.forward(x, mask, 0, False, [(4, 35, layer_inputs[4][35,:] - representations[4][30,35,:] + representations[3][30,35,:])])
+		other_layer_inputs, other_attn_inputs, other_attn_pre_softmax, other_attn_matrices, other_v_outputs, other_attn_linear_inputs, other_attn_outputs, other_A_matrices, other_ff_inputs, other_ff_parameters, other_prediction = forward(self.model, x, mask, 0, False, [(4, 35, layer_inputs[4][35,:] - representations[4][30,35,:] + representations[3][30,35,:])])
 		import pdb; pdb.set_trace()
 
 		def compute_copy_distances(src_pos, dst_pos):
