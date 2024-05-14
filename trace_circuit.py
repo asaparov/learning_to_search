@@ -30,7 +30,7 @@ def compute_attention(layer_index: int, attn_layer, x: torch.Tensor, mask: torch
 	A = torch.matmul(U_q.transpose(-2,-1),U_k)
 	x_prime = torch.cat((x, torch.ones(x.shape[:-1] + (1,))), -1)
 	QK = torch.matmul(torch.matmul(x_prime, A), x_prime.transpose(-2,-1)) / math.sqrt(d)
-	attn_pre_softmax = QK + mask.type_as(QK) * QK.new_tensor(-1e4)
+	attn_pre_softmax = QK + mask.type_as(QK) * QK.new_tensor(-1e9)
 	attn = attn_layer.attn.dropout(attn_pre_softmax.softmax(-1))
 
 	if attn_layer.proj_v:
@@ -44,7 +44,7 @@ def compute_attention(layer_index: int, attn_layer, x: torch.Tensor, mask: torch
 		out = new_x
 	return out, attn_pre_softmax, attn, v, new_x, A
 
-def forward(model, x: torch.Tensor, mask: torch.Tensor, start_layer: int, start_at_ff: bool, end_layer: int, perturbations):
+def forward(model, x: torch.Tensor, mask: torch.Tensor, start_layer: int, start_at_ff: bool, end_layer: int, perturbations, frozen_ops):
 	# Apply transformer layers sequentially.
 	layer_inputs = [None] * start_layer
 	attn_inputs = [None] * start_layer
@@ -57,7 +57,8 @@ def forward(model, x: torch.Tensor, mask: torch.Tensor, start_layer: int, start_
 	ff_inputs = [None] * start_layer
 	ff_parameters = [None] * start_layer
 	current_layer = start_layer
-	for transformer in model.transformers[start_layer:end_layer+1]:
+	for layer_idx in range(start_layer,end_layer+1):
+		transformer = model.transformers[layer_idx]
 		# Layer normalizations are performed before the layers respectively.
 		if perturbations != None:
 			for (perturb_layer, perturb_index, perturb_vec) in perturbations:
@@ -78,7 +79,19 @@ def forward(model, x: torch.Tensor, mask: torch.Tensor, start_layer: int, start_
 			layer_inputs.append(x)
 			a = transformer.ln_attn(x)
 			attn_inputs.append(a)
-			if transformer.attn.proj_v:
+			if frozen_ops != None and layer_idx < len(frozen_ops):
+				attn_matrix = frozen_ops[layer_idx][0]
+				if transformer.attn.proj_v:
+					v = transformer.attn.proj_v(a)
+				else:
+					v = x
+				attn_linear_input = torch.matmul(attn_matrix, v)
+				if transformer.attn.linear:
+					a = transformer.attn.linear(attn_linear_input)
+				else:
+					a = attn_linear_input
+				pre_softmax, A = None, None
+			elif transformer.attn.proj_v:
 				a, pre_softmax, attn_matrix, v, attn_linear_input, A = compute_attention(current_layer, transformer.attn, a, mask)
 			else:
 				a, pre_softmax, attn_matrix, v, attn_linear_input, A = compute_attention(current_layer, transformer.attn, x, mask)
@@ -92,7 +105,11 @@ def forward(model, x: torch.Tensor, mask: torch.Tensor, start_layer: int, start_
 
 		ff_inputs.append(x)
 		if transformer.ff:
-			x = x + transformer.ff(transformer.ln_ff(x))
+			if False and frozen_ops != None and layer_idx < len(frozen_ops):
+				ff_mask = frozen_ops[layer_idx][1]
+				x = x + transformer.ff[3](transformer.ff[2](ff_mask * transformer.ff[0](transformer.ln_ff(x))))
+			else:
+				x = x + transformer.ff(transformer.ln_ff(x))
 			ff_params = {k:v for k,v in transformer.ff.named_parameters()}
 			ff_parameters.append((ff_params['0.weight'].T, ff_params['3.weight'].T, ff_params['0.bias'], ff_params['3.bias']))
 		else:
@@ -191,10 +208,10 @@ class TransformerProber(nn.Module):
 			pos = self.model.positional_embedding.unsqueeze(0).expand(x.shape[0], -1, -1)
 		x = torch.cat((x, pos), -1)
 		x = self.model.dropout_embedding(x)
-		_,attn_inputs,_,_,_,_,_,A_matrices,_,_,_ = forward(self.model, x, mask, 0, False, self.probe_layer, None)
+		_,attn_inputs,_,_,_,_,_,A_matrices,_,_,_ = forward(self.model, x, mask, 0, False, self.probe_layer, None, None)
 
 		# perform forward pass on other_inputs
-		_,perturb_attn_inputs,_,_,_,_,_,_,_,_,_ = forward(self.model, other_inputs, mask, 0, False, self.probe_layer, None)
+		_,perturb_attn_inputs,_,_,_,_,_,_,_,_,_ = forward(self.model, other_inputs, mask, 0, False, self.probe_layer, None, None)
 
 		y = x.clone().detach()
 		perturb_y = other_inputs.clone().detach()
@@ -400,9 +417,9 @@ class TransformerTracer:
 		other_x = torch.cat((other_x, pos), -1)
 		other_x = self.model.dropout_embedding(other_x)
 
-		other_layer_inputs, other_attn_inputs, other_attn_pre_softmax, other_attn_matrices, other_v_outputs, other_attn_linear_inputs, other_attn_outputs, other_A_matrices, other_ff_inputs, other_ff_parameters, other_prediction = forward(self.model, other_x, mask, 0, False, len(self.model.transformers)-1, None)
+		other_layer_inputs, other_attn_inputs, other_attn_pre_softmax, other_attn_matrices, other_v_outputs, other_attn_linear_inputs, other_attn_outputs, other_A_matrices, other_ff_inputs, other_ff_parameters, other_prediction = forward(self.model, other_x, mask, 0, False, len(self.model.transformers)-1, None, None)
 
-		layer_inputs, attn_inputs, attn_pre_softmax, attn_matrices, v_outputs, attn_linear_inputs, attn_outputs, A_matrices, ff_inputs, ff_parameters, prediction = forward(self.model, x, mask, 0, False, len(self.model.transformers)-1, None)
+		layer_inputs, attn_inputs, attn_pre_softmax, attn_matrices, v_outputs, attn_linear_inputs, attn_outputs, A_matrices, ff_inputs, ff_parameters, prediction = forward(self.model, x, mask, 0, False, len(self.model.transformers)-1, None, None)
 		#[(3,65,other_layer_inputs[3][65,:]),(3,68,other_layer_inputs[3][68,:])]
 		#[(4,23,other_layer_inputs[4][23,:]),(4,20,other_layer_inputs[4][20,:])]
 		#[(5,89,other_layer_inputs[5][89,:])]
@@ -1041,14 +1058,21 @@ class TransformerTracer:
 			other_inputs = torch.cat((other_inputs, pos), -1)
 			other_inputs = self.model.dropout_embedding(other_inputs)
 
-			perturb_layer_inputs, perturb_attn_inputs, perturb_attn_pre_softmax, perturb_attn_matrices, perturb_v_outputs, perturb_attn_linear_inputs, perturb_attn_outputs, perturb_A_matrices, perturb_ff_inputs, perturb_ff_parameters, perturb_prediction = forward(self.model, other_inputs, mask, 0, False, i, None)
+			frozen_ops = []
+			for j in range(i):
+				frozen_ops.append((attn_matrices[j], self.model.transformers[j].ff[0]( self.model.transformers[j].ln_ff(ff_inputs[j])) > 0.0))
+
+			perturb_layer_inputs, perturb_attn_inputs, perturb_attn_pre_softmax, perturb_attn_matrices, perturb_v_outputs, perturb_attn_linear_inputs, perturb_attn_outputs, perturb_A_matrices, perturb_ff_inputs, perturb_ff_parameters, perturb_prediction = forward(self.model, other_inputs, mask, 0, False, i, None, frozen_ops)
 
 			# try computing the attention dot product but with perturbed dst embeddings
 			A = A_matrices[i][:-1,:-1]
-			old_product = torch.dot(torch.matmul(attn_inputs[i][dst,:], A), attn_inputs[i][src,:])
+			old_products = torch.matmul(torch.matmul(attn_inputs[i], A), attn_inputs[i].T)
+			old_product = old_products[dst, src]
 			import pdb; pdb.set_trace()
-			new_src_products = torch.matmul(torch.matmul(attn_inputs[i][dst,:], A), perturb_attn_inputs[i][:,src,:].T)
-			new_dst_products = torch.matmul(torch.matmul(perturb_attn_inputs[i][:,dst,:], A), attn_inputs[i][src,:])
+			new_src_products = torch.matmul(torch.matmul(attn_inputs[i], A), perturb_attn_inputs[i].transpose(-2,-1))
+			new_dst_products = torch.matmul(torch.matmul(perturb_attn_inputs[i], A), attn_inputs[i].transpose(-2,-1))
+			new_src_products = new_src_products[:,dst,src]
+			new_dst_products = new_dst_products[:,dst,src]
 
 			is_negative_copy = (attn_matrices[i][dst,src] < 0.01)
 			if is_negative_copy:
@@ -1065,7 +1089,7 @@ class TransformerTracer:
 			# create perturbed inputs where each input replaces every occurrence of a token value with an unused token value
 			max_vertex_id = (n - 5) // 3
 			unused_id = next(t for t in range(1, max_vertex_id + 1) if t not in input)
-			other_inputs = input.repeat(max_vertex_id + 1, 1)
+			other_inputs = input.repeat(max_vertex_id + 1 + n, 1)
 			for j in range(max_vertex_id + 1):
 				other_inputs[j,input == j] = unused_id
 
@@ -1078,13 +1102,27 @@ class TransformerTracer:
 			other_inputs = torch.cat((other_inputs, pos), -1)
 			other_inputs = self.model.dropout_embedding(other_inputs)
 
-			perturb_layer_inputs, perturb_attn_inputs, perturb_attn_pre_softmax, perturb_attn_matrices, perturb_v_outputs, perturb_attn_linear_inputs, perturb_attn_outputs, perturb_A_matrices, perturb_ff_inputs, perturb_ff_parameters, perturb_prediction = forward(self.model, other_inputs, mask, 0, False, i, None)
+			# for the last n rows of `other_inputs`, perturb the position embeddings
+			for j in range(n):
+				if j < edge_indices[-1] or j > edge_indices[-1] + 2:
+					src_edge_index = edge_indices[-1]
+				else:
+					src_edge_index = edge_indices[-2]
+				offset = (src_edge_index % 3) - (j % 3)
+				if offset > 1:
+					offset -= 3
+				other_inputs[max_vertex_id+1+j,j,d-n:] = other_inputs[max_vertex_id+1+j,src_edge_index-offset,d-n:].clone().detach()
+
+			perturb_layer_inputs, perturb_attn_inputs, perturb_attn_pre_softmax, perturb_attn_matrices, perturb_v_outputs, perturb_attn_linear_inputs, perturb_attn_outputs, perturb_A_matrices, perturb_ff_inputs, perturb_ff_parameters, perturb_prediction = forward(self.model, other_inputs, mask, 0, False, i, None, frozen_ops)
 
 			# try computing the attention dot product but with perturbed dst embeddings
 			A = A_matrices[i][:-1,:-1]
-			old_product = torch.dot(torch.matmul(attn_inputs[i][dst,:], A), attn_inputs[i][src,:])
-			new_src_products = torch.matmul(torch.matmul(attn_inputs[i][dst,:], A), perturb_attn_inputs[i][:,src,:].T)
-			new_dst_products = torch.matmul(torch.matmul(perturb_attn_inputs[i][:,dst,:], A), attn_inputs[i][src,:])
+			old_products = torch.matmul(torch.matmul(attn_inputs[i], A), attn_inputs[i].T)
+			old_product = old_products[dst, src]
+			new_src_products = torch.matmul(torch.matmul(attn_inputs[i], A), perturb_attn_inputs[i].transpose(-2,-1))
+			new_dst_products = torch.matmul(torch.matmul(perturb_attn_inputs[i], A), attn_inputs[i].transpose(-2,-1))
+			new_src_products = new_src_products[:,dst,src]
+			new_dst_products = new_dst_products[:,dst,src]
 
 			is_negative_copy = (attn_matrices[i][dst,src] < 0.01)
 			if is_negative_copy:
@@ -1093,8 +1131,13 @@ class TransformerTracer:
 			else:
 				src_dependencies = torch.nonzero(new_src_products < old_product - math.sqrt(d) / 2)
 				dst_dependencies = torch.nonzero(new_dst_products < old_product - math.sqrt(d) / 2)
-			print('  src dependencies: ' + ', '.join([get_token_value(edge_indices[dep]+n) for dep in src_dependencies]))
-			print('  dst dependencies: ' + ', '.join([get_token_value(edge_indices[dep]+n) for dep in dst_dependencies]))
+			def dep_to_str(dep):
+				if dep <= max_vertex_id:
+					return BOLD + GREEN + str(dep.item()) + END
+				else:
+					return get_token_value(dep-max_vertex_id-1+n)
+			print('  src dependencies: ' + ', '.join([dep_to_str(dep) for dep in src_dependencies]))
+			print('  dst dependencies: ' + ', '.join([dep_to_str(dep) for dep in dst_dependencies]))
 
 			import pdb; pdb.set_trace()
 
@@ -1136,7 +1179,7 @@ class TransformerTracer:
 				other_inputs[n+j,j,d-n:] = other_inputs[n+j,src_edge_index-offset,d-n:].clone().detach()
 
 			# perform forward pass on other_inputs
-			perturb_layer_inputs, perturb_attn_inputs, perturb_attn_pre_softmax, perturb_attn_matrices, perturb_v_outputs, perturb_attn_linear_inputs, perturb_attn_outputs, perturb_A_matrices, perturb_ff_inputs, perturb_ff_parameters, perturb_prediction = forward(self.model, other_inputs, mask, 0, False, i, None)
+			perturb_layer_inputs, perturb_attn_inputs, perturb_attn_pre_softmax, perturb_attn_matrices, perturb_v_outputs, perturb_attn_linear_inputs, perturb_attn_outputs, perturb_A_matrices, perturb_ff_inputs, perturb_ff_parameters, perturb_prediction = forward(self.model, other_inputs, mask, 0, False, i, None, frozen_ops)
 
 			src_dependencies, dst_dependencies = classify_attn_op(i, dst, src, perturb_attn_inputs)
 
@@ -1186,7 +1229,112 @@ class TransformerTracer:
 
 			import pdb; pdb.set_trace()
 
-		probe_model = TransformerProber(self.model, 0)
+		def activation_patch_attn_layer(i, attn_ops):
+			# create perturbed inputs where each input replaces every occurrence of a token value with an unused token value
+			edge_indices = [i + 1 for i in range(len(input)) if input[i] == EDGE_PREFIX_TOKEN]
+			max_vertex_id = (n - 5) // 3
+			unused_id = next(t for t in range(1, max_vertex_id + 1) if t not in input)
+			other_inputs = input.repeat(max_vertex_id + 1 + n, 1)
+			for j in range(max_vertex_id + 1):
+				other_inputs[j,input == j] = unused_id
+
+			# perform forward pass on other_inputs
+			other_inputs = self.model.token_embedding[other_inputs]
+			if len(other_inputs.shape) == 2:
+				pos = self.model.positional_embedding
+			else:
+				pos = self.model.positional_embedding.unsqueeze(0).expand(other_inputs.shape[0:-2] + (-1,-1))
+			other_inputs = torch.cat((other_inputs, pos), -1)
+			other_inputs = self.model.dropout_embedding(other_inputs)
+
+			# for the last n rows of `other_inputs`, perturb the position embeddings
+			for j in range(n):
+				if j < edge_indices[-1] or j > edge_indices[-1] + 2:
+					src_edge_index = edge_indices[-1]
+				else:
+					src_edge_index = edge_indices[-2]
+				offset = (src_edge_index % 3) - (j % 3)
+				if offset > 1:
+					offset -= 3
+				other_inputs[max_vertex_id+1+j,j,d-n:] = other_inputs[max_vertex_id+1+j,src_edge_index-offset,d-n:].clone().detach()
+
+			perturb_layer_inputs, perturb_attn_inputs, perturb_attn_pre_softmax, perturb_attn_matrices, perturb_v_outputs, perturb_attn_linear_inputs, perturb_attn_outputs, perturb_A_matrices, perturb_ff_inputs, perturb_ff_parameters, perturb_prediction = forward(self.model, other_inputs, mask, 0, False, i, None, None)
+
+			# try computing the attention dot product but with perturbed dst embeddings
+			A = A_matrices[i][:-1,:-1]
+			old_products = torch.matmul(torch.matmul(attn_inputs[i], A), attn_inputs[i].T)
+			new_src_products = torch.matmul(torch.matmul(attn_inputs[i], A), perturb_attn_inputs[i].transpose(-2,-1))
+			new_dst_products = torch.matmul(torch.matmul(perturb_attn_inputs[i], A), attn_inputs[i].transpose(-2,-1))
+
+			for dst in edge_indices:
+				potential_sources = torch.nonzero(attn_matrices[i][dst,:] > 0.7 * torch.max(attn_matrices[i][dst,:]))[0].tolist()
+				if len(torch.nonzero(attn_matrices[i][dst,edge_indices] < 0.01)) < len(edge_indices) // 2:
+					for src in torch.nonzero(attn_matrices[i][dst,edge_indices] < 0.01):
+						new_src = edge_indices[src.item()]
+						if new_src not in potential_sources:
+							potential_sources.append(new_src)
+				for src in potential_sources:
+					print('Copy from {} to {}'.format(src, dst))
+					old_product = old_products[dst,src]
+					is_negative_copy = (attn_matrices[i][dst,src] < 0.01)
+					if is_negative_copy:
+						src_dependencies = torch.nonzero(new_src_products[:,dst,src] > old_product + math.sqrt(d) / 2)
+						dst_dependencies = torch.nonzero(new_dst_products[:,dst,src] > old_product + math.sqrt(d) / 2)
+					else:
+						src_dependencies = torch.nonzero(new_src_products[:,dst,src] < old_product - math.sqrt(d) / 2)
+						dst_dependencies = torch.nonzero(new_dst_products[:,dst,src] < old_product - math.sqrt(d) / 2)
+					src_dependencies = src_dependencies[0].tolist() if len(src_dependencies) != 0 else []
+					dst_dependencies = dst_dependencies[0].tolist() if len(dst_dependencies) != 0 else []
+
+					# remove dependencies that are explained by earlier attention operations
+					if input[src] in src_dependencies and max_vertex_id+1+src in src_dependencies:
+						dependent_indices = [src]
+						for j in reversed(range(i)):
+							for dependent_idx in dependent_indices:
+								if max_vertex_id+1+dependent_idx in src_dependencies:
+									src_dependencies.remove(max_vertex_id+1+dependent_idx)
+								if dependent_idx in attn_ops[j]:
+									for new_idx in attn_ops[j][dependent_idx]:
+										if new_idx not in dependent_indices:
+											dependent_indices.append(new_idx)
+					if input[dst] in dst_dependencies and max_vertex_id+1+dst in dst_dependencies:
+						dependent_indices = [dst]
+						for j in reversed(range(i)):
+							for dependent_idx in dependent_indices:
+								if max_vertex_id+1+dependent_idx in dst_dependencies:
+									dst_dependencies.remove(max_vertex_id+1+dependent_idx)
+								if dependent_idx in attn_ops[j]:
+									for new_idx in attn_ops[j][dependent_idx]:
+										if new_idx not in dependent_indices:
+											dependent_indices.append(new_idx)
+
+					def dep_to_str(dep):
+						if dep <= max_vertex_id:
+							return BOLD + GREEN + str(dep) + END
+						else:
+							return get_token_value(dep-max_vertex_id-1+n)
+					if len(src_dependencies) == 1 and len(dst_dependencies) == 1:
+						# this attention operation only utilizes the representation of a single token or position in each of the source and destination tokens
+						# TODO: `attn_ops` should differentiate between positive and negative copies
+						if dst_dependencies[0] not in attn_ops[i]:
+							attn_ops[i][dst_dependencies[0]] = []
+						if src_dependencies[0] not in attn_ops[i][dst_dependencies[0]]:
+							attn_ops[i][dst_dependencies[0]].append(src_dependencies[0])
+					print('  src dependencies: ' + ', '.join([dep_to_str(dep) for dep in src_dependencies]))
+					print('  dst dependencies: ' + ', '.join([dep_to_str(dep) for dep in dst_dependencies]))
+			import pdb; pdb.set_trace()
+
+		#activation_patch_attn(4, 35, 47)
+		activation_patch_attn(4, 35, 41)
+		#activation_patch_attn(5, 89, 35)
+
+		attn_ops = [{} for i in range(len(self.model.transformers))]
+		activation_patch_attn_layer(0, attn_ops)
+		activation_patch_attn_layer(1, attn_ops)
+		activation_patch_attn_layer(2, attn_ops)
+		activation_patch_attn_layer(3, attn_ops)
+
+		'''probe_model = TransformerProber(self.model, 0)
 		probe_model.to(device)
 		probe_model.reset_parameters()
 		from Sophia import SophiaG
@@ -1203,7 +1351,7 @@ class TransformerTracer:
 
 			loss.backward()
 			optimizer.step()
-			print('loss: {}'.format(loss.item()))
+			print('loss: {}'.format(loss.item()))'''
 
 		activation_patch_attn(5, 89, 35)
 		#activation_patch_attn(4, 89, 23)
@@ -1240,7 +1388,7 @@ class TransformerTracer:
 		import pdb; pdb.set_trace()
 		trace_contributions(1, [(11,23)], attn_inputs, attn_matrices, attn_representations, attn_out_representations, contributions_to_search)
 
-		other_layer_inputs, other_attn_inputs, other_attn_pre_softmax, other_attn_matrices, other_v_outputs, other_attn_linear_inputs, other_attn_outputs, other_A_matrices, other_ff_inputs, other_ff_parameters, other_prediction = forward(self.model, x, mask, 0, False, [(4, 35, layer_inputs[4][35,:] - representations[4][30,35,:] + representations[3][30,35,:])])
+		other_layer_inputs, other_attn_inputs, other_attn_pre_softmax, other_attn_matrices, other_v_outputs, other_attn_linear_inputs, other_attn_outputs, other_A_matrices, other_ff_inputs, other_ff_parameters, other_prediction = forward(self.model, x, mask, 0, False, [(4, 35, layer_inputs[4][35,:] - representations[4][30,35,:] + representations[3][30,35,:])], None)
 		import pdb; pdb.set_trace()
 
 		def compute_copy_distances(src_pos, dst_pos):
@@ -1471,17 +1619,17 @@ if __name__ == "__main__":
 	input = [31, 31, 31, 31, 31, 31, 31, 30,  7, 23, 30,  9, 22, 30,  6,  4, 30, 6, 10, 30, 25, 19, 30, 17,  9, 30, 17, 16, 30,  1, 14, 30, 11, 21, 30, 26,  1, 30, 12, 11, 30, 14,  6, 30, 15, 25, 30,  4, 17, 30, 24, 28, 30, 19,  8, 30, 27, 26, 30, 27, 12, 30, 27,  5, 30, 22, 24, 30, 8,  3, 30, 18, 15, 30,  3,  7, 30,  3, 10, 30,  3,  2, 30, 21, 18, 32, 27, 28, 29, 27]
 	input = torch.LongTensor(input).to(device)
 	other_input = input.clone().detach()
-	#other_input[-3] = 7
+	other_input[-3] = 7
 	#other_input[next(i for i in range(len(input)) if input[i] ==  1 and input[i+1] == 14) + 1] = 21
 	#other_input[next(i for i in range(len(input)) if input[i] == 11 and input[i+1] == 21) + 1] = 14
 	#other_input[next(i for i in range(len(input)) if input[i] ==  6 and input[i+1] ==   4) + 0] = 18
 	#other_input[next(i for i in range(len(input)) if input[i] ==  6 and input[i+1] ==   4) + 1] = 15
 	#other_input[next(i for i in range(len(input)) if input[i] == 18 and input[i+1] ==  15) + 0] =  6
 	#other_input[next(i for i in range(len(input)) if input[i] == 18 and input[i+1] ==  15) + 1] =  4
-	other_input[next(i for i in range(len(input)) if input[i] == 17 and input[i+1] ==  9) + 0] = 25
-	other_input[next(i for i in range(len(input)) if input[i] == 17 and input[i+1] ==  9) + 1] = 19
-	other_input[next(i for i in range(len(input)) if input[i] == 25 and input[i+1] == 19) + 0] = 17
-	other_input[next(i for i in range(len(input)) if input[i] == 25 and input[i+1] == 19) + 1] =  9
+	#other_input[next(i for i in range(len(input)) if input[i] == 17 and input[i+1] ==  9) + 0] = 25
+	#other_input[next(i for i in range(len(input)) if input[i] == 17 and input[i+1] ==  9) + 1] = 19
+	#other_input[next(i for i in range(len(input)) if input[i] == 25 and input[i+1] == 19) + 0] = 17
+	#other_input[next(i for i in range(len(input)) if input[i] == 25 and input[i+1] == 19) + 1] =  9
 	prediction = tracer.trace(input, other_input, quiet=False)
 	import pdb; pdb.set_trace()
 

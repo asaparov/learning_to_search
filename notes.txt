@@ -1019,3 +1019,32 @@ how do perturbations affect forward or backwards steps? suppose we have a copy f
 
 what the last layer could be doing if not a forwards/backwards step: computing the intersection between vertices with a path to the goal, and the valid vertices from the start vertex. if so, what effects should each perturbation have? the copy from the set of valid vertices from the start vertex can be implemented by mapping the position representation of the start vertex to that of the current vertex (this can be an identity operation on the start vertex's position). how could we test for this? if we perturb the start vertex or the first vertex along the path (after the start vertex), then the source vertex's representation should no longer match with the old dst vertex.
   -> we do indeed observe this. the second part of this operation is to compute the intersection with the set of vertices with a path to the goal.
+
+let's assume the each attention layer can only perform matching of specific activations in the source and destination token embeddings: these activations correspond to representations of specific token values or positions. how do we test for these?
+ -> for any token-token match, we can do permute each token value of the input. if the operation depends on the source embedding having activation representing token value t, then if the input is perturbed so that all t are replaced with a distinct token t', then when we perturb the source vector in the dot product, the resulting product will be significantly smaller. similarly for the destination embedding (where we instead perturb the destination vector in the dot product).
+ -> how can we be sure that an earlier layer did not create a dependency on a token value? i don't think we can be 100% sure
+ -> but what about position-position matches? suppose the attention operation depends on the
+
+why is this algorithm not bidirectional?
+  initial input:
+  E 1 2 E 2 3 E 3 4
+
+  after first layer:
+  E 1 2 E 2 3 E 3 4
+    2     3     4
+
+  after second layer:
+  E 1 2 E 2 3 E 3 4
+    2 3   3 4   4
+    3     4     5
+
+  after third layer:
+  E 1 2 E 2 3 E 3 4
+    2 3   3 4   4
+    3 4   4 5   5
+    4     5
+    5
+
+  third layer matches on each token value. so the 2 in E 2 3 will match on 3 and copy from the 3 from E 3 4, but wouldn't it also match on 2 and copy from the 1 in E 1 2?
+
+  its not bidirectional due to the relative activations of each token. for example, the 2 in E 2 3 has higher activation from 3 than from 2, and so it will match more strongly with the 3 in E 3 4 than with the 1 in E 1 2. (there is also a position-based masked that prevents it from copying from any token other than the first vertex in each edge)
