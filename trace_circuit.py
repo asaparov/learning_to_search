@@ -1005,6 +1005,61 @@ class TransformerTracer:
 
 				current_rows = next_rows
 
+		@torch.no_grad
+		def activation_patch_attn_ops(i, j, dst, src):
+			edge_indices = [i + 1 for i in range(len(input)) if input[i] == EDGE_PREFIX_TOKEN]
+			A = A_matrices[i][:-1,:-1]
+			old_products = torch.matmul(torch.matmul(attn_inputs[i], A), attn_inputs[i].T)
+			old_product = old_products[dst, src]
+
+			frozen_ops = []
+			for k in range(j):
+				frozen_ops.append((attn_matrices[k], None))
+			frozen_ops.append(None)
+
+			attn_matrix = attn_matrices[j]
+			zero_src_products = torch.empty((n,n))
+			zero_dst_products = torch.empty((n,n))
+			max_src_products = torch.empty((n,n))
+			max_dst_products = torch.empty((n,n))
+			for a in range(n):
+				row_max = torch.max(attn_matrix[a,:])
+				for b in range(n):
+					# try zeroing attn_matrix[a,b]
+					if attn_matrix[a,b] < 0.01:
+						zero_src_products[a,b] = old_product
+						zero_dst_products[a,b] = old_product
+					else:
+						print('activation_patch_attn_ops: trying to set attn_matrix[{},{}] to zero'.format(a,b))
+						new_attn_matrix = attn_matrix.clone().detach()
+						new_attn_matrix[a,b] = 0.0
+						frozen_ops[j] = (new_attn_matrix, None)
+
+						# perform forward pass on other_inputs
+						_, perturb_attn_inputs, _, _, _, _, _, _, _, _, _ = forward(self.model, layer_inputs[j], mask, j, False, i, None, frozen_ops)
+
+						# try computing the attention dot product but with perturbed dst embeddings
+						zero_src_products[a,b] = torch.matmul(torch.matmul(attn_inputs[i], A), perturb_attn_inputs[i].transpose(-2,-1))[dst,src]
+						zero_dst_products[a,b] = torch.matmul(torch.matmul(perturb_attn_inputs[i], A), attn_inputs[i].transpose(-2,-1))[dst,src]
+						del perturb_attn_inputs
+
+					# try maxing attn_matrix[a,b]
+					print('activation_patch_attn_ops: trying to set attn_matrix[{},{}] to max'.format(a,b))
+					new_attn_matrix = attn_matrix.clone().detach()
+					new_attn_matrix[a,b] = row_max
+					new_attn_matrix[a,:] /= torch.sum(new_attn_matrix[a,:])
+					frozen_ops[j] = (new_attn_matrix, None)
+
+					# perform forward pass on other_inputs
+					_, perturb_attn_inputs, _, _, _, _, _, _, _, _, _ = forward(self.model, layer_inputs[j], mask, j, False, i, None, frozen_ops)
+
+					# try computing the attention dot product but with perturbed dst embeddings
+					max_src_products[a,b] = torch.matmul(torch.matmul(attn_inputs[i], A), perturb_attn_inputs[i].transpose(-2,-1))[dst,src]
+					max_dst_products[a,b] = torch.matmul(torch.matmul(perturb_attn_inputs[i], A), attn_inputs[i].transpose(-2,-1))[dst,src]
+					del perturb_attn_inputs
+
+			return zero_src_products, zero_dst_products, max_src_products, max_dst_products
+
 		def classify_attn_op(i, dst, src, perturb_attn_inputs):
 			# try computing the attention dot product but with perturbed dst embeddings
 			A = A_matrices[i][:-1,:-1]
@@ -1012,7 +1067,7 @@ class TransformerTracer:
 			new_src_products = torch.matmul(torch.matmul(attn_inputs[i][dst,:], A), perturb_attn_inputs[i][:,src,:].T)
 			new_dst_products = torch.matmul(torch.matmul(perturb_attn_inputs[i][:,dst,:], A), attn_inputs[i][src,:])
 
-			is_negative_copy = (attn_matrices[i][dst,src] < 0.01)
+			is_negative_copy = (attn_matrices[i][dst,src] < torch.median(attn_matrices[i][dst,edge_indices]))
 			print('Layer {} copies token at {} into token at {} with weight {}.'.format(i, src, dst, attn_matrices[i][dst,src]))
 			if is_negative_copy:
 				src_dependencies = torch.nonzero(new_src_products > old_product + math.sqrt(d) / 2)
@@ -1060,7 +1115,7 @@ class TransformerTracer:
 
 			frozen_ops = []
 			for j in range(i):
-				frozen_ops.append((attn_matrices[j], self.model.transformers[j].ff[0]( self.model.transformers[j].ln_ff(ff_inputs[j])) > 0.0))
+				frozen_ops.append((attn_matrices[j], self.model.transformers[j].ff[0](self.model.transformers[j].ln_ff(ff_inputs[j])) > 0.0))
 
 			perturb_layer_inputs, perturb_attn_inputs, perturb_attn_pre_softmax, perturb_attn_matrices, perturb_v_outputs, perturb_attn_linear_inputs, perturb_attn_outputs, perturb_A_matrices, perturb_ff_inputs, perturb_ff_parameters, perturb_prediction = forward(self.model, other_inputs, mask, 0, False, i, None, frozen_ops)
 
@@ -1074,7 +1129,7 @@ class TransformerTracer:
 			new_src_products = new_src_products[:,dst,src]
 			new_dst_products = new_dst_products[:,dst,src]
 
-			is_negative_copy = (attn_matrices[i][dst,src] < 0.01)
+			is_negative_copy = (attn_matrices[i][dst,src] < torch.median(attn_matrices[i][dst,edge_indices]))
 			if is_negative_copy:
 				src_dependencies = torch.nonzero(new_src_products > old_product + math.sqrt(d) / 2)
 				dst_dependencies = torch.nonzero(new_dst_products > old_product + math.sqrt(d) / 2)
@@ -1124,7 +1179,7 @@ class TransformerTracer:
 			new_src_products = new_src_products[:,dst,src]
 			new_dst_products = new_dst_products[:,dst,src]
 
-			is_negative_copy = (attn_matrices[i][dst,src] < 0.01)
+			is_negative_copy = (attn_matrices[i][dst,src] < torch.median(attn_matrices[i][dst,edge_indices]))
 			if is_negative_copy:
 				src_dependencies = torch.nonzero(new_src_products > old_product + math.sqrt(d) / 2)
 				dst_dependencies = torch.nonzero(new_dst_products > old_product + math.sqrt(d) / 2)
@@ -1258,7 +1313,11 @@ class TransformerTracer:
 					offset -= 3
 				other_inputs[max_vertex_id+1+j,j,d-n:] = other_inputs[max_vertex_id+1+j,src_edge_index-offset,d-n:].clone().detach()
 
-			perturb_layer_inputs, perturb_attn_inputs, perturb_attn_pre_softmax, perturb_attn_matrices, perturb_v_outputs, perturb_attn_linear_inputs, perturb_attn_outputs, perturb_A_matrices, perturb_ff_inputs, perturb_ff_parameters, perturb_prediction = forward(self.model, other_inputs, mask, 0, False, i, None, None)
+			frozen_ops = []
+			for j in range(i):
+				frozen_ops.append((attn_matrices[j], self.model.transformers[j].ff[0](self.model.transformers[j].ln_ff(ff_inputs[j])) > 0.0))
+
+			perturb_layer_inputs, perturb_attn_inputs, perturb_attn_pre_softmax, perturb_attn_matrices, perturb_v_outputs, perturb_attn_linear_inputs, perturb_attn_outputs, perturb_A_matrices, perturb_ff_inputs, perturb_ff_parameters, perturb_prediction = forward(self.model, other_inputs, mask, 0, False, i, None, frozen_ops)
 
 			# try computing the attention dot product but with perturbed dst embeddings
 			A = A_matrices[i][:-1,:-1]
@@ -1276,7 +1335,7 @@ class TransformerTracer:
 				for src in potential_sources:
 					print('Copy from {} to {}'.format(src, dst))
 					old_product = old_products[dst,src]
-					is_negative_copy = (attn_matrices[i][dst,src] < 0.01)
+					is_negative_copy = (attn_matrices[i][dst,src] < torch.median(attn_matrices[i][dst,edge_indices]))
 					if is_negative_copy:
 						src_dependencies = torch.nonzero(new_src_products[:,dst,src] > old_product + math.sqrt(d) / 2)
 						dst_dependencies = torch.nonzero(new_dst_products[:,dst,src] > old_product + math.sqrt(d) / 2)
@@ -1324,15 +1383,31 @@ class TransformerTracer:
 					print('  dst dependencies: ' + ', '.join([dep_to_str(dep) for dep in dst_dependencies]))
 			import pdb; pdb.set_trace()
 
+		activation_patch_attn(3, 23, 65)
+		#activation_patch_attn(4, 35, 14)
+		#activation_patch_attn(4, 35, 41)
 		#activation_patch_attn(4, 35, 47)
-		activation_patch_attn(4, 35, 41)
 		#activation_patch_attn(5, 89, 35)
+
+		zero_src_product_list = []
+		zero_dst_product_list = []
+		max_src_product_list = []
+		max_dst_product_list = []
+		import pdb; pdb.set_trace()
+		for j in range(5):
+			zero_src_products, zero_dst_products, max_src_products, max_dst_products = activation_patch_attn_ops(5, j, 89, 35)
+			zero_src_product_list.append(zero_src_products)
+			zero_dst_product_list.append(zero_dst_products)
+			max_src_product_list.append(max_src_products)
+			max_dst_product_list.append(max_dst_products)
+		import pdb; pdb.set_trace()
 
 		attn_ops = [{} for i in range(len(self.model.transformers))]
 		activation_patch_attn_layer(0, attn_ops)
 		activation_patch_attn_layer(1, attn_ops)
 		activation_patch_attn_layer(2, attn_ops)
 		activation_patch_attn_layer(3, attn_ops)
+		activation_patch_attn_layer(4, attn_ops)
 
 		'''probe_model = TransformerProber(self.model, 0)
 		probe_model.to(device)
