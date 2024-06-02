@@ -28,7 +28,7 @@ def compute_attention(layer_index: int, attn_layer, x: torch.Tensor, mask: torch
 	U_k = torch.cat((P_k,k_params['bias'].unsqueeze(1)),1)
 	U_q = torch.cat((P_q,q_params['bias'].unsqueeze(1)),1)
 	A = torch.matmul(U_q.transpose(-2,-1),U_k)
-	x_prime = torch.cat((x, torch.ones(x.shape[:-1] + (1,))), -1)
+	x_prime = torch.cat((x, torch.ones(x.shape[:-1] + (1,), device=device)), -1)
 	QK = torch.matmul(torch.matmul(x_prime, A), x_prime.transpose(-2,-1)) / math.sqrt(d)
 	attn_pre_softmax = QK + mask.type_as(QK) * QK.new_tensor(-1e9)
 	attn = attn_layer.attn.dropout(attn_pre_softmax.softmax(-1))
@@ -131,6 +131,113 @@ def forward(model, x: torch.Tensor, mask: torch.Tensor, start_layer: int, start_
 	prediction = torch.argmax(x[...,-1,:token_dim], dim=-1).tolist()
 
 	return layer_inputs, attn_inputs, attn_pre_softmax, attn_matrices, v_outputs, attn_linear_inputs, attn_outputs, A_matrices, ff_inputs, ff_parameters, prediction
+
+@torch.no_grad
+def activation_patch_output_logit(model, j, layer_input, mask, prediction, attn_matrices):
+	n = layer_input.size(0)
+
+	frozen_ops = []
+	for k in range(j):
+		frozen_ops.append((attn_matrices[k], None))
+	frozen_ops.append(None)
+
+	attn_matrix = attn_matrices[j]
+	zero_output_logits = torch.empty(n*n, device=layer_input.device)
+	max_output_logits = torch.empty(n*n, device=layer_input.device)
+
+	# try zeroing attn_matrix[a,b] for all a,b
+	new_attn_matrices = attn_matrix.repeat(n*n,1,1).detach()
+	diag_indices = torch.cat((torch.arange(0,n*n).unsqueeze(1),torch.cartesian_prod(torch.arange(0,n),torch.arange(0,n))),dim=1)
+	new_attn_matrices[tuple(diag_indices.T)] = 0.0
+
+	# perform forward pass on other_inputs
+	BATCH_SIZE = 1024
+	for start in range(0, n*n, BATCH_SIZE):
+		end = min(start + BATCH_SIZE, n*n)
+		frozen_ops[j] = (new_attn_matrices[start:end,], None)
+		perturb_layer_inputs, perturb_attn_inputs, _, _, _, _, _, _, _, _, _ = forward(model, layer_input.repeat(end-start,1,1).detach(), mask, j, False, len(model.transformers)-1, None, frozen_ops)
+
+		# try computing the attention dot product but with perturbed dst embeddings
+		zero_output_logits[start:end] = perturb_layer_inputs[-1][:,-1,prediction]
+		del perturb_attn_inputs
+		del perturb_layer_inputs
+	zero_output_logits = zero_output_logits.reshape((n,n))
+
+	# try maxing attn_matrix[a,b] for all a,b
+	new_attn_matrices = attn_matrix.repeat(n*n,1,1).detach()
+	new_attn_matrices[tuple(diag_indices.T)] = torch.max(attn_matrix,dim=1).values.repeat((1,n)).T.flatten()
+	new_attn_matrices /= torch.sum(new_attn_matrices,dim=-1).unsqueeze(-1).repeat((1,1,n))
+
+	# perform forward pass on other_inputs
+	BATCH_SIZE = 1024
+	for start in range(0, n*n, BATCH_SIZE):
+		end = min(start + BATCH_SIZE, n*n)
+		frozen_ops[j] = (new_attn_matrices[start:end,], None)
+		perturb_layer_inputs, perturb_attn_inputs, _, _, _, _, _, _, _, _, _ = forward(model, layer_input.repeat(end-start,1,1).detach(), mask, j, False, len(model.transformers)-1, None, frozen_ops)
+
+		# try computing the attention dot product but with perturbed dst embeddings
+		max_output_logits[start:end] = perturb_layer_inputs[-1][:,-1,prediction]
+		del perturb_attn_inputs
+		del perturb_layer_inputs
+	max_output_logits = max_output_logits.reshape((n,n))
+
+	return zero_output_logits, max_output_logits
+
+@torch.no_grad
+def activation_patch_attn_ops(model, i, j, dst, src, layer_input, mask, A_matrices, attn_matrices, attn_inputs):
+	A = A_matrices[i][:-1,:-1]
+	n = attn_inputs[i].size(0)
+
+	frozen_ops = []
+	for k in range(j):
+		frozen_ops.append((attn_matrices[k], None))
+	frozen_ops.append(None)
+
+	attn_matrix = attn_matrices[j]
+	zero_src_products = torch.empty(n*n, device=layer_input.device)
+	zero_dst_products = torch.empty(n*n, device=layer_input.device)
+	max_src_products = torch.empty(n*n, device=layer_input.device)
+	max_dst_products = torch.empty(n*n, device=layer_input.device)
+
+	# try zeroing attn_matrix[a,b] for all a,b
+	new_attn_matrices = attn_matrix.repeat(n*n,1,1).detach()
+	diag_indices = torch.cat((torch.arange(0,n*n).unsqueeze(1),torch.cartesian_prod(torch.arange(0,n),torch.arange(0,n))),dim=1)
+	new_attn_matrices[tuple(diag_indices.T)] = 0.0
+
+	# perform forward pass on other_inputs
+	BATCH_SIZE = 1024
+	for start in range(0, n*n, BATCH_SIZE):
+		end = min(start + BATCH_SIZE, n*n)
+		frozen_ops[j] = (new_attn_matrices[start:end,], None)
+		_, perturb_attn_inputs, _, _, _, _, _, _, _, _, _ = forward(model, layer_input.repeat(end-start,1,1).detach(), mask, j, False, i, None, frozen_ops)
+
+		# try computing the attention dot product but with perturbed dst embeddings
+		zero_src_products[start:end] = torch.matmul(torch.matmul(attn_inputs[i], A), perturb_attn_inputs[i].transpose(-2,-1))[:,dst,src]
+		zero_dst_products[start:end] = torch.matmul(torch.matmul(perturb_attn_inputs[i], A), attn_inputs[i].transpose(-2,-1))[:,dst,src]
+		del perturb_attn_inputs
+	zero_src_products = zero_src_products.reshape((n,n))
+	zero_dst_products = zero_dst_products.reshape((n,n))
+
+	# try maxing attn_matrix[a,b] for all a,b
+	new_attn_matrices = attn_matrix.repeat(n*n,1,1).detach()
+	new_attn_matrices[tuple(diag_indices.T)] = torch.max(attn_matrix,dim=1).values.repeat((1,n)).T.flatten()
+	new_attn_matrices /= torch.sum(new_attn_matrices,dim=-1).unsqueeze(-1).repeat((1,1,n))
+
+	# perform forward pass on other_inputs
+	BATCH_SIZE = 1024
+	for start in range(0, n*n, BATCH_SIZE):
+		end = min(start + BATCH_SIZE, n*n)
+		frozen_ops[j] = (new_attn_matrices[start:end,], None)
+		_, perturb_attn_inputs, _, _, _, _, _, _, _, _, _ = forward(model, layer_input.repeat(end-start,1,1).detach(), mask, j, False, i, None, frozen_ops)
+
+		# try computing the attention dot product but with perturbed dst embeddings
+		max_src_products[start:end] = torch.matmul(torch.matmul(attn_inputs[i], A), perturb_attn_inputs[i].transpose(-2,-1))[:,dst,src]
+		max_dst_products[start:end] = torch.matmul(torch.matmul(perturb_attn_inputs[i], A), attn_inputs[i].transpose(-2,-1))[:,dst,src]
+		del perturb_attn_inputs
+	max_src_products = max_src_products.reshape((n,n))
+	max_dst_products = max_dst_products.reshape((n,n))
+
+	return zero_src_products, zero_dst_products, max_src_products, max_dst_products
 
 class TransformerProber(nn.Module):
 	def __init__(self, tfm_model, probe_layer):
@@ -384,6 +491,70 @@ class TransformerTracer:
 		for i in range(layer_inputs[start_layer].size(1)):
 			out[i] = self.input_derivative(start_layer, input_row_id, i, output_row_id, output_col_id, start_at_ff, layer_inputs, attn_inputs, attn_pre_softmax, attn_matrices, ff_inputs)
 		return out
+
+	def trace2(self, x: torch.Tensor):
+		n = x.shape[0]
+		QUERY_PREFIX_TOKEN = (n - 5) // 3 + 4
+		PADDING_TOKEN = (n - 5) // 3 + 3
+		EDGE_PREFIX_TOKEN = (n - 5) // 3 + 2
+		PATH_PREFIX_TOKEN = (n - 5) // 3 + 1
+		# Create masking tensor.
+		mask = self.model.pad_masking(x, 0)
+		if not self.model.bidirectional:
+			mask = mask + self.model.future_masking(x, 0)
+
+		# Use token embedding and positional embedding layers.
+		input = x # store the input for keeping track the code paths executed by each input
+		x = self.model.token_embedding[x]
+		if len(x.shape) == 2:
+			pos = self.model.positional_embedding
+		else:
+			pos = self.model.positional_embedding.unsqueeze(0).expand(x.shape[0], -1, -1)
+		x = torch.cat((x, pos), -1)
+		x = self.model.dropout_embedding(x)
+		d = x.shape[1]
+
+		layer_inputs, attn_inputs, attn_pre_softmax, attn_matrices, v_outputs, attn_linear_inputs, attn_outputs, A_matrices, ff_inputs, ff_parameters, prediction = forward(self.model, x, mask, 0, False, len(self.model.transformers)-1, None, None)
+
+		zero_output_logit_list = []
+		max_output_logit_list = []
+		for j in range(len(self.model.transformers)):
+			zero_output_logits, max_output_logits = activation_patch_output_logit(self.model, j, layer_inputs[j], mask, prediction, attn_matrices)
+			zero_output_logit_list.append(zero_output_logits)
+			max_output_logit_list.append(max_output_logits)
+
+		major_last_copies = torch.nonzero(zero_output_logit_list[5] < layer_inputs[-1][-1,prediction] - math.sqrt(d) / 2)
+		if major_last_copies.size(0) != 1 or major_last_copies[0,0] != n-1:
+			raise Exception('Last layer does not copy the answer from a single source token.')
+		last_copy_src = major_last_copies[0,1]
+
+		zero_src_product_list = []
+		zero_dst_product_list = []
+		max_src_product_list = []
+		max_dst_product_list = []
+		for j in range(len(self.model.transformers)):
+			zero_src_products, zero_dst_products, max_src_products, max_dst_products = activation_patch_attn_ops(self.model, len(self.model.transformers)-1, j, n-1, last_copy_src, layer_inputs[j], mask, A_matrices, attn_matrices, attn_inputs)
+			zero_src_product_list.append(zero_src_products)
+			zero_dst_product_list.append(zero_dst_products)
+			max_src_product_list.append(max_src_products)
+			max_dst_product_list.append(max_dst_products)
+
+		A = A_matrices[len(self.model.transformers)-1][:-1,:-1]
+		old_products = torch.matmul(torch.matmul(attn_inputs[len(self.model.transformers)-1], A), attn_inputs[len(self.model.transformers)-1].T)
+		old_product = old_products[n-1,last_copy_src]
+
+		important_ops = []
+		for j in range(len(self.model.transformers)):
+			positive_copies = torch.nonzero(zero_src_product_list[0] < old_product - math.sqrt(d) / 2)
+			negative_copies = torch.nonzero(max_src_product_list[0] < old_product - math.sqrt(d) / 2)
+			if positive_copies.size(0) > negative_copies.size(0):
+				important_ops.append(list(negative_copies))
+			else:
+				important_ops.append(list(positive_copies))
+
+		import pdb; pdb.set_trace()
+		#for j in reversed(range(len(self.model.transformers))):
+
 
 	def trace(self, x: torch.Tensor, other_x: torch.Tensor, quiet: bool = True):
 		n = x.shape[0]
@@ -1005,61 +1176,6 @@ class TransformerTracer:
 
 				current_rows = next_rows
 
-		@torch.no_grad
-		def activation_patch_attn_ops(i, j, dst, src):
-			edge_indices = [i + 1 for i in range(len(input)) if input[i] == EDGE_PREFIX_TOKEN]
-			A = A_matrices[i][:-1,:-1]
-			old_products = torch.matmul(torch.matmul(attn_inputs[i], A), attn_inputs[i].T)
-			old_product = old_products[dst, src]
-
-			frozen_ops = []
-			for k in range(j):
-				frozen_ops.append((attn_matrices[k], None))
-			frozen_ops.append(None)
-
-			attn_matrix = attn_matrices[j]
-			zero_src_products = torch.empty((n,n))
-			zero_dst_products = torch.empty((n,n))
-			max_src_products = torch.empty((n,n))
-			max_dst_products = torch.empty((n,n))
-			for a in range(n):
-				row_max = torch.max(attn_matrix[a,:])
-				for b in range(n):
-					# try zeroing attn_matrix[a,b]
-					if attn_matrix[a,b] < 0.01:
-						zero_src_products[a,b] = old_product
-						zero_dst_products[a,b] = old_product
-					else:
-						print('activation_patch_attn_ops: trying to set attn_matrix[{},{}] to zero'.format(a,b))
-						new_attn_matrix = attn_matrix.clone().detach()
-						new_attn_matrix[a,b] = 0.0
-						frozen_ops[j] = (new_attn_matrix, None)
-
-						# perform forward pass on other_inputs
-						_, perturb_attn_inputs, _, _, _, _, _, _, _, _, _ = forward(self.model, layer_inputs[j], mask, j, False, i, None, frozen_ops)
-
-						# try computing the attention dot product but with perturbed dst embeddings
-						zero_src_products[a,b] = torch.matmul(torch.matmul(attn_inputs[i], A), perturb_attn_inputs[i].transpose(-2,-1))[dst,src]
-						zero_dst_products[a,b] = torch.matmul(torch.matmul(perturb_attn_inputs[i], A), attn_inputs[i].transpose(-2,-1))[dst,src]
-						del perturb_attn_inputs
-
-					# try maxing attn_matrix[a,b]
-					print('activation_patch_attn_ops: trying to set attn_matrix[{},{}] to max'.format(a,b))
-					new_attn_matrix = attn_matrix.clone().detach()
-					new_attn_matrix[a,b] = row_max
-					new_attn_matrix[a,:] /= torch.sum(new_attn_matrix[a,:])
-					frozen_ops[j] = (new_attn_matrix, None)
-
-					# perform forward pass on other_inputs
-					_, perturb_attn_inputs, _, _, _, _, _, _, _, _, _ = forward(self.model, layer_inputs[j], mask, j, False, i, None, frozen_ops)
-
-					# try computing the attention dot product but with perturbed dst embeddings
-					max_src_products[a,b] = torch.matmul(torch.matmul(attn_inputs[i], A), perturb_attn_inputs[i].transpose(-2,-1))[dst,src]
-					max_dst_products[a,b] = torch.matmul(torch.matmul(perturb_attn_inputs[i], A), attn_inputs[i].transpose(-2,-1))[dst,src]
-					del perturb_attn_inputs
-
-			return zero_src_products, zero_dst_products, max_src_products, max_dst_products
-
 		def classify_attn_op(i, dst, src, perturb_attn_inputs):
 			# try computing the attention dot product but with perturbed dst embeddings
 			A = A_matrices[i][:-1,:-1]
@@ -1176,16 +1292,21 @@ class TransformerTracer:
 			old_product = old_products[dst, src]
 			new_src_products = torch.matmul(torch.matmul(attn_inputs[i], A), perturb_attn_inputs[i].transpose(-2,-1))
 			new_dst_products = torch.matmul(torch.matmul(perturb_attn_inputs[i], A), attn_inputs[i].transpose(-2,-1))
+			import pdb; pdb.set_trace()
 			new_src_products = new_src_products[:,dst,src]
 			new_dst_products = new_dst_products[:,dst,src]
 
 			is_negative_copy = (attn_matrices[i][dst,src] < torch.median(attn_matrices[i][dst,edge_indices]))
 			if is_negative_copy:
-				src_dependencies = torch.nonzero(new_src_products > old_product + math.sqrt(d) / 2)
-				dst_dependencies = torch.nonzero(new_dst_products > old_product + math.sqrt(d) / 2)
+				src_dependencies = torch.nonzero(new_src_products > old_product + math.sqrt(d) / 3)
+				dst_dependencies = torch.nonzero(new_dst_products > old_product + math.sqrt(d) / 3)
+				src_dependencies = src_dependencies[torch.sort(new_src_products[src_dependencies],dim=0,descending=True).indices]
+				dst_dependencies = dst_dependencies[torch.sort(new_dst_products[dst_dependencies],dim=0,descending=True).indices]
 			else:
-				src_dependencies = torch.nonzero(new_src_products < old_product - math.sqrt(d) / 2)
-				dst_dependencies = torch.nonzero(new_dst_products < old_product - math.sqrt(d) / 2)
+				src_dependencies = torch.nonzero(new_src_products < old_product - math.sqrt(d) / 3)
+				dst_dependencies = torch.nonzero(new_dst_products < old_product - math.sqrt(d) / 3)
+				src_dependencies = src_dependencies[torch.sort(new_src_products[src_dependencies],dim=0,descending=False).indices]
+				dst_dependencies = dst_dependencies[torch.sort(new_dst_products[dst_dependencies],dim=0,descending=False).indices]
 			def dep_to_str(dep):
 				if dep <= max_vertex_id:
 					return BOLD + GREEN + str(dep.item()) + END
@@ -1194,6 +1315,30 @@ class TransformerTracer:
 			print('  src dependencies: ' + ', '.join([dep_to_str(dep) for dep in src_dependencies]))
 			print('  dst dependencies: ' + ', '.join([dep_to_str(dep) for dep in dst_dependencies]))
 
+			import pdb; pdb.set_trace()
+
+			'''new_attn_matrices = attn_pre_softmax[i].repeat(new_src_products.size(0),1,1)
+			new_attn_matrices[:,dst,src] += (new_src_products - old_product) / math.sqrt(d)
+			new_attn_matrices = self.model.transformers[i].attn.attn.dropout(new_attn_matrices.softmax(-1))
+			import pdb; pdb.set_trace()
+
+			new_frozen_ops = [None] * (i+1)
+			new_frozen_ops[i] = (new_attn_matrices, None)
+			perturb_layer_inputs, _, _, _, _, _, _, _, _, _, _ = forward(self.model, layer_inputs[i], mask, i, False, len(self.model.transformers)-1, None, new_frozen_ops)
+			import pdb; pdb.set_trace()'''
+
+			zero_src_product_list = []
+			zero_dst_product_list = []
+			max_src_product_list = []
+			max_dst_product_list = []
+			for j in range(i):
+				new_inputs = layer_inputs[j].clone().detach()
+				new_inputs[src,:] = perturb_layer_inputs[j][116,src,:]
+				zero_src_products, zero_dst_products, max_src_products, max_dst_products = activation_patch_attn_ops(self.model, i, j, dst, src, new_inputs, mask, prediction, A_matrices, attn_matrices, attn_inputs)
+				zero_src_product_list.append(zero_src_products)
+				zero_dst_product_list.append(zero_dst_products)
+				max_src_product_list.append(max_src_products)
+				max_dst_product_list.append(max_dst_products)
 			import pdb; pdb.set_trace()
 
 			# create perturbed inputs where each input swaps the position of one token
@@ -1337,11 +1482,15 @@ class TransformerTracer:
 					old_product = old_products[dst,src]
 					is_negative_copy = (attn_matrices[i][dst,src] < torch.median(attn_matrices[i][dst,edge_indices]))
 					if is_negative_copy:
-						src_dependencies = torch.nonzero(new_src_products[:,dst,src] > old_product + math.sqrt(d) / 2)
-						dst_dependencies = torch.nonzero(new_dst_products[:,dst,src] > old_product + math.sqrt(d) / 2)
+						src_dependencies = torch.nonzero(new_src_products[:,dst,src] > old_product + math.sqrt(d) / 3)
+						dst_dependencies = torch.nonzero(new_dst_products[:,dst,src] > old_product + math.sqrt(d) / 3)
+						src_dependencies = src_dependencies[torch.sort(new_src_products[src_dependencies],dim=0,descending=True).indices]
+						dst_dependencies = dst_dependencies[torch.sort(new_dst_products[dst_dependencies],dim=0,descending=True).indices]
 					else:
-						src_dependencies = torch.nonzero(new_src_products[:,dst,src] < old_product - math.sqrt(d) / 2)
-						dst_dependencies = torch.nonzero(new_dst_products[:,dst,src] < old_product - math.sqrt(d) / 2)
+						src_dependencies = torch.nonzero(new_src_products[:,dst,src] < old_product - math.sqrt(d) / 3)
+						dst_dependencies = torch.nonzero(new_dst_products[:,dst,src] < old_product - math.sqrt(d) / 3)
+						src_dependencies = src_dependencies[torch.sort(new_src_products[src_dependencies],dim=0,descending=False).indices]
+						dst_dependencies = dst_dependencies[torch.sort(new_dst_products[dst_dependencies],dim=0,descending=False).indices]
 					src_dependencies = src_dependencies[0].tolist() if len(src_dependencies) != 0 else []
 					dst_dependencies = dst_dependencies[0].tolist() if len(dst_dependencies) != 0 else []
 
@@ -1383,7 +1532,7 @@ class TransformerTracer:
 					print('  dst dependencies: ' + ', '.join([dep_to_str(dep) for dep in dst_dependencies]))
 			import pdb; pdb.set_trace()
 
-		activation_patch_attn(3, 23, 65)
+		#activation_patch_attn(4, 89, 23)
 		#activation_patch_attn(4, 35, 14)
 		#activation_patch_attn(4, 35, 41)
 		#activation_patch_attn(4, 35, 47)
@@ -1393,13 +1542,17 @@ class TransformerTracer:
 		zero_dst_product_list = []
 		max_src_product_list = []
 		max_dst_product_list = []
+		zero_output_logit_list = []
+		max_output_logit_list = []
 		import pdb; pdb.set_trace()
-		for j in range(5):
-			zero_src_products, zero_dst_products, max_src_products, max_dst_products = activation_patch_attn_ops(5, j, 89, 35)
+		for j in range(5+1):
+			zero_src_products, zero_dst_products, max_src_products, max_dst_products, zero_output_logits, max_output_logits = activation_patch_attn_ops(self.model, 5, j, 89, 35, layer_inputs[j], mask, prediction, A_matrices, attn_matrices, attn_inputs)
 			zero_src_product_list.append(zero_src_products)
 			zero_dst_product_list.append(zero_dst_products)
 			max_src_product_list.append(max_src_products)
 			max_dst_product_list.append(max_dst_products)
+			zero_output_logit_list.append(zero_output_logits)
+			max_output_logit_list.append(max_output_logits)
 		import pdb; pdb.set_trace()
 
 		attn_ops = [{} for i in range(len(self.model.transformers))]
@@ -1671,7 +1824,7 @@ if __name__ == "__main__":
 		print("Usage: trace_circuit [checkpoint_filepath]")
 		exit(1)
 
-	if True or not torch.cuda.is_available():
+	if not torch.cuda.is_available():
 		print("ERROR: CUDA device is not available.")
 		#from sys import exit
 		#exit(-1)
@@ -1705,6 +1858,7 @@ if __name__ == "__main__":
 	#other_input[next(i for i in range(len(input)) if input[i] == 17 and input[i+1] ==  9) + 1] = 19
 	#other_input[next(i for i in range(len(input)) if input[i] == 25 and input[i+1] == 19) + 0] = 17
 	#other_input[next(i for i in range(len(input)) if input[i] == 25 and input[i+1] == 19) + 1] =  9
+	tracer.trace2(input)
 	prediction = tracer.trace(input, other_input, quiet=False)
 	import pdb; pdb.set_trace()
 
@@ -1781,7 +1935,7 @@ if __name__ == "__main__":
 
 			input = [PADDING_TOKEN] * (position_dim - len(partial_path)) + partial_path
 			input = torch.LongTensor(input).to(device)
-			prediction = tracer.trace(input)
+			prediction = tracer.trace2(input)
 			total_predictions += 1
 
 

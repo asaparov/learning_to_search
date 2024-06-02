@@ -1567,3 +1567,38 @@ tensor([[35,  2],
         [35, 74],
         [35, 83],
         [35, 88]])
+
+analyzing the above output from the perturbation experiments, we identify the following attention operations as part of the search algorithm:
+  (repeating relevant part of the input graph for convenience)
+  27 -> 26 ->  1 -> 14 ->  6 ->  4 -> 17 ->  9 -> 22 -> 24 -> 28
+  27 -> 12 -> 11 -> 21 -> 18 -> 15 -> 25 -> 19 ->  8 ->  3 ->  7 -> 23
+layer 0 does a positive copy from 12 to 11 (9 -> 22) by a position-based forwards step
+layer 0 does a positive copy from 24 to 23 (17 -> 9) by a position-based forwards step
+layer 0 does a positive copy from 66 to 65 (22 -> 24) by a position-based forwards step
+layer 0 does a positive copy from 15 to 14 (6 -> 4) by a position-based forwards step
+layer 0 does a positive copy from 30 to 29 (1 -> 14) by a position-based forwards step
+layer 0 does a positive copy from 36 to 35 (26 -> 1) by a position-based forwards step
+layer 0 does a positive copy from 42 to 41 (14 -> 6) by a position-based forwards step
+layer 0 does a positive copy from 51 to 50 (24 -> 28) by a position-based forwards step
+layer 0 does a positive copy from 57 to 56 (27 -> 26) by a position-based forwards step
+layer 2 does a negative copy from row 29 (1 -> 14) to 35 (26 -> 1) by token matching on 1 (effectively a forwards step)
+  so now row 35 stores the path 26 -> 1 -> 14
+layer 2 does a negative copy from row 41 (14 -> 6) to 29 (1 -> 14) by token matching on 14 (effectively a forwards step)
+  so now row 29 stores the path 1 -> 14 -> 6
+layer 2 does a negative copy from row 47 (4 -> 17) to 14 (6 -> 4) by token matching on 4 (effectively a forwards step)
+  so now row 14 stores the path 6 -> 4 -> 17 (the edge to 17 is tenuous, since the copy from 15 to 14 is missing)
+layer 2 does a negative copy from row 11 (9 -> 22) to 23 (17 -> 9) by token matching on 9 (effectively a forwards step)
+  so now row 23 stores the path 17 -> 9 -> 22
+layer 2 does a negative copy from row 50 (24 -> 28) to 65 (22 -> 24) by token matching on 24 (effectively a forwards step)
+  so now row 65 stores the path 22 -> 24 -> 28
+layer 3 does a negative copy from row 29 (1 -> 14) to 14 (6 -> 4) by token matching on 3 (effectively a backwards step)
+layer 3 does a negative copy from row 41 (14 -> 6) to 14 (6 -> 4) by token matching on 6 (effectively a backwards step)
+  so now row 14 stores the path 1 -> 14 -> 6 -> 4 -> 17 (the edge to 17 is tenuous, since the copy from 15 to 14 is missing)
+layer 3 does a negative copy from row 65 (22 -> 24) to 23 (17 -> 9) by matching on the start query vertex position [how do these vertices have information about the start query vertex? they correspond to vertices much closer to the goal vertex; information about the start query vertex is copied broadly in layer 0; this looks like a heuristic?] (effectively a forwards step)
+  --> information about the start query vertex position is copied into row 65 from 47 by layer 2. in turn, this is due to copy from row 89 into 47, and copy from row 89 into 65 by layer 1 (89 is basically copied everywhere). in turn, this is due to copy from row 48 to 47 (4 -> 17), copy from row 66 to 65 (22 -> 24), and copy from row 88 to 65 by layer 0.
+  so now row 23 stores the path 17 -> 9 -> 22 -> 24 -> 28
+layer 4 does a positive copy from row 23 (17 -> 9) to 89 [preparing for the last layer by copying vertices that can reach 89 into 89]
+  so now row 89 stores the path 17 -> 9 -> 22 -> 24 -> 28 [TODO: how does it know the goal is reachable from row 23?]
+layer 4 does a positive copy from row 14 (6 -> 4) to 35 (26 -> 1) it seems to be due token matching on 14, but is also sensitive to the query vertices
+  so now row 35 stores the path 26 -> 1 -> 14 -> 6 -> 4 -> 17 (the edge to 17 is tenuous, since the copy from 15 to 14 is missing)
+layer 5 does a positive copy from row 35 (26 -> 1) to 89 by token matching on 17
