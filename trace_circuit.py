@@ -239,6 +239,68 @@ def activation_patch_attn_ops(model, i, j, dst, src, layer_input, mask, A_matric
 
 	return zero_src_products, zero_dst_products, max_src_products, max_dst_products
 
+@torch.no_grad
+def explain_attn_op(model, input, mask, A_matrices, attn_matrices, attn_inputs, ff_inputs, i, dst, src):
+	n, d = attn_inputs[0].size(0), attn_inputs[0].size(1)
+	EDGE_PREFIX_TOKEN = (n - 5) // 3 + 2
+	edge_indices = [i + 1 for i in range(len(input)) if input[i] == EDGE_PREFIX_TOKEN]
+
+	# create perturbed inputs where each input replaces every occurrence of a token value with an unused token value
+	max_vertex_id = (n - 5) // 3
+	unused_id = next(t for t in range(1, max_vertex_id + 1) if t not in input)
+	other_inputs = input.repeat(max_vertex_id + 1 + n, 1)
+	for j in range(max_vertex_id + 1):
+		other_inputs[j,input == j] = unused_id
+
+	# perform forward pass on other_inputs
+	other_inputs = model.token_embedding[other_inputs]
+	if len(other_inputs.shape) == 2:
+		pos = model.positional_embedding
+	else:
+		pos = model.positional_embedding.unsqueeze(0).expand(other_inputs.shape[0:-2] + (-1,-1))
+	other_inputs = torch.cat((other_inputs, pos), -1)
+	other_inputs = model.dropout_embedding(other_inputs)
+
+	# for the last n rows of `other_inputs`, perturb the position embeddings
+	for j in range(n):
+		if j < edge_indices[-1] or j > edge_indices[-1] + 2:
+			src_edge_index = edge_indices[-1]
+		else:
+			src_edge_index = edge_indices[-2]
+		offset = (src_edge_index % 3) - (j % 3)
+		if offset > 1:
+			offset -= 3
+		other_inputs[max_vertex_id+1+j,j,d-n:] = other_inputs[max_vertex_id+1+j,src_edge_index-offset,d-n:].clone().detach()
+
+	frozen_ops = []
+	for j in range(i):
+		frozen_ops.append((attn_matrices[j], model.transformers[j].ff[0](model.transformers[j].ln_ff(ff_inputs[j])) > 0.0))
+
+	_, perturb_attn_inputs, _, _, _, _, _, _, _, _, _ = forward(model, other_inputs, mask, 0, False, i, None, frozen_ops)
+
+	# try computing the attention dot product but with perturbed dst embeddings
+	A = A_matrices[i][:-1,:-1]
+	old_products = torch.matmul(torch.matmul(attn_inputs[i], A), attn_inputs[i].T)
+	old_product = old_products[dst, src]
+	new_src_products = torch.matmul(torch.matmul(attn_inputs[i], A), perturb_attn_inputs[i].transpose(-2,-1))
+	new_dst_products = torch.matmul(torch.matmul(perturb_attn_inputs[i], A), attn_inputs[i].transpose(-2,-1))
+	new_src_products = new_src_products[:,dst,src]
+	new_dst_products = new_dst_products[:,dst,src]
+
+	is_negative_copy = (attn_matrices[i][dst,src] < torch.median(attn_matrices[i][dst,edge_indices]))
+	if is_negative_copy:
+		src_dependencies = torch.nonzero(new_src_products > old_product + math.sqrt(d) / 3)
+		dst_dependencies = torch.nonzero(new_dst_products > old_product + math.sqrt(d) / 3)
+		src_dependencies = src_dependencies[torch.sort(new_src_products[src_dependencies],dim=0,descending=True).indices]
+		dst_dependencies = dst_dependencies[torch.sort(new_dst_products[dst_dependencies],dim=0,descending=True).indices]
+	else:
+		src_dependencies = torch.nonzero(new_src_products < old_product - math.sqrt(d) / 3)
+		dst_dependencies = torch.nonzero(new_dst_products < old_product - math.sqrt(d) / 3)
+		src_dependencies = src_dependencies[torch.sort(new_src_products[src_dependencies],dim=0,descending=False).indices]
+		dst_dependencies = dst_dependencies[torch.sort(new_dst_products[dst_dependencies],dim=0,descending=False).indices]
+
+	return src_dependencies, dst_dependencies
+
 class TransformerProber(nn.Module):
 	def __init__(self, tfm_model, probe_layer):
 		super().__init__()
@@ -427,6 +489,28 @@ class AlgorithmStep:
 					self.position_operation_inputs[diff].extend(case.inputs)
 
 
+class ComputationNode:
+	def __init__(self, layer, row_id):
+		self.layer = layer
+		self.row_id = row_id
+		self.predecessors = []
+		self.successors = []
+		self.reachable = []
+		self.op_explanations = []
+		self.copy_directions = []
+
+	def add_predecessor(self, predecessor):
+		self.predecessors.append(predecessor)
+		predecessor.successors.append(self)
+		predecessor.op_explanations.append(None)
+		predecessor.copy_directions.append(None)
+
+	def __str__(self):
+		return '{{layer:{},id:{}}}'.format(self.layer, self.row_id)
+
+	def __repr__(self):
+		return '{{layer:{},id:{}}}'.format(self.layer, self.row_id)
+
 class TransformerTracer:
 	def __init__(self, tfm_model):
 		self.model = tfm_model
@@ -494,6 +578,7 @@ class TransformerTracer:
 
 	def trace2(self, x: torch.Tensor):
 		n = x.shape[0]
+		max_vertex_id = (n - 5) // 3
 		QUERY_PREFIX_TOKEN = (n - 5) // 3 + 4
 		PADDING_TOKEN = (n - 5) // 3 + 3
 		EDGE_PREFIX_TOKEN = (n - 5) // 3 + 2
@@ -545,16 +630,141 @@ class TransformerTracer:
 
 		important_ops = []
 		for j in range(len(self.model.transformers)):
-			positive_copies = torch.nonzero(zero_src_product_list[0] < old_product - math.sqrt(d) / 2)
-			negative_copies = torch.nonzero(max_src_product_list[0] < old_product - math.sqrt(d) / 2)
+			positive_copies = torch.nonzero(zero_src_product_list[j] < old_product - math.sqrt(d) / 2)
+			negative_copies = torch.nonzero(max_src_product_list[j] < old_product - math.sqrt(d) / 2)
 			if positive_copies.size(0) > negative_copies.size(0):
-				important_ops.append(list(negative_copies))
+				new_important_ops = [op.tolist() for op in negative_copies]
 			else:
-				important_ops.append(list(positive_copies))
+				new_important_ops = [op.tolist() for op in positive_copies]
 
+			positive_copies = torch.nonzero(zero_dst_product_list[j] < old_product - math.sqrt(d) / 2)
+			negative_copies = torch.nonzero(max_dst_product_list[j] < old_product - math.sqrt(d) / 2)
+			if positive_copies.size(0) > negative_copies.size(0):
+				new_important_ops += [c.tolist() for c in negative_copies if c.tolist() not in new_important_ops]
+			else:
+				new_important_ops += [c.tolist() for c in positive_copies if c.tolist() not in new_important_ops]
+			important_ops.append(new_important_ops)
+		important_ops[len(self.model.transformers)-1].append((n-1,last_copy_src))
+
+		forward_edges = []
+		start_index = torch.sum(input == PADDING_TOKEN)
+		for i in range((n - 5) // 3 + 1):
+			forward_edges.append([])
+		for i in range(2, n-5, 3):
+			if i >= start_index:
+				forward_edges[input[i].item()].append(input[i+1].item())
+		def path_length(start, end):
+			if input[start] > (n - 5) // 3 or input[end] > (n - 5) // 3:
+				return -1
+			queue = [(input[start],0)]
+			best_distance = -1
+			while len(queue) != 0:
+				current, distance = queue.pop()
+				if current == input[end]:
+					if best_distance == -1 or distance < best_distance:
+						best_distance = distance
+					continue
+				for child in forward_edges[current]:
+					queue.append((child,distance+1))
+			return best_distance
+
+		# reconstruct the circuit pathway for this input
+		root = ComputationNode(len(self.model.transformers), n-1)
+		nodes = [root]
+		all_nodes = [root]
+		for j in reversed(range(len(self.model.transformers))):
+			# identify the operations whose destination is in relevant_indices
+			new_nodes = []
+			for node in nodes:
+				new_node = ComputationNode(j, node.row_id)
+				node.add_predecessor(new_node)
+				new_nodes.append(new_node)
+			for op in important_ops[j]:
+				for node in nodes:
+					if node.row_id == op[0]:
+						try:
+							predecessor = next(n for n in new_nodes if n.row_id == op[1])
+						except StopIteration:
+							predecessor = ComputationNode(j, int(op[1]))
+							new_nodes.append(predecessor)
+						node.add_predecessor(predecessor)
+
+						# explain the copy from `predecessor` to `node`
+						src_dependencies, dst_dependencies = explain_attn_op(self.model, input, mask, A_matrices, attn_matrices, attn_inputs, ff_inputs, predecessor.layer, node.row_id, predecessor.row_id)
+						op_causes = []
+						for src_dep in src_dependencies:
+							if src_dep > max_vertex_id and src_dep+1 in dst_dependencies:
+								# this is a position-based backward step
+								if (int(src_dep)+1,int(src_dep)) not in op_causes:
+									op_causes.append((int(src_dep)+1,int(src_dep)))
+							elif src_dep > max_vertex_id and src_dep-1 in dst_dependencies:
+								# this is a position-based forward step
+								if (int(src_dep)-1,int(src_dep)) not in op_causes:
+									op_causes.append((int(src_dep)-1,int(src_dep)))
+							elif src_dep <= max_vertex_id and src_dep in dst_dependencies:
+								# this is a token matching step
+								if src_dep not in op_causes:
+									op_causes.append(int(src_dep))
+						forward_dist = path_length(predecessor.row_id, node.row_id)
+						backward_dist = path_length(node.row_id, predecessor.row_id)
+						if node.row_id == predecessor.row_id:
+							copy_direction = None
+						elif forward_dist != -1:
+							if backward_dist != -1:
+								# this could be an effective forwards or backwards copy
+								copy_direction = '*'
+							else:
+								# this is an effective backward step
+								copy_direction = 'b'
+						else:
+							if backward_dist != -1:
+								# this is an effective forward step
+								copy_direction = 'f'
+							else:
+								copy_direction = None
+
+						index = predecessor.successors.index(node)
+						predecessor.op_explanations[index] = op_causes
+						predecessor.copy_directions[index] = copy_direction
+			nodes = new_nodes
+			all_nodes += new_nodes
+
+		for node in all_nodes:
+			node.reachable = [int(input[node.row_id]),max_vertex_id+node.row_id]
+		for node in reversed(all_nodes):
+			for successor in node.successors:
+				successor.reachable += [n for n in node.reachable if n not in successor.reachable]
+
+		# identify the paths in the graph that can be explained by the path-merging algorithm
+		path_merge_explainable = []
+		for node in reversed(all_nodes):
+			if node.layer == 0:
+				path_merge_explainable.append(node)
+			elif node not in path_merge_explainable:
+				continue
+
+			# check if this is a path merge operation
+			for k in range(len(node.successors)):
+				if node.op_explanations[k] == None:
+					if node.row_id == node.successors[k].row_id:
+						path_merge_explainable.append(node.successors[k])
+					continue
+				if node.copy_directions[k] == 'f' and any(e[0]+1 == e[1] for e in node.op_explanations[k] if type(e) == tuple):
+					path_merge_explainable.append(node.successors[k])
+				if node.copy_directions[k] == 'b' and any(e[0]-1 == e[1] for e in node.op_explanations[k] if type(e) == tuple):
+					path_merge_explainable.append(node.successors[k])
+				for explanation in node.op_explanations[k]:
+					if any(explanation == input[r-max_vertex_id] for r in node.reachable if r > max_vertex_id):
+						path_merge_explainable.append(node.successors[k])
+						break
+
+		queue = [root]
+		while len(queue) != 0:
+			node = queue.pop()
+			for predecessor in node.predecessors:
+				print('Layer {}: copy from {} ({}) into {} ({}); explanations: {}, direction: {}, src reachability: {}'.format(predecessor.layer, predecessor.row_id, input[predecessor.row_id], node.row_id, input[node.row_id], predecessor.op_explanations[predecessor.successors.index(node)], predecessor.copy_directions[predecessor.successors.index(node)], sorted(predecessor.reachable)))
+				queue.append(predecessor)
 		import pdb; pdb.set_trace()
-		#for j in reversed(range(len(self.model.transformers))):
-
 
 	def trace(self, x: torch.Tensor, other_x: torch.Tensor, quiet: bool = True):
 		n = x.shape[0]
