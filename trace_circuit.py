@@ -2081,8 +2081,8 @@ if __name__ == "__main__":
 
 	torch.set_printoptions(sci_mode=False)
 	from sys import argv, exit
-	if len(argv) != 2:
-		print("Usage: trace_circuit [checkpoint_filepath]")
+	if len(argv) != 4:
+		print("Usage: trace_circuit [checkpoint_filepath] [lookahead] [num_samples]")
 		exit(1)
 
 	if not torch.cuda.is_available():
@@ -2126,8 +2126,8 @@ if __name__ == "__main__":
 	suffix = filepath[filepath.index('inputsize')+len('inputsize'):]
 	max_input_size = int(suffix[:suffix.index('_')])
 
-	NUM_SAMPLES = 3
-	inputs,outputs = generate_eval_data(max_input_size, min_path_length=1, distance_from_start=1, distance_from_end=-1, lookahead_steps=10, num_paths_at_fork=None, num_samples=NUM_SAMPLES)
+	NUM_SAMPLES = int(argv[3])
+	inputs,outputs = generate_eval_data(max_input_size, min_path_length=1, distance_from_start=1, distance_from_end=-1, lookahead_steps=int(argv[2]), num_paths_at_fork=None, num_samples=NUM_SAMPLES)
 	inputs = torch.LongTensor(inputs).to(device)
 
 	def print_computation_graph(root, input):
@@ -2153,6 +2153,40 @@ if __name__ == "__main__":
 	for i in range(len(tfm_model.transformers)):
 		aggregated_copy_directions.append({})
 		aggregated_op_explanations.append({})
+
+	from functools import cmp_to_key
+	def compare(x, y):
+		if type(x) == tuple:
+			if type(y) != tuple:
+				return -1
+			if len(x) < len(y):
+				return -1
+			elif len(x) > len(y):
+				return 1
+			for i in range(len(x)):
+				c = compare(x[i], y[i])
+				if c != 0:
+					return c
+		elif type(y) == tuple:
+			return 1
+		elif x < y:
+			return -1
+		elif x > y:
+			return 1
+		return 0
+
+	def print_summary():
+		print('\nAggregated results:')
+		for i in range(len(aggregated_copy_directions)):
+			total_copy_directions = sum(aggregated_copy_directions[i].values())
+			total_op_explanations = sum(aggregated_op_explanations[i].values())
+			print(' Layer {} copy directions:'.format(i))
+			for copy_direction in sorted(aggregated_copy_directions[i].keys()):
+				print('  {}: {} / {}'.format(copy_direction, aggregated_copy_directions[i][copy_direction], total_copy_directions))
+			print(' Layer {} op explanations:'.format(i))
+			for explanation in sorted(aggregated_op_explanations[i].keys(), key=cmp_to_key(compare)):
+				print('  {}: {} / {}'.format(explanation, aggregated_op_explanations[i][explanation], total_op_explanations))
+
 	for i in range(NUM_SAMPLES):
 		try:
 			root, path_merge_explainable, prediction = tracer.trace2(inputs[i,:])
@@ -2185,39 +2219,10 @@ if __name__ == "__main__":
 		print('[iteration {}]'.format(i))
 		print('  Accuracy: {}'.format(num_correct / total))
 		print('  Fraction of inputs explainable by path-merging algorithm: {}'.format(num_path_merge_explainable / total))
+		if (i + 1) % 10 == 0:
+			print_summary()
 
-	from functools import cmp_to_key
-	def compare(x, y):
-		if type(x) == tuple:
-			if type(y) != tuple:
-				return -1
-			if len(x) < len(y):
-				return -1
-			elif len(x) > len(y):
-				return 1
-			for i in range(len(x)):
-				c = compare(x[i], y[i])
-				if c != 0:
-					return c
-		elif type(y) == tuple:
-			return 1
-		elif x < y:
-			return -1
-		elif x > y:
-			return 1
-		return 0
-
-	print('\nAggregated results:')
-	for i in range(len(aggregated_copy_directions)):
-		total_copy_directions = sum(aggregated_copy_directions[i].values())
-		total_op_explanations = sum(aggregated_op_explanations[i].values())
-		print(' Layer {} copy directions:'.format(i))
-		for copy_direction in sorted(aggregated_copy_directions[i].keys()):
-			print('  {}: {} / {}'.format(copy_direction, aggregated_copy_directions[i][copy_direction], total_copy_directions))
-		print(' Layer {} op explanations:'.format(i))
-		for explanation in sorted(aggregated_op_explanations[i].keys(), key=cmp_to_key(compare)):
-			print('  {}: {} / {}'.format(explanation, aggregated_op_explanations[i][explanation], total_op_explanations))
-
+	print_summary()
 	import sys
 	sys.exit(0)
 
