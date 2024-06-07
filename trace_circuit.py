@@ -2,7 +2,7 @@ from random import seed, randrange, shuffle
 import numpy as np
 import torch
 from torch import nn, LongTensor, FloatTensor
-from train import generate_example, lookahead_depth
+from train import generate_example, lookahead_depth, generate_eval_data
 from gpt2 import TokenEmbedding
 import math
 
@@ -184,7 +184,7 @@ def activation_patch_output_logit(model, j, layer_input, mask, prediction, attn_
 	return zero_output_logits, max_output_logits
 
 @torch.no_grad
-def activation_patch_attn_ops(model, i, j, dst, src, layer_input, mask, A_matrices, attn_matrices, attn_inputs):
+def perturb_attn_ops(model, i, j, dst, src, layer_input, mask, A_matrices, attn_matrices, attn_inputs):
 	A = A_matrices[i][:-1,:-1]
 	n = attn_inputs[i].size(0)
 
@@ -240,6 +240,32 @@ def activation_patch_attn_ops(model, i, j, dst, src, layer_input, mask, A_matric
 	return zero_src_products, zero_dst_products, max_src_products, max_dst_products
 
 @torch.no_grad
+def perturb_residuals(model, i, j, dst, src, mask, A_matrices, attn_inputs, attn_outputs, ff_inputs):
+	A = A_matrices[i][:-1,:-1]
+	n = attn_inputs[i].size(0)
+	d = attn_inputs[i].size(1)
+
+	res_src_products = torch.empty(n, device=attn_inputs[i].device)
+	res_dst_products = torch.empty(n, device=attn_inputs[i].device)
+
+	# try zeroing the residual of token k, for all k
+	new_ff_input = ff_inputs[j].repeat(n,1,1).detach()
+	diag_indices = torch.cartesian_prod(torch.arange(0,n),torch.arange(0,d))
+	diag_indices = torch.cat((diag_indices[:,0].unsqueeze(1),diag_indices),dim=-1)
+	new_ff_input[tuple(diag_indices.T)] = attn_outputs[j].reshape(n*d)
+
+	# perform forward pass on other_inputs
+	_, perturb_attn_inputs, _, _, _, _, _, _, _, _, _ = forward(model, new_ff_input.detach(), mask, j, True, i, None, None)
+	res_src_products = torch.matmul(torch.matmul(attn_inputs[i], A), perturb_attn_inputs[i].transpose(-2,-1))[:,dst,src]
+	res_dst_products = torch.matmul(torch.matmul(perturb_attn_inputs[i], A), attn_inputs[i].transpose(-2,-1))[:,dst,src]
+	del perturb_attn_inputs
+
+	return res_src_products, res_dst_products
+
+class NoUnusedVertexIDs(Exception):
+    pass
+
+@torch.no_grad
 def explain_attn_op(model, input, mask, A_matrices, attn_matrices, attn_inputs, ff_inputs, i, dst, src):
 	n, d = attn_inputs[0].size(0), attn_inputs[0].size(1)
 	EDGE_PREFIX_TOKEN = (n - 5) // 3 + 2
@@ -247,7 +273,10 @@ def explain_attn_op(model, input, mask, A_matrices, attn_matrices, attn_inputs, 
 
 	# create perturbed inputs where each input replaces every occurrence of a token value with an unused token value
 	max_vertex_id = (n - 5) // 3
-	unused_id = next(t for t in range(1, max_vertex_id + 1) if t not in input)
+	try:
+		unused_id = next(t for t in range(1, max_vertex_id + 1) if t not in input)
+	except StopIteration:
+		raise NoUnusedVertexIDs()
 	other_inputs = input.repeat(max_vertex_id + 1 + n, 1)
 	for j in range(max_vertex_id + 1):
 		other_inputs[j,input == j] = unused_id
@@ -610,19 +639,27 @@ class TransformerTracer:
 
 		major_last_copies = torch.nonzero(zero_output_logit_list[5] < layer_inputs[-1][-1,prediction] - math.sqrt(d) / 2)
 		if major_last_copies.size(0) != 1 or major_last_copies[0,0] != n-1:
-			raise Exception('Last layer does not copy the answer from a single source token.')
+			print('WARNING: Last layer does not copy the answer from a single source token.')
+			return None, None, prediction
 		last_copy_src = major_last_copies[0,1]
 
 		zero_src_product_list = []
 		zero_dst_product_list = []
 		max_src_product_list = []
 		max_dst_product_list = []
+		res_src_product_list = []
+		res_dst_product_list = []
 		for j in range(len(self.model.transformers)):
-			zero_src_products, zero_dst_products, max_src_products, max_dst_products = activation_patch_attn_ops(self.model, len(self.model.transformers)-1, j, n-1, last_copy_src, layer_inputs[j], mask, A_matrices, attn_matrices, attn_inputs)
+			zero_src_products, zero_dst_products, max_src_products, max_dst_products = perturb_attn_ops(self.model, len(self.model.transformers)-1, j, n-1, last_copy_src, layer_inputs[j], mask, A_matrices, attn_matrices, attn_inputs)
 			zero_src_product_list.append(zero_src_products)
 			zero_dst_product_list.append(zero_dst_products)
 			max_src_product_list.append(max_src_products)
 			max_dst_product_list.append(max_dst_products)
+
+			#if j < len(self.model.transformers) - 1:
+			#	res_src_products, res_dst_products = perturb_residuals(self.model, len(self.model.transformers)-1, j, n-1, last_copy_src, mask, A_matrices, attn_inputs, attn_outputs, ff_inputs)
+			#	res_src_product_list.append(res_src_products)
+			#	res_dst_product_list.append(res_dst_products)
 
 		A = A_matrices[len(self.model.transformers)-1][:-1,:-1]
 		old_products = torch.matmul(torch.matmul(attn_inputs[len(self.model.transformers)-1], A), attn_inputs[len(self.model.transformers)-1].T)
@@ -643,6 +680,15 @@ class TransformerTracer:
 				new_important_ops += [c.tolist() for c in negative_copies if c.tolist() not in new_important_ops]
 			else:
 				new_important_ops += [c.tolist() for c in positive_copies if c.tolist() not in new_important_ops]
+
+			#if j < len(self.model.transformers) - 1:
+			#	residual_copies = torch.nonzero(res_src_product_list[j] < old_product - math.sqrt(d) / 2)
+			#	residual_copies = torch.cat((residual_copies,residual_copies),dim=-1)
+			#	new_important_ops += [c.tolist() for c in residual_copies if c.tolist() not in new_important_ops]
+			#	residual_copies = torch.nonzero(res_dst_product_list[j] < old_product - math.sqrt(d) / 2)
+			#	residual_copies = torch.cat((residual_copies,residual_copies),dim=-1)
+			#	new_important_ops += [c.tolist() for c in residual_copies if c.tolist() not in new_important_ops]
+
 			important_ops.append(new_important_ops)
 		important_ops[len(self.model.transformers)-1].append((n-1,last_copy_src))
 
@@ -703,8 +749,12 @@ class TransformerTracer:
 									op_causes.append((int(src_dep)-1,int(src_dep)))
 							elif src_dep <= max_vertex_id and src_dep in dst_dependencies:
 								# this is a token matching step
-								if src_dep not in op_causes:
+								if int(src_dep) not in op_causes:
 									op_causes.append(int(src_dep))
+						if max_vertex_id+1+n-4 in src_dependencies and max_vertex_id+1+n-3 in src_dependencies and max_vertex_id+1+n-1 in dst_dependencies:
+							# this is a hard-coded copy from tokens that are reachable from both the start and goal vertices into the last token
+							if (max_vertex_id+1+n-1,max_vertex_id+1+n-4) not in op_causes:
+								op_causes.append((max_vertex_id+1+n-1,max_vertex_id+1+n-4))
 						forward_dist = path_length(predecessor.row_id, node.row_id)
 						backward_dist = path_length(node.row_id, predecessor.row_id)
 						if node.row_id == predecessor.row_id:
@@ -738,33 +788,34 @@ class TransformerTracer:
 		# identify the paths in the graph that can be explained by the path-merging algorithm
 		path_merge_explainable = []
 		for node in reversed(all_nodes):
-			if node.layer == 0:
+			if node.layer == 0 and node.row_id != n-1:
 				path_merge_explainable.append(node)
 			elif node not in path_merge_explainable:
 				continue
 
 			# check if this is a path merge operation
 			for k in range(len(node.successors)):
-				if node.op_explanations[k] == None:
-					if node.row_id == node.successors[k].row_id:
-						path_merge_explainable.append(node.successors[k])
+				successor = node.successors[k]
+				if successor in path_merge_explainable:
 					continue
-				if node.copy_directions[k] == 'f' and any(e[0]+1 == e[1] for e in node.op_explanations[k] if type(e) == tuple):
-					path_merge_explainable.append(node.successors[k])
-				if node.copy_directions[k] == 'b' and any(e[0]-1 == e[1] for e in node.op_explanations[k] if type(e) == tuple):
-					path_merge_explainable.append(node.successors[k])
+				if node.op_explanations[k] == None:
+					if node.row_id == successor.row_id:
+						path_merge_explainable.append(successor)
+					continue
+				if node.copy_directions[k] == 'f' and any(e[0]+1 == e[1] and e[0]+1 in successor.reachable and e[1] in node.reachable for e in node.op_explanations[k] if type(e) == tuple):
+					path_merge_explainable.append(successor)
+					continue
+				if node.copy_directions[k] == 'b' and any(e[0]-1 == e[1] and e[0]-1 in successor.reachable and e[1] in node.reachable for e in node.op_explanations[k] if type(e) == tuple):
+					path_merge_explainable.append(successor)
+					continue
 				for explanation in node.op_explanations[k]:
 					if any(explanation == input[r-max_vertex_id] for r in node.reachable if r > max_vertex_id):
-						path_merge_explainable.append(node.successors[k])
+						path_merge_explainable.append(successor)
 						break
+				if (max_vertex_id+1+n-1,max_vertex_id+1+n-4) in node.op_explanations[k] and successor.row_id == n-1 and max_vertex_id+1+n-4 in node.reachable and successor not in path_merge_explainable:
+					path_merge_explainable.append(successor)
 
-		queue = [root]
-		while len(queue) != 0:
-			node = queue.pop()
-			for predecessor in node.predecessors:
-				print('Layer {}: copy from {} ({}) into {} ({}); explanations: {}, direction: {}, src reachability: {}'.format(predecessor.layer, predecessor.row_id, input[predecessor.row_id], node.row_id, input[node.row_id], predecessor.op_explanations[predecessor.successors.index(node)], predecessor.copy_directions[predecessor.successors.index(node)], sorted(predecessor.reachable)))
-				queue.append(predecessor)
-		import pdb; pdb.set_trace()
+		return root, path_merge_explainable, prediction
 
 	def trace(self, x: torch.Tensor, other_x: torch.Tensor, quiet: bool = True):
 		n = x.shape[0]
@@ -1544,7 +1595,7 @@ class TransformerTracer:
 			for j in range(i):
 				new_inputs = layer_inputs[j].clone().detach()
 				new_inputs[src,:] = perturb_layer_inputs[j][116,src,:]
-				zero_src_products, zero_dst_products, max_src_products, max_dst_products = activation_patch_attn_ops(self.model, i, j, dst, src, new_inputs, mask, prediction, A_matrices, attn_matrices, attn_inputs)
+				zero_src_products, zero_dst_products, max_src_products, max_dst_products = perturb_attn_ops(self.model, i, j, dst, src, new_inputs, mask, prediction, A_matrices, attn_matrices, attn_inputs)
 				zero_src_product_list.append(zero_src_products)
 				zero_dst_product_list.append(zero_dst_products)
 				max_src_product_list.append(max_src_products)
@@ -1756,7 +1807,7 @@ class TransformerTracer:
 		max_output_logit_list = []
 		import pdb; pdb.set_trace()
 		for j in range(5+1):
-			zero_src_products, zero_dst_products, max_src_products, max_dst_products, zero_output_logits, max_output_logits = activation_patch_attn_ops(self.model, 5, j, 89, 35, layer_inputs[j], mask, prediction, A_matrices, attn_matrices, attn_inputs)
+			zero_src_products, zero_dst_products, max_src_products, max_dst_products, zero_output_logits, max_output_logits = perturb_attn_ops(self.model, 5, j, 89, 35, layer_inputs[j], mask, prediction, A_matrices, attn_matrices, attn_inputs)
 			zero_src_product_list.append(zero_src_products)
 			zero_dst_product_list.append(zero_dst_products)
 			max_src_product_list.append(max_src_products)
@@ -2042,7 +2093,8 @@ if __name__ == "__main__":
 	else:
 		device = torch.device('cuda')
 
-	tfm_model, _, _, _ = torch.load(argv[1], map_location=device)
+	filepath = argv[1]
+	tfm_model, _, _, _ = torch.load(filepath, map_location=device)
 	for transformer in tfm_model.transformers:
 		if not hasattr(transformer, 'pre_ln'):
 			transformer.pre_ln = True
@@ -2068,9 +2120,107 @@ if __name__ == "__main__":
 	#other_input[next(i for i in range(len(input)) if input[i] == 17 and input[i+1] ==  9) + 1] = 19
 	#other_input[next(i for i in range(len(input)) if input[i] == 25 and input[i+1] == 19) + 0] = 17
 	#other_input[next(i for i in range(len(input)) if input[i] == 25 and input[i+1] == 19) + 1] =  9
-	tracer.trace2(input)
-	prediction = tracer.trace(input, other_input, quiet=False)
-	import pdb; pdb.set_trace()
+	#tracer.trace2(input)
+	#prediction = tracer.trace(input, other_input, quiet=False)
+
+	suffix = filepath[filepath.index('inputsize')+len('inputsize'):]
+	max_input_size = int(suffix[:suffix.index('_')])
+
+	NUM_SAMPLES = 3
+	inputs,outputs = generate_eval_data(max_input_size, min_path_length=1, distance_from_start=1, distance_from_end=-1, lookahead_steps=10, num_paths_at_fork=None, num_samples=NUM_SAMPLES)
+	inputs = torch.LongTensor(inputs).to(device)
+
+	def print_computation_graph(root, input):
+		queue = [root]
+		while len(queue) != 0:
+			node = queue.pop()
+			for predecessor in node.predecessors:
+				print('Layer {}: copy from {} ({}) into {} ({}); explanations: {}, direction: {}, src reachability: {}'.format(predecessor.layer, predecessor.row_id, input[predecessor.row_id], node.row_id, input[node.row_id], predecessor.op_explanations[predecessor.successors.index(node)], predecessor.copy_directions[predecessor.successors.index(node)], sorted(predecessor.reachable)))
+				queue.append(predecessor)
+
+		from analyze import print_graph
+		print_graph(input.cpu().detach().numpy())
+
+	#root, path_merge_explainable, prediction = tracer.trace2(inputs[0,:])
+	#print_computation_graph(root, inputs[0,:])
+	#import pdb; pdb.set_trace()
+
+	num_correct = 0
+	num_path_merge_explainable = 0
+	total = 0
+	aggregated_copy_directions = []
+	aggregated_op_explanations = []
+	for i in range(len(tfm_model.transformers)):
+		aggregated_copy_directions.append({})
+		aggregated_op_explanations.append({})
+	for i in range(NUM_SAMPLES):
+		try:
+			root, path_merge_explainable, prediction = tracer.trace2(inputs[i,:])
+		except NoUnusedVertexIDs:
+			print('Input has no unused vertex IDs. Skipping...')
+			continue
+
+		if path_merge_explainable != None:
+			for node in path_merge_explainable:
+				for k in range(len(node.successors)):
+					successor = node.successors[k]
+					if successor not in path_merge_explainable or node.copy_directions[k] == None:
+						continue
+					for direction in node.copy_directions[k]:
+						if direction not in aggregated_copy_directions[node.layer]:
+							aggregated_copy_directions[node.layer][direction] = 1
+						else:
+							aggregated_copy_directions[node.layer][direction] += 1
+					for explanation in node.op_explanations[k]:
+						if explanation not in aggregated_op_explanations:
+							aggregated_op_explanations[node.layer][explanation] = 1
+						else:
+							aggregated_op_explanations[node.layer][explanation] += 1
+
+		if root != None and root in path_merge_explainable:
+			num_path_merge_explainable += 1
+		if prediction == outputs[i]:
+			num_correct += 1
+		total += 1
+		print('[iteration {}]'.format(i))
+		print('  Accuracy: {}'.format(num_correct / total))
+		print('  Fraction of inputs explainable by path-merging algorithm: {}'.format(num_path_merge_explainable / total))
+
+	from functools import cmp_to_key
+	def compare(x, y):
+		if type(x) == tuple:
+			if type(y) != tuple:
+				return -1
+			if len(x) < len(y):
+				return -1
+			elif len(x) > len(y):
+				return 1
+			for i in range(len(x)):
+				c = compare(x[i], y[i])
+				if c != 0:
+					return c
+		elif type(y) == tuple:
+			return 1
+		elif x < y:
+			return -1
+		elif x > y:
+			return 1
+		return 0
+
+	print('\nAggregated results:')
+	for i in range(len(aggregated_copy_directions)):
+		total_copy_directions = sum(aggregated_copy_directions[i].values())
+		total_op_explanations = sum(aggregated_op_explanations[i].values())
+		print(' Layer {} copy directions:'.format(i))
+		for copy_direction in sorted(aggregated_copy_directions[i].keys()):
+			print('  {}: {} / {}'.format(copy_direction, aggregated_copy_directions[i][copy_direction], total_copy_directions))
+		print(' Layer {} op explanations:'.format(i))
+		for explanation in sorted(aggregated_op_explanations[i].keys(), key=cmp_to_key(compare)):
+			print('  {}: {} / {}'.format(explanation, aggregated_op_explanations[i][explanation], total_op_explanations))
+
+	import sys
+	sys.exit(0)
+
 
 	token_dim = tfm_model.token_embedding.shape[0]
 	position_dim = (tfm_model.positional_embedding.shape[0] if tfm_model.positional_embedding != None else 0)
