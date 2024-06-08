@@ -132,7 +132,7 @@ def forward(model, x: torch.Tensor, mask: torch.Tensor, start_layer: int, start_
 
 	return layer_inputs, attn_inputs, attn_pre_softmax, attn_matrices, v_outputs, attn_linear_inputs, attn_outputs, A_matrices, ff_inputs, ff_parameters, prediction
 
-@torch.no_grad
+@torch.no_grad()
 def activation_patch_output_logit(model, j, layer_input, mask, prediction, attn_matrices):
 	n = layer_input.size(0)
 
@@ -183,7 +183,7 @@ def activation_patch_output_logit(model, j, layer_input, mask, prediction, attn_
 
 	return zero_output_logits, max_output_logits
 
-@torch.no_grad
+@torch.no_grad()
 def perturb_attn_ops(model, i, j, dst, src, layer_input, mask, A_matrices, attn_matrices, attn_inputs):
 	A = A_matrices[i][:-1,:-1]
 	n = attn_inputs[i].size(0)
@@ -239,7 +239,7 @@ def perturb_attn_ops(model, i, j, dst, src, layer_input, mask, A_matrices, attn_
 
 	return zero_src_products, zero_dst_products, max_src_products, max_dst_products
 
-@torch.no_grad
+@torch.no_grad()
 def perturb_residuals(model, i, j, dst, src, mask, A_matrices, attn_inputs, attn_outputs, ff_inputs):
 	A = A_matrices[i][:-1,:-1]
 	n = attn_inputs[i].size(0)
@@ -265,7 +265,7 @@ def perturb_residuals(model, i, j, dst, src, mask, A_matrices, attn_inputs, attn
 class NoUnusedVertexIDs(Exception):
     pass
 
-@torch.no_grad
+@torch.no_grad()
 def explain_attn_op(model, input, mask, A_matrices, attn_matrices, attn_inputs, ff_inputs, i, dst, src):
 	n, d = attn_inputs[0].size(0), attn_inputs[0].size(1)
 	EDGE_PREFIX_TOKEN = (n - 5) // 3 + 2
@@ -2156,7 +2156,17 @@ if __name__ == "__main__":
 
 	from functools import cmp_to_key
 	def compare(x, y):
-		if type(x) == tuple:
+		if type(x) == str:
+			if type(y) != str:
+				return -1
+			elif x < y:
+				return -1
+			elif x > y:
+				return 1
+			return 0
+		elif type(y) == str:
+			return 1
+		elif type(x) == tuple:
 			if type(y) != tuple:
 				return -1
 			if len(x) < len(y):
@@ -2187,6 +2197,7 @@ if __name__ == "__main__":
 			for explanation in sorted(aggregated_op_explanations[i].keys(), key=cmp_to_key(compare)):
 				print('  {}: {} / {}'.format(explanation, aggregated_op_explanations[i][explanation], total_op_explanations))
 
+	from sys import stdout
 	for i in range(NUM_SAMPLES):
 		try:
 			root, path_merge_explainable, prediction = tracer.trace2(inputs[i,:])
@@ -2206,7 +2217,7 @@ if __name__ == "__main__":
 						else:
 							aggregated_copy_directions[node.layer][direction] += 1
 					for explanation in node.op_explanations[k]:
-						if explanation not in aggregated_op_explanations:
+						if explanation not in aggregated_op_explanations[node.layer]:
 							aggregated_op_explanations[node.layer][explanation] = 1
 						else:
 							aggregated_op_explanations[node.layer][explanation] += 1
@@ -2221,6 +2232,7 @@ if __name__ == "__main__":
 		print('  Fraction of inputs explainable by path-merging algorithm: {}'.format(num_path_merge_explainable / total))
 		if (i + 1) % 10 == 0:
 			print_summary()
+		stdout.flush()
 
 	print_summary()
 	import sys
