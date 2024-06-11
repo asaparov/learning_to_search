@@ -753,8 +753,12 @@ class TransformerTracer:
 									op_causes.append(int(src_dep))
 						if max_vertex_id+1+n-4 in src_dependencies and max_vertex_id+1+n-3 in src_dependencies and max_vertex_id+1+n-1 in dst_dependencies:
 							# this is a hard-coded copy from tokens that are reachable from both the start and goal vertices into the last token
-							if (max_vertex_id+1+n-1,max_vertex_id+1+n-4) not in op_causes:
-								op_causes.append((max_vertex_id+1+n-1,max_vertex_id+1+n-4))
+							if (max_vertex_id+1+n-1, (max_vertex_id+1+n-3,max_vertex_id+1+n-4)) not in op_causes:
+								op_causes.append((max_vertex_id+1+n-1, (max_vertex_id+1+n-3,max_vertex_id+1+n-4)))
+						if max_vertex_id+1+n-3 in src_dependencies:
+							# this is a hard-coded copy from tokens that are reachable from the goal vertex
+							if (None, max_vertex_id+1+n-3) not in op_causes:
+								op_causes.append((None, max_vertex_id+1+n-3))
 						forward_dist = path_length(predecessor.row_id, node.row_id)
 						backward_dist = path_length(node.row_id, predecessor.row_id)
 						if node.row_id == predecessor.row_id:
@@ -780,7 +784,7 @@ class TransformerTracer:
 			all_nodes += new_nodes
 
 		for node in all_nodes:
-			node.reachable = [int(input[node.row_id]),max_vertex_id+node.row_id]
+			node.reachable = [int(input[node.row_id]),max_vertex_id+1+node.row_id]
 		for node in reversed(all_nodes):
 			for successor in node.successors:
 				successor.reachable += [n for n in node.reachable if n not in successor.reachable]
@@ -802,17 +806,19 @@ class TransformerTracer:
 					if node.row_id == successor.row_id:
 						path_merge_explainable.append(successor)
 					continue
-				if node.copy_directions[k] == 'f' and any(e[0]+1 == e[1] and e[0]+1 in successor.reachable and e[1] in node.reachable for e in node.op_explanations[k] if type(e) == tuple):
+				if node.copy_directions[k] == 'f' and any(e[0]+1 == e[1] and e[0]+1 in successor.reachable and e[1] in node.reachable for e in node.op_explanations[k] if type(e) == tuple and type(e[0]) == int):
 					path_merge_explainable.append(successor)
 					continue
-				if node.copy_directions[k] == 'b' and any(e[0]-1 == e[1] and e[0]-1 in successor.reachable and e[1] in node.reachable for e in node.op_explanations[k] if type(e) == tuple):
+				if node.copy_directions[k] == 'b' and any(e[0]-1 == e[1] and e[0]-1 in successor.reachable and e[1] in node.reachable for e in node.op_explanations[k] if type(e) == tuple and type(e[0]) == int):
 					path_merge_explainable.append(successor)
 					continue
 				for explanation in node.op_explanations[k]:
-					if any(explanation == input[r-max_vertex_id] for r in node.reachable if r > max_vertex_id):
+					if any(explanation == input[r-(max_vertex_id+1)] for r in node.reachable if r > max_vertex_id):
 						path_merge_explainable.append(successor)
 						break
-				if (max_vertex_id+1+n-1,max_vertex_id+1+n-4) in node.op_explanations[k] and successor.row_id == n-1 and max_vertex_id+1+n-4 in node.reachable and successor not in path_merge_explainable:
+				if (max_vertex_id+1+n-1,(max_vertex_id+1+n-3,max_vertex_id+1+n-4)) in node.op_explanations[k] and successor.row_id == n-1 and max_vertex_id+1+n-3 in node.reachable and max_vertex_id+1+n-4 in node.reachable and successor not in path_merge_explainable:
+					path_merge_explainable.append(successor)
+				if (None,max_vertex_id+1+n-3) in node.op_explanations[k] and successor.row_id == n-1 and max_vertex_id+1+n-3 in node.reachable and successor not in path_merge_explainable:
 					path_merge_explainable.append(successor)
 
 		return root, path_merge_explainable, prediction
@@ -2125,6 +2131,7 @@ if __name__ == "__main__":
 
 	suffix = filepath[filepath.index('inputsize')+len('inputsize'):]
 	max_input_size = int(suffix[:suffix.index('_')])
+	max_vertex_id = (max_input_size - 5) // 3
 
 	NUM_SAMPLES = int(argv[3])
 	inputs,outputs = generate_eval_data(max_input_size, min_path_length=1, distance_from_start=1, distance_from_end=-1, lookahead_steps=int(argv[2]), num_paths_at_fork=None, num_samples=NUM_SAMPLES)
@@ -2132,17 +2139,21 @@ if __name__ == "__main__":
 
 	def print_computation_graph(root, input):
 		queue = [root]
+		visited = []
 		while len(queue) != 0:
 			node = queue.pop()
+			visited.append(node)
+			for predecessor in node.predecessors:
+				queue.insert(0, predecessor)
+		for node in reversed(visited):
 			for predecessor in node.predecessors:
 				print('Layer {}: copy from {} ({}) into {} ({}); explanations: {}, direction: {}, src reachability: {}'.format(predecessor.layer, predecessor.row_id, input[predecessor.row_id], node.row_id, input[node.row_id], predecessor.op_explanations[predecessor.successors.index(node)], predecessor.copy_directions[predecessor.successors.index(node)], sorted(predecessor.reachable)))
-				queue.append(predecessor)
 
 		from analyze import print_graph
 		print_graph(input.cpu().detach().numpy())
 
-	#root, path_merge_explainable, prediction = tracer.trace2(inputs[0,:])
-	#print_computation_graph(root, inputs[0,:])
+	#root, path_merge_explainable, prediction = tracer.trace2(inputs[12,:])
+	#print_computation_graph(root, inputs[12,:])
 	#import pdb; pdb.set_trace()
 
 	num_correct = 0
@@ -2156,7 +2167,13 @@ if __name__ == "__main__":
 
 	from functools import cmp_to_key
 	def compare(x, y):
-		if type(x) == str:
+		if x == None:
+			if y != None:
+				return -1
+			return 0
+		elif y == None:
+			return 1
+		elif type(x) == str:
 			if type(y) != str:
 				return -1
 			elif x < y:
@@ -2185,6 +2202,54 @@ if __name__ == "__main__":
 			return 1
 		return 0
 
+	def explanation_list_to_str(explanations):
+		if type(explanations) == tuple:
+			tokens = [str(e) for e in explanations if e <= max_vertex_id]
+			positions = [str(e - (max_vertex_id + 1)) for e in explanations if e > max_vertex_id]
+			if len(tokens) == 0:
+				if len(positions) == 0:
+					raise Exception('Explanation tuple is empty.')
+				elif len(positions) == 1:
+					return 'position ' + ','.join(positions)
+				else:
+					return 'positions ' + ','.join(positions)
+			elif len(tokens) == 1:
+				if len(positions) == 0:
+					return 'token ' + ','.join(tokens)
+				elif len(positions) == 1:
+					return 'token ' + ','.join(tokens) + ' and position ' + ','.join(positions)
+				else:
+					return 'token ' + ','.join(tokens) + ' and positions ' + ','.join(positions)
+			else:
+				if len(positions) == 0:
+					return 'tokens ' + ','.join(tokens)
+				elif len(positions) == 1:
+					return 'tokens ' + ','.join(tokens) + ' and position ' + ','.join(positions)
+				else:
+					return 'tokens ' + ','.join(tokens) + ' and positions ' + ','.join(positions)
+		elif type(explanations) == int:
+			if explanations <= max_vertex_id:
+				return 'token ' + str(explanations)
+			else:
+				return 'position ' + str(explanations - (max_vertex_id + 1))
+		else:
+			raise Exception('Invalid explanation type.')
+
+	def explanation_to_str(explanation):
+		if type(explanation) == str:
+			return explanation
+		elif type(explanation) == tuple:
+			if explanation[1] == None:
+				return 'dst activation at ' + explanation_list_to_str(explanation[0])
+			elif explanation[0] == None:
+				return 'src activation at ' + explanation_list_to_str(explanation[1])
+			else:
+				return 'src activation at ' + explanation_list_to_str(explanation[1]) + '; dst activation at ' + explanation_list_to_str(explanation[0])
+		elif type(explanation) == int:
+			return 'matching ' + explanation_list_to_str(explanation)
+		else:
+			raise Exception('Invalid explanation type.')
+
 	def print_summary():
 		print('\nAggregated results:')
 		for i in range(len(aggregated_copy_directions)):
@@ -2195,7 +2260,7 @@ if __name__ == "__main__":
 				print('  {}: {} / {}'.format(copy_direction, aggregated_copy_directions[i][copy_direction], total_copy_directions))
 			print(' Layer {} op explanations:'.format(i))
 			for explanation in sorted(aggregated_op_explanations[i].keys(), key=cmp_to_key(compare)):
-				print('  {}: {} / {}'.format(explanation, aggregated_op_explanations[i][explanation], total_op_explanations))
+				print('  {}: {} / {}'.format(explanation_to_str(explanation), aggregated_op_explanations[i][explanation], total_op_explanations))
 
 	from sys import stdout
 	for i in range(NUM_SAMPLES):
@@ -2205,17 +2270,21 @@ if __name__ == "__main__":
 			print('Input has no unused vertex IDs. Skipping...')
 			continue
 
-		if path_merge_explainable != None:
+		if path_merge_explainable != None and root in path_merge_explainable:
 			for node in path_merge_explainable:
 				for k in range(len(node.successors)):
 					successor = node.successors[k]
-					if successor not in path_merge_explainable or node.copy_directions[k] == None:
+					if successor not in path_merge_explainable:
 						continue
-					for direction in node.copy_directions[k]:
-						if direction not in aggregated_copy_directions[node.layer]:
-							aggregated_copy_directions[node.layer][direction] = 1
-						else:
-							aggregated_copy_directions[node.layer][direction] += 1
+					if node.copy_directions[k] != None:
+						for direction in node.copy_directions[k]:
+							if direction not in aggregated_copy_directions[node.layer]:
+								aggregated_copy_directions[node.layer][direction] = 1
+							else:
+								aggregated_copy_directions[node.layer][direction] += 1
+					if node.op_explanations[k] == None:
+						# this is a residual copy
+						node.op_explanations[k] = ['residual']
 					for explanation in node.op_explanations[k]:
 						if explanation not in aggregated_op_explanations[node.layer]:
 							aggregated_op_explanations[node.layer][explanation] = 1
