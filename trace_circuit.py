@@ -274,11 +274,11 @@ def explain_attn_op(model, input, mask, A_matrices, attn_matrices, attn_inputs, 
 	# create perturbed inputs where each input replaces every occurrence of a token value with an unused token value
 	max_vertex_id = (n - 5) // 3
 	try:
-		unused_id = next(t for t in range(1, max_vertex_id + 1) if t not in input)
+		unused_id = next(t for t in range(1, max_vertex_id + 5) if t not in input)
 	except StopIteration:
 		raise NoUnusedVertexIDs()
-	other_inputs = input.repeat(max_vertex_id + 1 + n, 1)
-	for j in range(max_vertex_id + 1):
+	other_inputs = input.repeat(max_vertex_id + 5 + n, 1)
+	for j in range(max_vertex_id + 5):
 		other_inputs[j,input == j] = unused_id
 
 	# perform forward pass on other_inputs
@@ -292,14 +292,14 @@ def explain_attn_op(model, input, mask, A_matrices, attn_matrices, attn_inputs, 
 
 	# for the last n rows of `other_inputs`, perturb the position embeddings
 	for j in range(n):
-		if j < edge_indices[-1] or j > edge_indices[-1] + 2:
-			src_edge_index = edge_indices[-1]
-		else:
-			src_edge_index = edge_indices[-2]
-		offset = (src_edge_index % 3) - (j % 3)
-		if offset > 1:
-			offset -= 3
-		other_inputs[max_vertex_id+1+j,j,d-n:] = other_inputs[max_vertex_id+1+j,src_edge_index-offset,d-n:].clone().detach()
+		#if j < edge_indices[-1] or j > edge_indices[-1] + 2:
+		#	src_edge_index = edge_indices[-1]
+		#else:
+		#	src_edge_index = edge_indices[-2]
+		#offset = (src_edge_index % 3) - (j % 3)
+		#if offset > 1:
+		#	offset -= 3
+		other_inputs[max_vertex_id+5+j,j,d-n:] = 0 #other_inputs[max_vertex_id+5+j,src_edge_index-offset,d-n:].clone().detach()
 
 	frozen_ops = []
 	for j in range(i):
@@ -637,7 +637,7 @@ class TransformerTracer:
 			zero_output_logit_list.append(zero_output_logits)
 			max_output_logit_list.append(max_output_logits)
 
-		major_last_copies = torch.nonzero(zero_output_logit_list[5] < layer_inputs[-1][-1,prediction] - math.sqrt(d) / 2)
+		major_last_copies = torch.nonzero(zero_output_logit_list[len(self.model.transformers)-1] < layer_inputs[-1][-1,prediction] - math.sqrt(d) / 2)
 		if major_last_copies.size(0) != 1 or major_last_copies[0,0] != n-1:
 			print('WARNING: Last layer does not copy the answer from a single source token.')
 			return None, None, prediction
@@ -667,12 +667,20 @@ class TransformerTracer:
 
 		important_ops = []
 		for j in range(len(self.model.transformers)):
+			new_important_ops = []
+			positive_copies = torch.nonzero(zero_output_logit_list[j] < layer_inputs[-1][-1,prediction] - math.sqrt(d) / 2)
+			negative_copies = torch.nonzero(max_output_logit_list[j] < layer_inputs[-1][-1,prediction] - math.sqrt(d) / 2)
+			if positive_copies.size(0) > negative_copies.size(0) or positive_copies.size(0) == 0:
+				new_important_ops += [op.tolist() for op in negative_copies]
+			if positive_copies.size(0) <= negative_copies.size(0) or negative_copies.size(0) == 0:
+				new_important_ops += [op.tolist() for op in positive_copies]
+
 			positive_copies = torch.nonzero(zero_src_product_list[j] < old_product - math.sqrt(d) / 2)
 			negative_copies = torch.nonzero(max_src_product_list[j] < old_product - math.sqrt(d) / 2)
 			if positive_copies.size(0) > negative_copies.size(0):
-				new_important_ops = [op.tolist() for op in negative_copies]
+				new_important_ops += [c.tolist() for c in negative_copies if c.tolist() not in new_important_ops]
 			else:
-				new_important_ops = [op.tolist() for op in positive_copies]
+				new_important_ops += [c.tolist() for c in positive_copies if c.tolist() not in new_important_ops]
 
 			positive_copies = torch.nonzero(zero_dst_product_list[j] < old_product - math.sqrt(d) / 2)
 			negative_copies = torch.nonzero(max_dst_product_list[j] < old_product - math.sqrt(d) / 2)
@@ -690,7 +698,6 @@ class TransformerTracer:
 			#	new_important_ops += [c.tolist() for c in residual_copies if c.tolist() not in new_important_ops]
 
 			important_ops.append(new_important_ops)
-		important_ops[len(self.model.transformers)-1].append((n-1,last_copy_src))
 
 		forward_edges = []
 		start_index = torch.sum(input == PADDING_TOKEN)
@@ -739,11 +746,11 @@ class TransformerTracer:
 						src_dependencies, dst_dependencies = explain_attn_op(self.model, input, mask, A_matrices, attn_matrices, attn_inputs, ff_inputs, predecessor.layer, node.row_id, predecessor.row_id)
 						op_causes = []
 						for src_dep in src_dependencies:
-							if src_dep > max_vertex_id and src_dep+1 in dst_dependencies:
+							if src_dep >= max_vertex_id+5 and src_dep+1 in dst_dependencies:
 								# this is a position-based backward step
 								if (int(src_dep)+1,int(src_dep)) not in op_causes:
 									op_causes.append((int(src_dep)+1,int(src_dep)))
-							elif src_dep > max_vertex_id and src_dep-1 in dst_dependencies:
+							elif src_dep >= max_vertex_id+5 and src_dep-1 in dst_dependencies:
 								# this is a position-based forward step
 								if (int(src_dep)-1,int(src_dep)) not in op_causes:
 									op_causes.append((int(src_dep)-1,int(src_dep)))
@@ -751,14 +758,14 @@ class TransformerTracer:
 								# this is a token matching step
 								if int(src_dep) not in op_causes:
 									op_causes.append(int(src_dep))
-						if max_vertex_id+1+n-4 in src_dependencies and max_vertex_id+1+n-3 in src_dependencies and max_vertex_id+1+n-1 in dst_dependencies:
+						if max_vertex_id+5+n-4 in src_dependencies and max_vertex_id+5+n-3 in src_dependencies and max_vertex_id+5+n-1 in dst_dependencies:
 							# this is a hard-coded copy from tokens that are reachable from both the start and goal vertices into the last token
-							if (max_vertex_id+1+n-1, (max_vertex_id+1+n-3,max_vertex_id+1+n-4)) not in op_causes:
-								op_causes.append((max_vertex_id+1+n-1, (max_vertex_id+1+n-3,max_vertex_id+1+n-4)))
-						if max_vertex_id+1+n-3 in src_dependencies:
+							if (max_vertex_id+5+n-1, (max_vertex_id+5+n-3,max_vertex_id+5+n-4)) not in op_causes:
+								op_causes.append((max_vertex_id+5+n-1, (max_vertex_id+5+n-3,max_vertex_id+5+n-4)))
+						if max_vertex_id+5+n-3 in src_dependencies:
 							# this is a hard-coded copy from tokens that are reachable from the goal vertex
-							if (None, max_vertex_id+1+n-3) not in op_causes:
-								op_causes.append((None, max_vertex_id+1+n-3))
+							if (None, max_vertex_id+5+n-3) not in op_causes:
+								op_causes.append((None, max_vertex_id+5+n-3))
 						forward_dist = path_length(predecessor.row_id, node.row_id)
 						backward_dist = path_length(node.row_id, predecessor.row_id)
 						if node.row_id == predecessor.row_id:
@@ -784,10 +791,41 @@ class TransformerTracer:
 			all_nodes += new_nodes
 
 		for node in all_nodes:
-			node.reachable = [int(input[node.row_id]),max_vertex_id+1+node.row_id]
+			node.reachable = [int(input[node.row_id]),max_vertex_id+5+node.row_id]
 		for node in reversed(all_nodes):
 			for successor in node.successors:
 				successor.reachable += [n for n in node.reachable if n not in successor.reachable]
+
+		def shortest_distances(start, subgraph):
+			if input[start] > (n - 5) // 3:
+				return {input[start]:0}
+			queue = [(input[start],0)]
+			distances = {}
+			while len(queue) != 0:
+				current, distance = queue.pop()
+				if current in distances and distance >= distances[current]:
+					continue
+				distances[current] = distance
+				for child in forward_edges[current]:
+					if child in subgraph:
+						queue.append((child,distance+1))
+			return distances
+
+		def reachable_path_length(reachable):
+			vertices = [i-(max_vertex_id+5) for i in reachable if i >= max_vertex_id+5]
+			subgraph = [int(input[v]) for v in vertices]
+			longest_distance = 0
+			for start in vertices:
+				longest_distance = max(longest_distance, max(shortest_distances(start, subgraph).values()))
+			return longest_distance
+
+		path_merge_lengths = [{} for i in range(len(self.model.transformers))]
+		def record_path_length(node, successor):
+			src_path_length = reachable_path_length(node.reachable)
+			dst_path_length = reachable_path_length(successor.reachable) - src_path_length
+			if (src_path_length,dst_path_length) not in path_merge_lengths[node.layer]:
+				path_merge_lengths[node.layer][(src_path_length,dst_path_length)] = 0
+			path_merge_lengths[node.layer][(src_path_length,dst_path_length)] += 1
 
 		# identify the paths in the graph that can be explained by the path-merging algorithm
 		path_merge_explainable = []
@@ -807,21 +845,26 @@ class TransformerTracer:
 						path_merge_explainable.append(successor)
 					continue
 				if node.copy_directions[k] == 'f' and any(e[0]+1 == e[1] and e[0]+1 in successor.reachable and e[1] in node.reachable for e in node.op_explanations[k] if type(e) == tuple and type(e[0]) == int):
+					record_path_length(node, successor)
 					path_merge_explainable.append(successor)
 					continue
 				if node.copy_directions[k] == 'b' and any(e[0]-1 == e[1] and e[0]-1 in successor.reachable and e[1] in node.reachable for e in node.op_explanations[k] if type(e) == tuple and type(e[0]) == int):
+					record_path_length(node, successor)
 					path_merge_explainable.append(successor)
 					continue
 				for explanation in node.op_explanations[k]:
-					if any(explanation == input[r-(max_vertex_id+1)] for r in node.reachable if r > max_vertex_id):
+					if any(explanation == input[r-(max_vertex_id+5)] for r in node.reachable if r >= max_vertex_id+5):
+						record_path_length(node, successor)
 						path_merge_explainable.append(successor)
 						break
-				if (max_vertex_id+1+n-1,(max_vertex_id+1+n-3,max_vertex_id+1+n-4)) in node.op_explanations[k] and successor.row_id == n-1 and max_vertex_id+1+n-3 in node.reachable and max_vertex_id+1+n-4 in node.reachable and successor not in path_merge_explainable:
+				if (max_vertex_id+5+n-1,(max_vertex_id+5+n-3,max_vertex_id+5+n-4)) in node.op_explanations[k] and successor.row_id == n-1 and max_vertex_id+5+n-3 in node.reachable and max_vertex_id+5+n-4 in node.reachable and successor not in path_merge_explainable:
+					record_path_length(node, successor)
 					path_merge_explainable.append(successor)
-				if (None,max_vertex_id+1+n-3) in node.op_explanations[k] and successor.row_id == n-1 and max_vertex_id+1+n-3 in node.reachable and successor not in path_merge_explainable:
+				if (None,max_vertex_id+5+n-3) in node.op_explanations[k] and successor.row_id == n-1 and max_vertex_id+5+n-3 in node.reachable and successor not in path_merge_explainable:
+					record_path_length(node, successor)
 					path_merge_explainable.append(successor)
 
-		return root, path_merge_explainable, prediction
+		return root, important_ops, path_merge_explainable, path_merge_lengths, prediction
 
 	def trace(self, x: torch.Tensor, other_x: torch.Tensor, quiet: bool = True):
 		n = x.shape[0]
@@ -2145,25 +2188,30 @@ if __name__ == "__main__":
 			visited.append(node)
 			for predecessor in node.predecessors:
 				queue.insert(0, predecessor)
+		printed = []
 		for node in reversed(visited):
 			for predecessor in node.predecessors:
+				if predecessor in printed:
+					continue
+				printed.append(predecessor)
 				print('Layer {}: copy from {} ({}) into {} ({}); explanations: {}, direction: {}, src reachability: {}'.format(predecessor.layer, predecessor.row_id, input[predecessor.row_id], node.row_id, input[node.row_id], predecessor.op_explanations[predecessor.successors.index(node)], predecessor.copy_directions[predecessor.successors.index(node)], sorted(predecessor.reachable)))
 
 		from analyze import print_graph
 		print_graph(input.cpu().detach().numpy())
 
-	#root, path_merge_explainable, prediction = tracer.trace2(inputs[12,:])
+	#root, important_ops, path_merge_explainable, path_merge_lengths, prediction = tracer.trace2(inputs[12,:])
 	#print_computation_graph(root, inputs[12,:])
 	#import pdb; pdb.set_trace()
 
-	num_correct = 0
-	num_path_merge_explainable = 0
 	total = 0
+	num_correct_vs_explainable = torch.zeros((2,2))
+	num_correct_vs_explainable_recall = torch.zeros((2,2))
 	aggregated_copy_directions = []
 	aggregated_op_explanations = []
 	for i in range(len(tfm_model.transformers)):
 		aggregated_copy_directions.append({})
 		aggregated_op_explanations.append({})
+	aggregated_path_merge_lengths = [{} for i in range(len(tfm_model.transformers))]
 
 	from functools import cmp_to_key
 	def compare(x, y):
@@ -2205,7 +2253,7 @@ if __name__ == "__main__":
 	def explanation_list_to_str(explanations):
 		if type(explanations) == tuple:
 			tokens = [str(e) for e in explanations if e <= max_vertex_id]
-			positions = [str(e - (max_vertex_id + 1)) for e in explanations if e > max_vertex_id]
+			positions = [str(e - (max_vertex_id + 5)) for e in explanations if e >= max_vertex_id + 5]
 			if len(tokens) == 0:
 				if len(positions) == 0:
 					raise Exception('Explanation tuple is empty.')
@@ -2231,7 +2279,7 @@ if __name__ == "__main__":
 			if explanations <= max_vertex_id:
 				return 'token ' + str(explanations)
 			else:
-				return 'position ' + str(explanations - (max_vertex_id + 1))
+				return 'position ' + str(explanations - (max_vertex_id + 5))
 		else:
 			raise Exception('Invalid explanation type.')
 
@@ -2261,11 +2309,14 @@ if __name__ == "__main__":
 			print(' Layer {} op explanations:'.format(i))
 			for explanation in sorted(aggregated_op_explanations[i].keys(), key=cmp_to_key(compare)):
 				print('  {}: {} / {}'.format(explanation_to_str(explanation), aggregated_op_explanations[i][explanation], total_op_explanations))
+			print(' Layer {} path merge lengths:'.format(i))
+			for merge_pattern in sorted(aggregated_path_merge_lengths[i].keys()):
+				print('  {}: {}'.format(merge_pattern, aggregated_path_merge_lengths[i][merge_pattern]))
 
 	from sys import stdout
 	for i in range(NUM_SAMPLES):
 		try:
-			root, path_merge_explainable, prediction = tracer.trace2(inputs[i,:])
+			root, important_ops, path_merge_explainable, path_merge_lengths, prediction = tracer.trace2(inputs[i,:])
 		except NoUnusedVertexIDs:
 			print('Input has no unused vertex IDs. Skipping...')
 			continue
@@ -2291,14 +2342,34 @@ if __name__ == "__main__":
 						else:
 							aggregated_op_explanations[node.layer][explanation] += 1
 
-		if root != None and root in path_merge_explainable:
-			num_path_merge_explainable += 1
-		if prediction == outputs[i]:
-			num_correct += 1
+		for l in range(len(path_merge_lengths)):
+			for k,v in path_merge_lengths[l].items():
+				if k not in aggregated_path_merge_lengths[l]:
+					aggregated_path_merge_lengths[l][k] = 0
+				aggregated_path_merge_lengths[l][k] += v
+
+		if path_merge_explainable != None:
+			num_explainable_edges = len(path_merge_explainable)
+		else:
+			num_explainable_edges = 0
+		num_important_edges = sum([len(l) for l in important_ops])
+
+		is_explainable = (root != None and root in path_merge_explainable)
+		is_correct = (prediction == outputs[i])
+		num_correct_vs_explainable[int(is_correct),int(is_explainable)] += 1
+		num_correct_vs_explainable_recall[int(is_correct),int(is_explainable)] += num_explainable_edges / num_important_edges
 		total += 1
 		print('[iteration {}]'.format(i))
-		print('  Accuracy: {}'.format(num_correct / total))
-		print('  Fraction of inputs explainable by path-merging algorithm: {}'.format(num_path_merge_explainable / total))
+		print('  Accuracy: {}'.format(torch.sum(num_correct_vs_explainable[1,:]) / total))
+		print('  Fraction of inputs explainable by path-merging algorithm: {}'.format(torch.sum(num_correct_vs_explainable[:,1]) / total))
+		print('  Fraction of inputs that are correct and explainable: {}'.format(torch.sum(num_correct_vs_explainable[1,1]) / total))
+		print('  Fraction of inputs that are incorrect and explainable: {}'.format(torch.sum(num_correct_vs_explainable[0,1]) / total))
+		print('  Fraction of inputs that are correct and unexplainable: {}'.format(torch.sum(num_correct_vs_explainable[1,0]) / total))
+		print('  Fraction of inputs that are incorrect and unexplainable: {}'.format(torch.sum(num_correct_vs_explainable[0,0]) / total))
+		print('  "Recall" of inputs that are correct and explainable: {}'.format(torch.sum(num_correct_vs_explainable_recall[1,1]) / total))
+		print('  "Recall" of inputs that are incorrect and explainable: {}'.format(torch.sum(num_correct_vs_explainable_recall[0,1]) / total))
+		print('  "Recall" of inputs that are correct and unexplainable: {}'.format(torch.sum(num_correct_vs_explainable_recall[1,0]) / total))
+		print('  "Recall" of inputs that are incorrect and unexplainable: {}'.format(torch.sum(num_correct_vs_explainable_recall[0,0]) / total))
 		if (i + 1) % 10 == 0:
 			print_summary()
 		stdout.flush()
