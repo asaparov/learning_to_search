@@ -2349,10 +2349,10 @@ if __name__ == "__main__":
 				aggregated_path_merge_lengths[l][k] += v
 
 		if path_merge_explainable != None:
-			num_explainable_edges = len(path_merge_explainable)
+			num_explainable_edges = len(path_merge_explainable) - 1
 		else:
 			num_explainable_edges = 0
-		num_important_edges = sum([len(l) for l in important_ops]) - 1
+		num_important_edges = sum([len(l) for l in important_ops])
 
 		is_explainable = (root != None and root in path_merge_explainable)
 		is_correct = (prediction == outputs[i])
