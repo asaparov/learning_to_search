@@ -640,7 +640,7 @@ class TransformerTracer:
 		major_last_copies = torch.nonzero(zero_output_logit_list[len(self.model.transformers)-1] < layer_inputs[-1][-1,prediction] - math.sqrt(d) / 2)
 		if major_last_copies.size(0) != 1 or major_last_copies[0,0] != n-1:
 			print('WARNING: Last layer does not copy the answer from a single source token.')
-			return None, None, prediction
+			return None, None, None, None, prediction
 		last_copy_src = major_last_copies[0,1]
 
 		zero_src_product_list = []
@@ -2342,22 +2342,27 @@ if __name__ == "__main__":
 						else:
 							aggregated_op_explanations[node.layer][explanation] += 1
 
-		for l in range(len(path_merge_lengths)):
-			for k,v in path_merge_lengths[l].items():
-				if k not in aggregated_path_merge_lengths[l]:
-					aggregated_path_merge_lengths[l][k] = 0
-				aggregated_path_merge_lengths[l][k] += v
+		if path_merge_lengths != None:
+			for l in range(len(path_merge_lengths)):
+				for k,v in path_merge_lengths[l].items():
+					if k not in aggregated_path_merge_lengths[l]:
+						aggregated_path_merge_lengths[l][k] = 0
+					aggregated_path_merge_lengths[l][k] += v
 
 		if path_merge_explainable != None:
 			num_explainable_edges = len(path_merge_explainable) - 1
 		else:
 			num_explainable_edges = 0
-		num_important_edges = sum([len(l) for l in important_ops])
+		if important_ops != None:
+			num_important_edges = sum([len(l) for l in important_ops])
+		else:
+			num_important_edges = 0
 
 		is_explainable = (root != None and root in path_merge_explainable)
 		is_correct = (prediction == outputs[i])
 		num_correct_vs_explainable[int(is_correct),int(is_explainable)] += 1
-		num_correct_vs_explainable_recall[int(is_correct),int(is_explainable)] += num_explainable_edges / num_important_edges
+		if important_ops != None:
+			num_correct_vs_explainable_recall[int(is_correct),int(is_explainable)] += num_explainable_edges / num_important_edges
 		total += 1
 		print('[iteration {}]'.format(i))
 		print('  Accuracy: {}'.format(torch.sum(num_correct_vs_explainable[1,:]) / total))

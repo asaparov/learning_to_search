@@ -533,7 +533,7 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 	torch.manual_seed(seed_value)
 	np.random.seed(seed_value)
 	PADDING_TOKEN = (max_input_size-5) // 3 + 3
-	BATCH_SIZE = 2 ** 11
+	BATCH_SIZE = 2 ** 12
 	print('Number of available CPUs: {}'.format(len(sched_getaffinity(0))))
 	stdout.flush()
 
@@ -677,7 +677,7 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 		torch.set_rng_state(torch_random_state.cpu())
 
 	loss_func = CrossEntropyLoss(ignore_index=PADDING_TOKEN, reduction='mean')
-	optimizer = SophiaG((p for p in model.parameters() if p.requires_grad), lr=1.0e-4, weight_decay=0.1)
+	optimizer = SophiaG((p for p in model.parameters() if p.requires_grad), lr=1.0e-5, weight_decay=0.1)
 
 	log_interval = 1
 	eval_interval = 1
