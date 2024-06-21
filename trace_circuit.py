@@ -796,37 +796,6 @@ class TransformerTracer:
 			for successor in node.successors:
 				successor.reachable += [n for n in node.reachable if n not in successor.reachable]
 
-		def shortest_distances(start, subgraph):
-			if input[start] > (n - 5) // 3:
-				return {input[start]:0}
-			queue = [(input[start],0)]
-			distances = {}
-			while len(queue) != 0:
-				current, distance = queue.pop()
-				if current in distances and distance >= distances[current]:
-					continue
-				distances[current] = distance
-				for child in forward_edges[current]:
-					if child in subgraph:
-						queue.append((child,distance+1))
-			return distances
-
-		def reachable_path_length(reachable):
-			vertices = [i-(max_vertex_id+5) for i in reachable if i >= max_vertex_id+5]
-			subgraph = [int(input[v]) for v in vertices]
-			longest_distance = 0
-			for start in vertices:
-				longest_distance = max(longest_distance, max(shortest_distances(start, subgraph).values()))
-			return longest_distance
-
-		path_merge_lengths = [{} for i in range(len(self.model.transformers))]
-		def record_path_length(node, successor):
-			src_path_length = reachable_path_length(node.reachable)
-			dst_path_length = reachable_path_length(successor.reachable) - src_path_length
-			if (src_path_length,dst_path_length) not in path_merge_lengths[node.layer]:
-				path_merge_lengths[node.layer][(src_path_length,dst_path_length)] = 0
-			path_merge_lengths[node.layer][(src_path_length,dst_path_length)] += 1
-
 		# identify the paths in the graph that can be explained by the path-merging algorithm
 		path_merge_explainable = []
 		for node in reversed(all_nodes):
@@ -845,26 +814,21 @@ class TransformerTracer:
 						path_merge_explainable.append(successor)
 					continue
 				if node.copy_directions[k] == 'f' and any(e[0]+1 == e[1] and e[0]+1 in successor.reachable and e[1] in node.reachable for e in node.op_explanations[k] if type(e) == tuple and type(e[0]) == int):
-					record_path_length(node, successor)
 					path_merge_explainable.append(successor)
 					continue
 				if node.copy_directions[k] == 'b' and any(e[0]-1 == e[1] and e[0]-1 in successor.reachable and e[1] in node.reachable for e in node.op_explanations[k] if type(e) == tuple and type(e[0]) == int):
-					record_path_length(node, successor)
 					path_merge_explainable.append(successor)
 					continue
 				for explanation in node.op_explanations[k]:
 					if any(explanation == input[r-(max_vertex_id+5)] for r in node.reachable if r >= max_vertex_id+5):
-						record_path_length(node, successor)
 						path_merge_explainable.append(successor)
 						break
 				if (max_vertex_id+5+n-1,(max_vertex_id+5+n-3,max_vertex_id+5+n-4)) in node.op_explanations[k] and successor.row_id == n-1 and max_vertex_id+5+n-3 in node.reachable and max_vertex_id+5+n-4 in node.reachable and successor not in path_merge_explainable:
-					record_path_length(node, successor)
 					path_merge_explainable.append(successor)
 				if (None,max_vertex_id+5+n-3) in node.op_explanations[k] and successor.row_id == n-1 and max_vertex_id+5+n-3 in node.reachable and successor not in path_merge_explainable:
-					record_path_length(node, successor)
 					path_merge_explainable.append(successor)
 
-		return root, important_ops, path_merge_explainable, path_merge_lengths, prediction
+		return root, forward_edges, important_ops, path_merge_explainable, prediction
 
 	def trace(self, x: torch.Tensor, other_x: torch.Tensor, quiet: bool = True):
 		n = x.shape[0]
@@ -2199,8 +2163,8 @@ if __name__ == "__main__":
 		from analyze import print_graph
 		print_graph(input.cpu().detach().numpy())
 
-	#root, important_ops, path_merge_explainable, path_merge_lengths, prediction = tracer.trace2(inputs[12,:])
-	#print_computation_graph(root, inputs[12,:])
+	#root, forward_edges, important_ops, path_merge_explainable, prediction = tracer.trace2(inputs[3,:])
+	#print_computation_graph(root, inputs[3,:])
 	#import pdb; pdb.set_trace()
 
 	total = 0
@@ -2316,17 +2280,81 @@ if __name__ == "__main__":
 	from sys import stdout
 	for i in range(NUM_SAMPLES):
 		try:
-			root, important_ops, path_merge_explainable, path_merge_lengths, prediction = tracer.trace2(inputs[i,:])
+			root, forward_edges, important_ops, path_merge_explainable, prediction = tracer.trace2(inputs[i,:])
 		except NoUnusedVertexIDs:
 			print('Input has no unused vertex IDs. Skipping...')
 			continue
 
+		if path_merge_explainable != None:
+			# filter out nodes that are not along the path from the input to the root
+			new_path_merge_explainable = []
+			queue = [root]
+			while len(queue) != 0:
+				node = queue.pop()
+				if node not in path_merge_explainable:
+					continue
+				new_path_merge_explainable.append(node)
+				for predecessor in node.predecessors:
+					queue.append(predecessor)
+			path_merge_explainable = new_path_merge_explainable
+
+			# check that the final node's activations contain the path from the start vertex to the goal vertex
+			def is_reachable(input, start, end, subgraph):
+				if input[start] > max_vertex_id or input[end] > max_vertex_id:
+					return False
+				queue = [input[start]]
+				while len(queue) != 0:
+					current = queue.pop()
+					if current == input[end]:
+						return True
+					for child in forward_edges[current]:
+						if child in subgraph:
+							queue.append(child)
+				return False
+			if root in path_merge_explainable:
+				vertices = [i-(max_vertex_id+5) for i in root.reachable if i >= max_vertex_id+5]
+				subgraph = [int(inputs[i,v]) for v in vertices]
+				if not is_reachable(inputs[i,:], max_input_size-4, max_input_size-3, subgraph):
+					path_merge_explainable.remove(root)
+
 		if path_merge_explainable != None and root in path_merge_explainable:
+			def shortest_distances(input, start, subgraph):
+				if input[start] > max_vertex_id:
+					return {input[start]:0}
+				queue = [(input[start],0)]
+				distances = {}
+				while len(queue) != 0:
+					current, distance = queue.pop()
+					if current in distances and distance >= distances[current]:
+						continue
+					distances[current] = distance
+					for child in forward_edges[current]:
+						if child in subgraph:
+							queue.append((child,distance+1))
+				return distances
+
+			def reachable_path_length(input, reachable):
+				vertices = [i-(max_vertex_id+5) for i in reachable if i >= max_vertex_id+5]
+				subgraph = [int(input[v]) for v in vertices]
+				longest_distance = 0
+				for start in vertices:
+					longest_distance = max(longest_distance, max(shortest_distances(input, start, subgraph).values()))
+				return longest_distance
+
+			path_merge_lengths = [{} for i in range(len(tfm_model.transformers))]
+			def record_path_length(node, successor):
+				src_path_length = reachable_path_length(inputs[i,:], node.reachable)
+				dst_path_length = reachable_path_length(inputs[i,:], successor.reachable) - src_path_length
+				if (src_path_length,dst_path_length) not in path_merge_lengths[node.layer]:
+					path_merge_lengths[node.layer][(src_path_length,dst_path_length)] = 0
+				path_merge_lengths[node.layer][(src_path_length,dst_path_length)] += 1
+
 			for node in path_merge_explainable:
 				for k in range(len(node.successors)):
 					successor = node.successors[k]
 					if successor not in path_merge_explainable:
 						continue
+					record_path_length(node, successor)
 					if node.copy_directions[k] != None:
 						for direction in node.copy_directions[k]:
 							if direction not in aggregated_copy_directions[node.layer]:
@@ -2342,7 +2370,6 @@ if __name__ == "__main__":
 						else:
 							aggregated_op_explanations[node.layer][explanation] += 1
 
-		if path_merge_lengths != None:
 			for l in range(len(path_merge_lengths)):
 				for k,v in path_merge_lengths[l].items():
 					if k not in aggregated_path_merge_lengths[l]:
