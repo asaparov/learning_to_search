@@ -527,7 +527,7 @@ def generate_training_set(max_input_size, dataset_size, max_lookahead, reserved_
 
 	return inputs, outputs, valid_outputs, num_collisions
 
-def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidden_dim, bidirectional, absolute_pos_emb, learnable_token_emb, toeplitz_attn, toeplitz_reg, toeplitz_pos_only, add_padding, ablate, pre_ln, use_curriculum_learning):
+def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidden_dim, bidirectional, absolute_pos_emb, learnable_token_emb, toeplitz_attn, toeplitz_reg, toeplitz_pos_only, add_padding, ablate, pre_ln, curriculum_mode):
 	generator.set_seed(seed_value)
 	seed(seed_value)
 	torch.manual_seed(seed_value)
@@ -537,7 +537,7 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 	print('Number of available CPUs: {}'.format(len(sched_getaffinity(0))))
 	stdout.flush()
 
-	if use_curriculum_learning and dataset_size != -1:
+	if curriculum_mode == 'n' and dataset_size != -1:
 		print('ERROR: Curriculum learning is only supported with streaming training (i.e. dataset_size = -1).')
 		stdout.flush()
 		return
@@ -623,8 +623,10 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 		filename += '_postLN'
 	if add_padding:
 		filename += '_padded'
-	if use_curriculum_learning:
+	if curriculum_mode == 'y':
 		filename += '_curriculum'
+	elif curriculum_mode == 'layerbylayer':
+		filename += '_layercurriculum'
 	if isdir(filename):
 		existing_epochs = [int(ckpt[(ckpt.rfind('epoch') + len('epoch')):-len('.pt')]) for ckpt in listdir(filename) if ckpt.startswith('epoch')]
 	else:
@@ -635,6 +637,12 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 	nhead = 1
 	d_hid = ntoken + hidden_dim
 	dropout = 0
+	if ablate == "none":
+		ablation_mode = AblationMode.NO_ABLATION
+	elif ablate == "attn_linear":
+		ablation_mode = AblationMode.ABLATE_ATTN_LINEAR
+	elif ablate == "attn_linear_projv":
+		ablation_mode = AblationMode.ABLATE_ATTN_LINEAR_PROJV
 	if len(existing_epochs) == 0:
 		if toeplitz_attn and toeplitz_pos_only:
 			toeplitz = ToeplitzMode.LOWER_RIGHT
@@ -642,14 +650,8 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 			toeplitz = ToeplitzMode.BLOCK
 		else:
 			toeplitz = ToeplitzMode.NONE
-		if ablate == "none":
-			ablation_mode = AblationMode.NO_ABLATION
-		elif ablate == "attn_linear":
-			ablation_mode = AblationMode.ABLATE_ATTN_LINEAR
-		elif ablate == "attn_linear_projv":
-			ablation_mode = AblationMode.ABLATE_ATTN_LINEAR_PROJV
 		model = Transformer(
-				layers=nlayers,
+				layers=min(2, nlayers) if curriculum_mode == 'layerbylayer' else nlayers,
 				pad_idx=PADDING_TOKEN,
 				words=ntoken,
 				seq_len=max_input_size,
@@ -683,7 +685,7 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 	eval_interval = 1
 	save_interval = 1
 
-	initial_lookahead = 1 if use_curriculum_learning else max_lookahead
+	initial_lookahead = 1 if curriculum_mode != 'n' else max_lookahead
 	if hasattr(model, 'lookahead'):
 		initial_lookahead = model.lookahead
 	else:
@@ -848,10 +850,37 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 					#print('[MAIN] Time to evaluate model: {}s'.format(time6 - time5))
 					#stdout.flush()
 
-					if use_curriculum_learning and model.lookahead < max_lookahead and training_acc > 0.99:
+					if curriculum_mode != 'n' and model.lookahead < max_lookahead and training_acc > 0.99:
 						model.lookahead += 1
 						print("Training accuracy is sufficiently high. Increasing training lookahead to {}.".format(model.lookahead))
 						reinit_data_loader = True
+
+						if curriculum_mode == 'layerbylayer' and model.lookahead > 2 ** (len(model.transformers) - 1) and len(model.transformers) < nlayers:
+							# add another layer to the model
+							print("Increasing number of transformer layers to {}".format(len(model.transformers) + 1))
+							if absolute_pos_emb:
+								embedding_dim = max(ntoken,d_hid)+max_input_size
+								position_dim = max_input_size
+							else:
+								embedding_dim = max(ntoken,d_hid)
+								position_dim = 0
+							assert ablation_mode == AblationMode.NO_ABLATION, "Layer-by-layer curriculum learning is not supported with any ablation."
+							new_layer = TransformerLayer(nhead, embedding_dim, ntoken, position_dim, 1, dropout, True, ablation_mode, toeplitz, pre_ln)
+							with torch.no_grad():
+								import pdb; pdb.set_trace()
+								linear_weight = torch.empty(new_layer.attn.linear.weight.shape)
+								linear_weight.uniform_(-0.001,0.001)
+								linear_bias = torch.empty(new_layer.attn.linear.bias.shape)
+								linear_bias.uniform_(-0.001,0.001)
+								new_layer.attn.linear.weight = nn.Parameter(linear_weight)
+								new_layer.attn.linear.bias = nn.Parameter(linear_bias)
+								ff_weight = torch.empty(new_layer.ff[3].weight.shape)
+								ff_weight.uniform_(-0.001,0.001)
+								ff_bias = torch.empty(new_layer.ff[3].bias.shape)
+								ff_bias.uniform_(-0.001,0.001)
+								new_layer.ff[3].weight = nn.Parameter(ff_weight)
+								new_layer.ff[3].bias = nn.Parameter(ff_bias)
+								model.transformers.append(new_layer)
 						break
 
 				if epoch % save_interval == 0:
@@ -912,7 +941,7 @@ if __name__ == "__main__":
 	parser.add_argument("--add-padding", type=parse_bool_arg, required=True, metavar="'y/n'")
 	parser.add_argument("--ablate", type=str, default="none", choices=["none", "attn_linear", "attn_linear_projv"])
 	parser.add_argument("--preLN", type=parse_bool_arg, required=True, metavar="'y/n'")
-	parser.add_argument("--curriculum", type=parse_bool_arg, required=True, metavar="'y/n'")
+	parser.add_argument("--curriculum", type=str, required=True, choices=["y", "n", "layerbylayer"])
 	args = parser.parse_args()
 
 	train(
@@ -931,4 +960,4 @@ if __name__ == "__main__":
 		add_padding=args.add_padding,
 		ablate=args.ablate,
 		pre_ln=args.preLN,
-		use_curriculum_learning=args.curriculum)
+		curriculum_mode=args.curriculum)
