@@ -9,7 +9,7 @@ from torch import nn, Tensor, LongTensor
 import torch.nn.functional as F
 from torch.nn import CrossEntropyLoss
 from torch.utils.data import Dataset, DataLoader
-from gpt2 import Transformer, ToeplitzMode, AblationMode
+from gpt2 import Transformer, TransformerLayer, ToeplitzMode, AblationMode
 from Sophia import SophiaG
 import time
 import multiprocessing
@@ -643,13 +643,13 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 		ablation_mode = AblationMode.ABLATE_ATTN_LINEAR
 	elif ablate == "attn_linear_projv":
 		ablation_mode = AblationMode.ABLATE_ATTN_LINEAR_PROJV
+	if toeplitz_attn and toeplitz_pos_only:
+		toeplitz = ToeplitzMode.LOWER_RIGHT
+	elif toeplitz_attn and not toeplitz_pos_only:
+		toeplitz = ToeplitzMode.BLOCK
+	else:
+		toeplitz = ToeplitzMode.NONE
 	if len(existing_epochs) == 0:
-		if toeplitz_attn and toeplitz_pos_only:
-			toeplitz = ToeplitzMode.LOWER_RIGHT
-		elif toeplitz_attn and not toeplitz_pos_only:
-			toeplitz = ToeplitzMode.BLOCK
-		else:
-			toeplitz = ToeplitzMode.NONE
 		model = Transformer(
 				layers=min(2, nlayers) if curriculum_mode == 'layerbylayer' else nlayers,
 				pad_idx=PADDING_TOKEN,
@@ -685,7 +685,12 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 	eval_interval = 1
 	save_interval = 1
 
-	initial_lookahead = 1 if curriculum_mode != 'n' else max_lookahead
+	if curriculum_mode == 'n':
+		initial_lookahead = max_lookahead
+	elif curriculum_mode == 'y':
+		initial_lookahead = 1
+	elif curriculum_mode == 'layerbylayer':
+		initial_lookahead = 2
 	if hasattr(model, 'lookahead'):
 		initial_lookahead = model.lookahead
 	else:
@@ -851,11 +856,7 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 					#stdout.flush()
 
 					if curriculum_mode != 'n' and model.lookahead < max_lookahead and training_acc > 0.99:
-						model.lookahead += 1
-						print("Training accuracy is sufficiently high. Increasing training lookahead to {}.".format(model.lookahead))
-						reinit_data_loader = True
-
-						if curriculum_mode == 'layerbylayer' and model.lookahead > 2 ** (len(model.transformers) - 1) and len(model.transformers) < nlayers:
+						if curriculum_mode == 'layerbylayer' and model.lookahead + 1 > 2 ** (len(model.transformers) - 1) and len(model.transformers) < nlayers:
 							# add another layer to the model
 							print("Increasing number of transformer layers to {}".format(len(model.transformers) + 1))
 							if absolute_pos_emb:
@@ -867,7 +868,6 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 							assert ablation_mode == AblationMode.NO_ABLATION, "Layer-by-layer curriculum learning is not supported with any ablation."
 							new_layer = TransformerLayer(nhead, embedding_dim, ntoken, position_dim, 1, dropout, True, ablation_mode, toeplitz, pre_ln)
 							with torch.no_grad():
-								import pdb; pdb.set_trace()
 								linear_weight = torch.empty(new_layer.attn.linear.weight.shape)
 								linear_weight.uniform_(-0.001,0.001)
 								linear_bias = torch.empty(new_layer.attn.linear.bias.shape)
@@ -880,7 +880,13 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 								ff_bias.uniform_(-0.001,0.001)
 								new_layer.ff[3].weight = nn.Parameter(ff_weight)
 								new_layer.ff[3].bias = nn.Parameter(ff_bias)
+								new_layer.to(device)
 								model.transformers.append(new_layer)
+							model.lookahead = min(max_lookahead, 2 ** (len(model.transformers) - 1))
+						elif curriculum_mode == 'y':
+							model.lookahead += 1
+						print("Training accuracy is sufficiently high. Increasing training lookahead to {}.".format(model.lookahead))
+						reinit_data_loader = True
 						break
 
 				if epoch % save_interval == 0:
