@@ -637,9 +637,10 @@ class TransformerTracer:
 			zero_output_logit_list.append(zero_output_logits)
 			max_output_logit_list.append(max_output_logits)
 
-		major_last_copies = torch.nonzero(zero_output_logit_list[len(self.model.transformers)-1] < layer_inputs[-1][-1,prediction] - math.sqrt(d) / 2)
+		major_last_copies = torch.nonzero(zero_output_logit_list[len(self.model.transformers)-1] < torch.min(zero_output_logit_list[len(self.model.transformers)-1]) + 0.001)
 		if major_last_copies.size(0) != 1 or major_last_copies[0,0] != n-1:
 			print('WARNING: Last layer does not copy the answer from a single source token.')
+			import pdb; pdb.set_trace()
 			return None, None, None, None, prediction
 		last_copy_src = major_last_copies[0,1]
 
@@ -703,7 +704,7 @@ class TransformerTracer:
 		start_index = torch.sum(input == PADDING_TOKEN)
 		for i in range((n - 5) // 3 + 1):
 			forward_edges.append([])
-		for i in range(2, n-5, 3):
+		for i in range((n + 2) % 3, n-5, 3):
 			if i >= start_index:
 				forward_edges[input[i].item()].append(input[i+1].item())
 		def path_length(start, end):
@@ -2163,17 +2164,21 @@ if __name__ == "__main__":
 		from analyze import print_graph
 		print_graph(input.cpu().detach().numpy())
 
-	#root, forward_edges, important_ops, path_merge_explainable, prediction = tracer.trace2(inputs[3,:])
-	#print_computation_graph(root, inputs[3,:])
+	#root, forward_edges, important_ops, path_merge_explainable, prediction = tracer.trace2(inputs[1,:])
+	#print_computation_graph(root, inputs[1,:])
 	#import pdb; pdb.set_trace()
 
 	total = 0
 	num_correct_vs_explainable = torch.zeros((2,2))
 	num_correct_vs_explainable_recall = torch.zeros((2,2))
 	aggregated_copy_directions = []
+	aggregated_example_copy_directions = []
+	aggregated_dist_copy_directions = []
 	aggregated_op_explanations = []
 	for i in range(len(tfm_model.transformers)):
 		aggregated_copy_directions.append({})
+		aggregated_example_copy_directions.append({})
+		aggregated_dist_copy_directions.append({})
 		aggregated_op_explanations.append({})
 	aggregated_path_merge_lengths = [{} for i in range(len(tfm_model.transformers))]
 
@@ -2266,10 +2271,18 @@ if __name__ == "__main__":
 		print('\nAggregated results:')
 		for i in range(len(aggregated_copy_directions)):
 			total_copy_directions = sum(aggregated_copy_directions[i].values())
+			total_example_copy_directions = sum(aggregated_example_copy_directions[i].values())
+			total_dist_copy_directions = sum(aggregated_dist_copy_directions[i].values())
 			total_op_explanations = sum(aggregated_op_explanations[i].values())
 			print(' Layer {} copy directions:'.format(i))
 			for copy_direction in sorted(aggregated_copy_directions[i].keys()):
 				print('  {}: {} / {}'.format(copy_direction, aggregated_copy_directions[i][copy_direction], total_copy_directions))
+			print(' Copy directions by distance from start node:')
+			for copy_direction in sorted(aggregated_dist_copy_directions[i].keys(), key=cmp_to_key(compare)):
+				print('  {}: {} / {}'.format(copy_direction, aggregated_dist_copy_directions[i][copy_direction], total_dist_copy_directions))
+			#print(' Copy directions per example:')
+			#for copy_direction in sorted(aggregated_example_copy_directions[i].keys()):
+			#	print('  {}: {} / {}'.format(copy_direction, aggregated_example_copy_directions[i][copy_direction], total_example_copy_directions))
 			print(' Layer {} op explanations:'.format(i))
 			for explanation in sorted(aggregated_op_explanations[i].keys(), key=cmp_to_key(compare)):
 				print('  {}: {} / {}'.format(explanation_to_str(explanation), aggregated_op_explanations[i][explanation], total_op_explanations))
@@ -2318,7 +2331,7 @@ if __name__ == "__main__":
 					path_merge_explainable.remove(root)
 
 		if path_merge_explainable != None and root in path_merge_explainable:
-			def shortest_distances(input, start, subgraph):
+			def shortest_distances(input, start, subgraph=None):
 				if input[start] > max_vertex_id:
 					return {input[start]:0}
 				queue = [(input[start],0)]
@@ -2329,7 +2342,7 @@ if __name__ == "__main__":
 						continue
 					distances[current] = distance
 					for child in forward_edges[current]:
-						if child in subgraph:
+						if subgraph == None or child in subgraph:
 							queue.append((child,distance+1))
 				return distances
 
@@ -2349,6 +2362,7 @@ if __name__ == "__main__":
 					path_merge_lengths[node.layer][(src_path_length,dst_path_length)] = 0
 				path_merge_lengths[node.layer][(src_path_length,dst_path_length)] += 1
 
+			example_copy_directions = [{} for i in range(len(tfm_model.transformers))]
 			for node in path_merge_explainable:
 				for k in range(len(node.successors)):
 					successor = node.successors[k]
@@ -2356,11 +2370,30 @@ if __name__ == "__main__":
 						continue
 					record_path_length(node, successor)
 					if node.copy_directions[k] != None:
+						distances_from_start = shortest_distances(inputs[i,:], max_input_size-4)
+						if int(inputs[i,node.row_id]) == int(inputs[i,max_input_size-4]):
+							distance = 0
+						elif int(inputs[i,node.row_id]) in distances_from_start:
+							distance = distances_from_start[int(inputs[i,node.row_id])]
+						else:
+							distances_to_start = shortest_distances(inputs[i,:], node.row_id)
+							if int(inputs[i,max_input_size-4]) in distances_to_start:
+								distance = -distances_to_start[int(inputs[i,max_input_size-4])]
+							else:
+								distance = None
 						for direction in node.copy_directions[k]:
 							if direction not in aggregated_copy_directions[node.layer]:
 								aggregated_copy_directions[node.layer][direction] = 1
 							else:
 								aggregated_copy_directions[node.layer][direction] += 1
+							if direction not in example_copy_directions[node.layer]:
+								example_copy_directions[node.layer][direction] = 1
+							else:
+								example_copy_directions[node.layer][direction] += 1
+							if (distance,direction) not in aggregated_dist_copy_directions[node.layer]:
+								aggregated_dist_copy_directions[node.layer][(distance,direction)] = 1
+							else:
+								aggregated_dist_copy_directions[node.layer][(distance,direction)] += 1
 					if node.op_explanations[k] == None:
 						# this is a residual copy
 						node.op_explanations[k] = ['residual']
@@ -2369,6 +2402,14 @@ if __name__ == "__main__":
 							aggregated_op_explanations[node.layer][explanation] = 1
 						else:
 							aggregated_op_explanations[node.layer][explanation] += 1
+			for l in range(len(example_copy_directions)):
+				k = tuple(sorted(example_copy_directions[l].items()))
+				if len(k) == 0:
+					continue
+				if k not in aggregated_example_copy_directions[l]:
+					aggregated_example_copy_directions[l][k] = 1
+				else:
+					aggregated_example_copy_directions[l][k] += 1
 
 			for l in range(len(path_merge_lengths)):
 				for k,v in path_merge_lengths[l].items():
@@ -2376,10 +2417,13 @@ if __name__ == "__main__":
 						aggregated_path_merge_lengths[l][k] = 0
 					aggregated_path_merge_lengths[l][k] += v
 
+		num_explainable_edges = 0
 		if path_merge_explainable != None:
-			num_explainable_edges = len(path_merge_explainable) - 1
-		else:
-			num_explainable_edges = 0
+			# compute the number of edges in `important_ops` that are in `path_merge_explainable`
+			for node in path_merge_explainable:
+				for successor in node.successors:
+					if [node.row_id, successor.row_id] in important_ops[node.layer]:
+						num_explainable_edges += 1
 		if important_ops != None:
 			num_important_edges = sum([len(l) for l in important_ops])
 		else:
@@ -2389,6 +2433,8 @@ if __name__ == "__main__":
 		is_correct = (prediction == outputs[i])
 		num_correct_vs_explainable[int(is_correct),int(is_explainable)] += 1
 		if important_ops != None:
+			if num_explainable_edges > num_important_edges:
+				import pdb; pdb.set_trace()
 			num_correct_vs_explainable_recall[int(is_correct),int(is_explainable)] += num_explainable_edges / num_important_edges
 		total += 1
 		print('[iteration {}]'.format(i))
@@ -2398,10 +2444,10 @@ if __name__ == "__main__":
 		print('  Fraction of inputs that are incorrect and explainable: {}'.format(torch.sum(num_correct_vs_explainable[0,1]) / total))
 		print('  Fraction of inputs that are correct and unexplainable: {}'.format(torch.sum(num_correct_vs_explainable[1,0]) / total))
 		print('  Fraction of inputs that are incorrect and unexplainable: {}'.format(torch.sum(num_correct_vs_explainable[0,0]) / total))
-		print('  "Recall" of inputs that are correct and explainable: {}'.format(torch.sum(num_correct_vs_explainable_recall[1,1]) / total))
-		print('  "Recall" of inputs that are incorrect and explainable: {}'.format(torch.sum(num_correct_vs_explainable_recall[0,1]) / total))
-		print('  "Recall" of inputs that are correct and unexplainable: {}'.format(torch.sum(num_correct_vs_explainable_recall[1,0]) / total))
-		print('  "Recall" of inputs that are incorrect and unexplainable: {}'.format(torch.sum(num_correct_vs_explainable_recall[0,0]) / total))
+		#print('  "Recall" of inputs that are correct and explainable: {}'.format(torch.sum(num_correct_vs_explainable_recall[1,1]) / num_correct_vs_explainable[1,1]))
+		#print('  "Recall" of inputs that are incorrect and explainable: {}'.format(torch.sum(num_correct_vs_explainable_recall[0,1]) / num_correct_vs_explainable[0,1]))
+		#print('  "Recall" of inputs that are correct and unexplainable: {}'.format(torch.sum(num_correct_vs_explainable_recall[1,0]) / num_correct_vs_explainable[1,0]))
+		#print('  "Recall" of inputs that are incorrect and unexplainable: {}'.format(torch.sum(num_correct_vs_explainable_recall[0,0]) / num_correct_vs_explainable[0,0]))
 		if (i + 1) % 10 == 0:
 			print_summary()
 		stdout.flush()
