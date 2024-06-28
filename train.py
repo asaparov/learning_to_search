@@ -627,6 +627,8 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 		filename += '_curriculum'
 	elif curriculum_mode == 'layerbylayer':
 		filename += '_layercurriculum'
+	elif curriculum_mode == 'layerbylayer2':
+		filename += '_layercurriculum2'
 	if isdir(filename):
 		existing_epochs = [int(ckpt[(ckpt.rfind('epoch') + len('epoch')):-len('.pt')]) for ckpt in listdir(filename) if ckpt.startswith('epoch')]
 	else:
@@ -650,8 +652,12 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 	else:
 		toeplitz = ToeplitzMode.NONE
 	if len(existing_epochs) == 0:
+		if curriculum_mode in ('layerbylayer','layerbylayer2'):
+			initial_layers = min(2, nlayers)
+		else:
+			initial_layers = nlayers
 		model = Transformer(
-				layers=min(2, nlayers) if curriculum_mode == 'layerbylayer' else nlayers,
+				layers=initial_layers,
 				pad_idx=PADDING_TOKEN,
 				words=ntoken,
 				seq_len=max_input_size,
@@ -691,6 +697,8 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 		initial_lookahead = 1
 	elif curriculum_mode == 'layerbylayer':
 		initial_lookahead = 2
+	elif curriculum_mode == 'layerbylayer2':
+		initial_lookahead = 1
 	if hasattr(model, 'lookahead'):
 		initial_lookahead = model.lookahead
 	else:
@@ -856,7 +864,7 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 					#stdout.flush()
 
 					if curriculum_mode != 'n' and model.lookahead < max_lookahead and training_acc > 0.99:
-						if curriculum_mode == 'layerbylayer' and model.lookahead + 1 > 2 ** (len(model.transformers) - 1) and len(model.transformers) < nlayers:
+						if curriculum_mode in ('layerbylayer','layerbylayer2') and model.lookahead + 1 > 2 ** (len(model.transformers) - 1) and len(model.transformers) < nlayers:
 							# add another layer to the model
 							print("Increasing number of transformer layers to {}".format(len(model.transformers) + 1))
 							if absolute_pos_emb:
@@ -865,9 +873,13 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 							else:
 								embedding_dim = max(ntoken,d_hid)
 								position_dim = 0
-							assert ablation_mode == AblationMode.NO_ABLATION, "Layer-by-layer curriculum learning is not supported with any ablation."
-							new_layer = TransformerLayer(nhead, embedding_dim, ntoken, position_dim, 1, dropout, True, ablation_mode, toeplitz, pre_ln)
 							with torch.no_grad():
+								if curriculum_mode == 'layerbylayer':
+									assert ablation_mode == AblationMode.NO_ABLATION, "Layer-by-layer curriculum learning is not supported with any ablation."
+									new_layer = TransformerLayer(nhead, embedding_dim, ntoken, position_dim, 1, dropout, True, ablation_mode, toeplitz, pre_ln)
+								elif curriculum_mode == 'layerbylayer2':
+									import copy
+									new_layer = copy.deepcopy(model.transformers[-2])
 								linear_weight = torch.empty(new_layer.attn.linear.weight.shape)
 								linear_weight.uniform_(-0.001,0.001)
 								linear_bias = torch.empty(new_layer.attn.linear.bias.shape)
@@ -881,9 +893,13 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 								new_layer.ff[3].weight = nn.Parameter(ff_weight)
 								new_layer.ff[3].bias = nn.Parameter(ff_bias)
 								new_layer.to(device)
-								model.transformers.append(new_layer)
+								if curriculum_mode =='layerbylayer':
+									model.transformers.append(new_layer)
+								elif curriculum_mode == 'layerbylayer2':
+									model.transformers.insert(len(model.transformers)-2, new_layer)
+
 							model.lookahead = min(max_lookahead, 2 ** (len(model.transformers) - 1))
-						elif curriculum_mode == 'y':
+						else:
 							model.lookahead += 1
 						print("Training accuracy is sufficiently high. Increasing training lookahead to {}.".format(model.lookahead))
 						reinit_data_loader = True
@@ -947,7 +963,7 @@ if __name__ == "__main__":
 	parser.add_argument("--add-padding", type=parse_bool_arg, required=True, metavar="'y/n'")
 	parser.add_argument("--ablate", type=str, default="none", choices=["none", "attn_linear", "attn_linear_projv"])
 	parser.add_argument("--preLN", type=parse_bool_arg, required=True, metavar="'y/n'")
-	parser.add_argument("--curriculum", type=str, required=True, choices=["y", "n", "layerbylayer"])
+	parser.add_argument("--curriculum", type=str, required=True, choices=["y", "n", "layerbylayer", "layerbylayer2"])
 	args = parser.parse_args()
 
 	train(
