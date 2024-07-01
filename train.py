@@ -115,6 +115,21 @@ def generate_graph(num_vertices, max_num_parents, max_vertex_id):
 	shuffle(vertices)
 	return vertices
 
+def get_descendants(node):
+	queue = [node]
+	visited = []
+	descendants = []
+	while len(queue) != 0:
+		current = queue.pop()
+		visited.append(current)
+		for child in current.children:
+			if child not in descendants:
+				descendants.append(child)
+			if child in visited:
+				continue
+			queue.append(child)
+	return descendants
+
 def generate_graph_with_lookahead(num_vertices, max_num_parents, max_vertex_id, lookahead, num_paths):
 	num_vertices = max(2, num_vertices, 1 + num_paths * lookahead)
 
@@ -149,47 +164,44 @@ def generate_graph_with_lookahead(num_vertices, max_num_parents, max_vertex_id, 
 		prev_vertex = vertices[index]
 		index += 1
 
-	if uniform(0, 1) < 0.75:
-		start = vertices[index - 1]
-	else:
-		start = vertices[choice([0] + list(range(index - num_prefix_vertices, index)))]
+	start = vertices[0]
 	end = vertices[max(1, lookahead)]
 
 	# sample some parent/ancestor vertices
-	ancestor_count = (num_vertices - index) // 2
 	alpha = 0.5
-	in_degrees = np.array([alpha + len(vertex.parents) for vertex in vertices[:index+ancestor_count]])
-	for i in range(ancestor_count):
-		# sample the number of child vertices
-		if uniform(0, 1) < 0.15:
-			num_children = 1
-		else:
-			num_children = randrange(1, max_num_parents)
-		num_children = min(num_children, index)
+	in_degrees = np.array([alpha + len(vertex.parents) for vertex in vertices[:num_vertices]])
+	out_degrees = np.array([alpha + len(vertex.children) for vertex in vertices[:num_vertices]])
+	for i in range(index, num_vertices):
+		# sample the number of child and parent vertices
+		num_children = randrange(0, max_num_parents)
+		num_parents = randrange(0 if num_children != 0 else 1, max_num_parents)
+		num_children = min(num_children, i)
+		num_parents = min(num_parents, i)
 
+		# sample the children of this new node
 		probabilities = in_degrees[:index].copy()
 		probabilities /= np.sum(probabilities)
 		for child_id in np.random.choice(index, num_children, replace=False, p=probabilities):
 			vertices[index].children.append(vertices[child_id])
 			vertices[child_id].parents.append(vertices[index])
 			in_degrees[child_id] += 1
+
+		# to avoid creating a cycle, we have to remove any descendants from the possible parents
+		descendants = get_descendants(vertices[index])
+		probabilities = out_degrees[:index].copy()
+		for descendant in descendants:
+			probabilities[descendant.id] = 0
+		total_probability = np.sum(probabilities)
+		if total_probability != 0.0:
+			probabilities /= total_probability
+			num_parents = min(num_parents, index - len(descendants))
+
+			# sample the parents of this new node
+			for parent_id in np.random.choice(index, num_parents, replace=False, p=probabilities):
+				vertices[parent_id].children.append(vertices[i])
+				vertices[i].parents.append(vertices[parent_id])
+				out_degrees[parent_id] += 1
 		index += 1
-
-	out_degrees = np.array([alpha + len(vertex.children) for vertex in vertices[:num_vertices]])
-	for i in range(index, num_vertices):
-		# sample the number of parent vertices
-		if uniform(0, 1) < 0.15:
-			num_parents = 1
-		else:
-			num_parents = randrange(1, max_num_parents)
-		num_parents = min(num_parents, i)
-
-		probabilities = out_degrees[:i].copy()
-		probabilities /= np.sum(probabilities)
-		for parent_id in np.random.choice(i, num_parents, replace=False, p=probabilities):
-			vertices[parent_id].children.append(vertices[i])
-			vertices[i].parents.append(vertices[parent_id])
-			out_degrees[parent_id] += 1
 
 	# remove any correlation between graph topology and vertex IDs by shuffling the vertices
 	new_indices = list(range(max_vertex_id + 1))
@@ -236,7 +248,7 @@ def generate_example(num_vertices, max_num_parents, max_vertex_id, get_shortest_
 			found_child = False
 			for j in range(len(queue)):
 				if queue[j][0] == child:
-					queue[j][1] = min(queue[j][1], distance + 1)
+					queue[j] = (queue[j][0], min(queue[j][1], distance + 1))
 					found_child = True
 					break
 			if not found_child:
@@ -317,7 +329,7 @@ def generate_eval_data(max_input_size, min_path_length=2, distance_from_start=-1
 			else:
 				num_paths = None
 			g, start, end, paths = generate_example(num_vertices, 4, (max_input_size - 5) // 3, get_shortest_paths=False, lookahead=lookahead_steps, num_paths=num_paths)
-			if paths != None and min([len(path) for path in paths]) > min_path_length:
+			if paths != None and min([len(path) for path in paths]) > (min(lookahead_steps, min_path_length) if lookahead_steps != None else min_path_length):
 				break
 
 		prefix = []
@@ -569,7 +581,7 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 		eval_inputs = eval_inputs[:BATCH_SIZE,:]
 		eval_outputs = eval_outputs[:BATCH_SIZE]
 
-	train_filename = 'train{}_inputsize{}_maxlookahead{}_{}seed{}.pkl'.format(dataset_size, max_input_size, max_lookahead, 'padded_' if add_padding else '', seed_value)
+	train_filename = 'train{}_v2_inputsize{}_maxlookahead{}_{}seed{}.pkl'.format(dataset_size, max_input_size, max_lookahead, 'padded_' if add_padding else '', seed_value)
 	if dataset_size != -1:
 		train_path = 'useful_path_results/' + train_filename
 		if isfile(train_path):
@@ -599,7 +611,7 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 		train_loader = DataLoader(train_data, batch_size=BATCH_SIZE, shuffle=True)
 
 	# compute the checkpoint filenames and try to resume from the last one
-	filename = 'useful_path_results/checkpoints_{}layer_inputsize{}_maxlookahead{}_seed{}_train{}'.format(nlayers, max_input_size, max_lookahead, seed_value, dataset_size if dataset_size != -1 else 'streaming')
+	filename = 'useful_path_results/checkpoints_v2_{}layer_inputsize{}_maxlookahead{}_seed{}_train{}'.format(nlayers, max_input_size, max_lookahead, seed_value, dataset_size if dataset_size != -1 else 'streaming')
 	if bidirectional:
 		filename += '_nomask'
 	if not absolute_pos_emb:
