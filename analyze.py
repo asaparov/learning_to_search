@@ -316,6 +316,7 @@ if __name__ == "__main__":
 
 		suffix = filepath[filepath.index('maxlookahead')+len('maxlookahead'):]
 		training_max_lookahead = int(suffix[:suffix.index('_')])
+		max_lookahead = ((max_input_size - 5) // 3 - 1) // 2
 
 		for transformer in model.transformers:
 			if not hasattr(transformer, 'pre_ln'):
@@ -342,7 +343,7 @@ if __name__ == "__main__":
 		reserved_inputs = set()
 		test_accuracies = []
 		print("Generating eval data...")
-		for lookahead in [None] + list(range(1, 13 + 1)):
+		for lookahead in [None] + list(range(1, max_lookahead + 1)):
 			seed(training_seed)
 			torch.manual_seed(training_seed)
 			np.random.seed(training_seed)

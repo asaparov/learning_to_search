@@ -184,7 +184,7 @@ bool generate_graph_with_lookahead(array<node>& vertices, node*& start, node*& e
 	}
 	for (unsigned int i = index; i < num_vertices; i++) {
 		/* sample the number of child and parent vertices */
-		unsigned int num_children = randrange(1, max_num_parents);
+		unsigned int num_children = randrange(0, max_num_parents);
 		unsigned int num_parents = randrange(num_children == 0 ? 1 : 0, max_num_parents);
 		num_children = std::min(num_children, i);
 		num_parents = std::min(num_parents, i);
