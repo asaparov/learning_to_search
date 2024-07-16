@@ -328,10 +328,6 @@ if __name__ == "__main__":
 		#run_model(model, [46, 45,  3, 19, 45, 18, 39, 45, 36, 15, 45, 24, 42, 45, 37,  3, 45, 37, 36, 45, 23, 32, 45,  8, 24, 45, 19, 30, 45, 15, 23, 45, 39, 40, 45, 40, 34, 45, 30, 18, 45, 32,  8, 47, 37, 34, 44, 37], max_input_size=48)
 		#run_model(model, [31, 31, 31, 31, 31, 31, 31, 30,  7, 23, 30,  9, 22, 30,  6,  4, 30, 6, 10, 30, 25, 19, 30, 17,  9, 30, 17, 16, 30,  1, 14, 30, 11, 21, 30, 26,  1, 30, 12, 11, 30, 14,  6, 30, 15, 25, 30, 24, 28, 30,  4, 17, 30, 19,  8, 30, 27, 26, 30, 27, 12, 30, 27,  5, 30, 22, 24, 30, 8,  3, 30, 18, 15, 30,  3,  7, 30,  3, 10, 30,  3,  2, 30, 21, 18, 32, 27, 28, 29, 27], fix_index=None, max_input_size=max_input_size, num_perturbations=1000)
 
-		seed(training_seed)
-		torch.manual_seed(training_seed)
-		np.random.seed(training_seed)
-
 		seed_generator = Random(training_seed)
 		seed_values = []
 
@@ -344,20 +340,29 @@ if __name__ == "__main__":
 
 		NUM_TEST_SAMPLES = 1000
 		reserved_inputs = set()
+		test_accuracies = []
 		print("Generating eval data...")
-		inputs,outputs = generate_eval_data(max_input_size, min_path_length=2, distance_from_start=1, distance_from_end=-1, lookahead_steps=2, num_paths_at_fork=None, num_samples=NUM_TEST_SAMPLES)
-		#generator.set_seed(get_seed(1))
-		#inputs, outputs, _, _ = generator.generate_training_set(max_input_size, NUM_TEST_SAMPLES, training_max_lookahead, reserved_inputs, 1, False)
-		print("Evaluating model...")
-		test_acc,test_loss,predictions = evaluate_model(model, inputs, outputs)
-		print("Mistaken inputs:")
-		predictions = np.array(predictions.cpu())
-		incorrect_indices = np.nonzero(predictions != outputs)[0]
-		np.set_printoptions(threshold=10_000)
-		for incorrect_index in incorrect_indices:
-			print_graph(inputs[incorrect_index, :])
-			print("Expected answer: {}, predicted answer: {}\n".format(outputs[incorrect_index], predictions[incorrect_index]))
-		print("Test accuracy = %.2f±%.2f, test loss = %f" % (test_acc, binomial_confidence_int(test_acc, 1000), test_loss))
+		for lookahead in [None] + list(range(1, 13 + 1)):
+			seed(training_seed)
+			torch.manual_seed(training_seed)
+			np.random.seed(training_seed)
+			inputs,outputs = generate_eval_data(max_input_size, min_path_length=2, distance_from_start=1, distance_from_end=-1, lookahead_steps=lookahead, num_paths_at_fork=None, num_samples=NUM_TEST_SAMPLES)
+			#generator.set_seed(get_seed(1))
+			#inputs, outputs, _, _ = generator.generate_training_set(max_input_size, NUM_TEST_SAMPLES, training_max_lookahead, reserved_inputs, 1, False)
+			print("Evaluating model...")
+			test_acc,test_loss,predictions = evaluate_model(model, inputs, outputs)
+			print("Mistaken inputs:")
+			'''predictions = np.array(predictions.cpu())
+			incorrect_indices = np.nonzero(predictions != outputs)[0]
+			np.set_printoptions(threshold=10_000)
+			for incorrect_index in incorrect_indices:
+				print_graph(inputs[incorrect_index, :])
+				print("Expected answer: {}, predicted answer: {}\n".format(outputs[incorrect_index], predictions[incorrect_index]))
+			import pdb; pdb.set_trace()'''
+			print("Test accuracy = %.2f±%.2f, test loss = %f" % (test_acc, binomial_confidence_int(test_acc, 1000), test_loss))
+			test_accuracies.append(test_acc)
+		print("\nTest accuracies:")
+		print(["%.2f" % acc for acc in test_accuracies])
 
 	elif os.path.isdir(argv[1]):
 		import matplotlib

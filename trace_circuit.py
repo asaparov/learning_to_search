@@ -165,8 +165,8 @@ def activation_patch_output_logit(model, j, layer_input, mask, prediction, attn_
 
 	# try maxing attn_matrix[a,b] for all a,b
 	new_attn_matrices = attn_matrix.repeat(n*n,1,1).detach()
-	new_attn_matrices[tuple(diag_indices.T)] = torch.max(attn_matrix,dim=1).values.repeat((1,n)).T.flatten()
-	new_attn_matrices /= torch.sum(new_attn_matrices,dim=-1).unsqueeze(-1).repeat((1,1,n))
+	new_attn_matrices[tuple(diag_indices.T)] = torch.max(attn_matrix,dim=0).values.repeat((1,n)).T.flatten()
+	#new_attn_matrices /= torch.sum(new_attn_matrices,dim=0).unsqueeze(-1).repeat((1,1,n))
 
 	# perform forward pass on other_inputs
 	BATCH_SIZE = 1024
@@ -209,7 +209,10 @@ def perturb_attn_ops(model, i, j, dst, src, layer_input, mask, A_matrices, attn_
 	for start in range(0, n*n, BATCH_SIZE):
 		end = min(start + BATCH_SIZE, n*n)
 		frozen_ops[j] = (new_attn_matrices[start:end,], None)
-		_, perturb_attn_inputs, _, _, _, _, _, _, _, _, _ = forward(model, layer_input.repeat(end-start,1,1).detach(), mask, j, False, i, None, frozen_ops)
+		#_, perturb_attn_inputs, _, _, _, _, _, _, _, _, _ = forward(model, layer_input.repeat(end-start,1,1).detach(), mask, j, False, i, None, frozen_ops)
+		perturb_layer_inputs, perturb_attn_inputs, perturb_attn_pre_softmax, perturb_attn_matrices, perturb_v_outputs, perturb_attn_linear_inputs, perturb_attn_outputs, perturb_A_matrices, perturb_ff_inputs, perturb_ff_parameters, perturb_prediction = forward(model, layer_input.repeat(end-start,1,1).detach(), mask, j, False, i, None, frozen_ops)
+		if j == 0 and i == 5 and 97*n+98 >= start and 97*n+98 < end:
+			import pdb; pdb.set_trace()
 
 		# try computing the attention dot product but with perturbed dst embeddings
 		zero_src_products[start:end] = torch.matmul(torch.matmul(attn_inputs[i], A), perturb_attn_inputs[i].transpose(-2,-1))[:,dst,src]
@@ -220,8 +223,8 @@ def perturb_attn_ops(model, i, j, dst, src, layer_input, mask, A_matrices, attn_
 
 	# try maxing attn_matrix[a,b] for all a,b
 	new_attn_matrices = attn_matrix.repeat(n*n,1,1).detach()
-	new_attn_matrices[tuple(diag_indices.T)] = torch.max(attn_matrix,dim=1).values.repeat((1,n)).T.flatten()
-	new_attn_matrices /= torch.sum(new_attn_matrices,dim=-1).unsqueeze(-1).repeat((1,1,n))
+	new_attn_matrices[tuple(diag_indices.T)] = torch.max(attn_matrix,dim=0).values.repeat((1,n)).T.flatten()
+	#new_attn_matrices /= torch.sum(new_attn_matrices,dim=0).unsqueeze(-1).repeat((1,1,n))
 
 	# perform forward pass on other_inputs
 	BATCH_SIZE = 1024
@@ -266,7 +269,7 @@ class NoUnusedVertexIDs(Exception):
     pass
 
 @torch.no_grad()
-def explain_attn_op(model, input, mask, A_matrices, attn_matrices, attn_inputs, ff_inputs, i, dst, src):
+def explain_attn_op(model, input, mask, A_matrices, attn_matrices, attn_inputs, ff_inputs, i, dst, src, sign):
 	n, d = attn_inputs[0].size(0), attn_inputs[0].size(1)
 	EDGE_PREFIX_TOKEN = (n - 5) // 3 + 2
 	edge_indices = [i + 1 for i in range(len(input)) if input[i] == EDGE_PREFIX_TOKEN]
@@ -316,15 +319,17 @@ def explain_attn_op(model, input, mask, A_matrices, attn_matrices, attn_inputs, 
 	new_src_products = new_src_products[:,dst,src]
 	new_dst_products = new_dst_products[:,dst,src]
 
-	is_negative_copy = (attn_matrices[i][dst,src] < torch.median(attn_matrices[i][dst,edge_indices]))
+	if sign == 0:
+		print('WARNING: Found an attention operation that is both positive and negative.')
+	is_negative_copy = (sign == -1) #(attn_matrices[i][dst,src] < torch.median(attn_matrices[i][dst,edge_indices]))
 	if is_negative_copy:
-		src_dependencies = torch.nonzero(new_src_products > old_product + math.sqrt(d) / 3)
-		dst_dependencies = torch.nonzero(new_dst_products > old_product + math.sqrt(d) / 3)
+		src_dependencies = torch.nonzero(new_src_products > old_product + math.sqrt(d) / 6)
+		dst_dependencies = torch.nonzero(new_dst_products > old_product + math.sqrt(d) / 6)
 		src_dependencies = src_dependencies[torch.sort(new_src_products[src_dependencies],dim=0,descending=True).indices]
 		dst_dependencies = dst_dependencies[torch.sort(new_dst_products[dst_dependencies],dim=0,descending=True).indices]
 	else:
-		src_dependencies = torch.nonzero(new_src_products < old_product - math.sqrt(d) / 3)
-		dst_dependencies = torch.nonzero(new_dst_products < old_product - math.sqrt(d) / 3)
+		src_dependencies = torch.nonzero(new_src_products < old_product - math.sqrt(d) / 6)
+		dst_dependencies = torch.nonzero(new_dst_products < old_product - math.sqrt(d) / 6)
 		src_dependencies = src_dependencies[torch.sort(new_src_products[src_dependencies],dim=0,descending=False).indices]
 		dst_dependencies = dst_dependencies[torch.sort(new_dst_products[dst_dependencies],dim=0,descending=False).indices]
 
@@ -605,7 +610,7 @@ class TransformerTracer:
 			out[i] = self.input_derivative(start_layer, input_row_id, i, output_row_id, output_col_id, start_at_ff, layer_inputs, attn_inputs, attn_pre_softmax, attn_matrices, ff_inputs)
 		return out
 
-	def trace2(self, x: torch.Tensor):
+	def trace2(self, x: torch.Tensor, quiet: bool = True):
 		n = x.shape[0]
 		max_vertex_id = (n - 5) // 3
 		QUERY_PREFIX_TOKEN = (n - 5) // 3 + 4
@@ -637,12 +642,9 @@ class TransformerTracer:
 			zero_output_logit_list.append(zero_output_logits)
 			max_output_logit_list.append(max_output_logits)
 
-		major_last_copies = torch.nonzero(zero_output_logit_list[len(self.model.transformers)-1] < torch.min(zero_output_logit_list[len(self.model.transformers)-1]) + 0.001)
-		if major_last_copies.size(0) != 1 or major_last_copies[0,0] != n-1:
-			print('WARNING: Last layer does not copy the answer from a single source token.')
-			import pdb; pdb.set_trace()
-			return None, None, None, None, prediction
-		last_copy_src = major_last_copies[0,1]
+		major_last_copies = torch.nonzero(zero_output_logit_list[len(self.model.transformers)-1] < layer_inputs[-1][-1,prediction] - math.sqrt(d) / 6)
+		last_copy_srcs = major_last_copies[:,1]
+		import pdb; pdb.set_trace()
 
 		zero_src_product_list = []
 		zero_dst_product_list = []
@@ -650,54 +652,82 @@ class TransformerTracer:
 		max_dst_product_list = []
 		res_src_product_list = []
 		res_dst_product_list = []
-		for j in range(len(self.model.transformers)):
-			zero_src_products, zero_dst_products, max_src_products, max_dst_products = perturb_attn_ops(self.model, len(self.model.transformers)-1, j, n-1, last_copy_src, layer_inputs[j], mask, A_matrices, attn_matrices, attn_inputs)
-			zero_src_product_list.append(zero_src_products)
-			zero_dst_product_list.append(zero_dst_products)
-			max_src_product_list.append(max_src_products)
-			max_dst_product_list.append(max_dst_products)
+		for k in range(len(last_copy_srcs)):
+			zero_src_product_list.append([])
+			zero_dst_product_list.append([])
+			max_src_product_list.append([])
+			max_dst_product_list.append([])
+			res_src_product_list.append([])
+			res_dst_product_list.append([])
+			for j in range(len(self.model.transformers)):
+				zero_src_products, zero_dst_products, max_src_products, max_dst_products = perturb_attn_ops(self.model, len(self.model.transformers)-1, j, n-1, last_copy_srcs[k], layer_inputs[j], mask, A_matrices, attn_matrices, attn_inputs)
+				zero_src_product_list[k].append(zero_src_products)
+				zero_dst_product_list[k].append(zero_dst_products)
+				max_src_product_list[k].append(max_src_products)
+				max_dst_product_list[k].append(max_dst_products)
 
-			#if j < len(self.model.transformers) - 1:
-			#	res_src_products, res_dst_products = perturb_residuals(self.model, len(self.model.transformers)-1, j, n-1, last_copy_src, mask, A_matrices, attn_inputs, attn_outputs, ff_inputs)
-			#	res_src_product_list.append(res_src_products)
-			#	res_dst_product_list.append(res_dst_products)
+				#if j < len(self.model.transformers) - 1:
+				#	res_src_products, res_dst_products = perturb_residuals(self.model, len(self.model.transformers)-1, j, n-1, last_copy_srcs[k], mask, A_matrices, attn_inputs, attn_outputs, ff_inputs)
+				#	res_src_product_list[k].append(res_src_products)
+				#	res_dst_product_list[k].append(res_dst_products)
 
 		A = A_matrices[len(self.model.transformers)-1][:-1,:-1]
 		old_products = torch.matmul(torch.matmul(attn_inputs[len(self.model.transformers)-1], A), attn_inputs[len(self.model.transformers)-1].T)
-		old_product = old_products[n-1,last_copy_src]
+		old_products = old_products[n-1,last_copy_srcs]
+
+		important_positive_ops = []
+		important_negative_ops = []
+		for j in range(len(self.model.transformers)):
+			new_important_positive_ops = []
+			new_important_negative_ops = []
+			positive_copies = torch.nonzero(zero_output_logit_list[j] < layer_inputs[-1][-1,prediction] - math.sqrt(d) / 6)
+			negative_copies = torch.nonzero(max_output_logit_list[j] < layer_inputs[-1][-1,prediction] - math.sqrt(d) / 6)
+			if not quiet:
+				print("Layer {}:".format(j))
+				print("  Positive copies from output logit perturbations: {}".format(positive_copies.tolist()))
+				print("  Negative copies from output logit perturbations: {}".format(negative_copies.tolist()))
+			if positive_copies.size(0) > negative_copies.size(0) or positive_copies.size(0) == 0:
+				new_important_negative_ops += [op.tolist() for op in negative_copies]
+			if positive_copies.size(0) <= negative_copies.size(0) or negative_copies.size(0) == 0:
+				new_important_positive_ops += [op.tolist() for op in positive_copies]
+
+			for k in range(len(zero_dst_product_list)):
+				positive_copies = torch.nonzero(zero_src_product_list[k][j] < old_products[k] - math.sqrt(d) / 6)
+				negative_copies = torch.nonzero(max_src_product_list[k][j] < old_products[k] - math.sqrt(d) / 6)
+				if not quiet:
+					print("  Positive copies from src dot product perturbations[{}]: {}".format(k, positive_copies.tolist()))
+					print("  Negative copies from src dot product perturbations[{}]: {}".format(k, negative_copies.tolist()))
+				if positive_copies.size(0) > negative_copies.size(0):
+					new_important_negative_ops += [c.tolist() for c in negative_copies if c.tolist() not in new_important_negative_ops]
+				else:
+					new_important_positive_ops += [c.tolist() for c in positive_copies if c.tolist() not in new_important_positive_ops]
+
+				positive_copies = torch.nonzero(zero_dst_product_list[k][j] < old_products[k] - math.sqrt(d) / 6)
+				negative_copies = torch.nonzero(max_dst_product_list[k][j] < old_products[k] - math.sqrt(d) / 6)
+				if not quiet:
+					print("  Positive copies from dst dot product perturbations[{}]: {}".format(k, positive_copies.tolist()))
+					print("  Negative copies from dst dot product perturbations[{}]: {}".format(k, negative_copies.tolist()))
+				if positive_copies.size(0) > negative_copies.size(0):
+					new_important_negative_ops += [c.tolist() for c in negative_copies if c.tolist() not in new_important_negative_ops]
+				else:
+					new_important_positive_ops += [c.tolist() for c in positive_copies if c.tolist() not in new_important_positive_ops]
+
+				#if j < len(self.model.transformers) - 1:
+				#	residual_copies = torch.nonzero(res_src_product_list[k][j] < old_products[k] - math.sqrt(d) / 2)
+				#	residual_copies = torch.cat((residual_copies,residual_copies),dim=-1)
+				#	new_important_ops += [c.tolist() for c in residual_copies if c.tolist() not in new_important_ops]
+				#	residual_copies = torch.nonzero(res_dst_product_list[k][j] < old_products[k] - math.sqrt(d) / 2)
+				#	residual_copies = torch.cat((residual_copies,residual_copies),dim=-1)
+				#	new_important_ops += [c.tolist() for c in residual_copies if c.tolist() not in new_important_ops]
+
+			important_positive_ops.append(new_important_positive_ops)
+			important_negative_ops.append(new_important_negative_ops)
 
 		important_ops = []
 		for j in range(len(self.model.transformers)):
-			new_important_ops = []
-			positive_copies = torch.nonzero(zero_output_logit_list[j] < layer_inputs[-1][-1,prediction] - math.sqrt(d) / 2)
-			negative_copies = torch.nonzero(max_output_logit_list[j] < layer_inputs[-1][-1,prediction] - math.sqrt(d) / 2)
-			if positive_copies.size(0) > negative_copies.size(0) or positive_copies.size(0) == 0:
-				new_important_ops += [op.tolist() for op in negative_copies]
-			if positive_copies.size(0) <= negative_copies.size(0) or negative_copies.size(0) == 0:
-				new_important_ops += [op.tolist() for op in positive_copies]
-
-			positive_copies = torch.nonzero(zero_src_product_list[j] < old_product - math.sqrt(d) / 2)
-			negative_copies = torch.nonzero(max_src_product_list[j] < old_product - math.sqrt(d) / 2)
-			if positive_copies.size(0) > negative_copies.size(0):
-				new_important_ops += [c.tolist() for c in negative_copies if c.tolist() not in new_important_ops]
-			else:
-				new_important_ops += [c.tolist() for c in positive_copies if c.tolist() not in new_important_ops]
-
-			positive_copies = torch.nonzero(zero_dst_product_list[j] < old_product - math.sqrt(d) / 2)
-			negative_copies = torch.nonzero(max_dst_product_list[j] < old_product - math.sqrt(d) / 2)
-			if positive_copies.size(0) > negative_copies.size(0):
-				new_important_ops += [c.tolist() for c in negative_copies if c.tolist() not in new_important_ops]
-			else:
-				new_important_ops += [c.tolist() for c in positive_copies if c.tolist() not in new_important_ops]
-
-			#if j < len(self.model.transformers) - 1:
-			#	residual_copies = torch.nonzero(res_src_product_list[j] < old_product - math.sqrt(d) / 2)
-			#	residual_copies = torch.cat((residual_copies,residual_copies),dim=-1)
-			#	new_important_ops += [c.tolist() for c in residual_copies if c.tolist() not in new_important_ops]
-			#	residual_copies = torch.nonzero(res_dst_product_list[j] < old_product - math.sqrt(d) / 2)
-			#	residual_copies = torch.cat((residual_copies,residual_copies),dim=-1)
-			#	new_important_ops += [c.tolist() for c in residual_copies if c.tolist() not in new_important_ops]
-
+			new_important_ops = [(op,1) for op in important_positive_ops[j] if op not in important_negative_ops[j]]
+			new_important_ops += [(op,-1) for op in important_negative_ops[j] if op not in important_positive_ops[j]]
+			new_important_ops += [(op,0) for op in important_positive_ops[j] if op in important_negative_ops[j]]
 			important_ops.append(new_important_ops)
 
 		forward_edges = []
@@ -733,7 +763,7 @@ class TransformerTracer:
 				new_node = ComputationNode(j, node.row_id)
 				node.add_predecessor(new_node)
 				new_nodes.append(new_node)
-			for op in important_ops[j]:
+			for op,sign in important_ops[j]:
 				for node in nodes:
 					if node.row_id == op[0]:
 						try:
@@ -744,7 +774,9 @@ class TransformerTracer:
 						node.add_predecessor(predecessor)
 
 						# explain the copy from `predecessor` to `node`
-						src_dependencies, dst_dependencies = explain_attn_op(self.model, input, mask, A_matrices, attn_matrices, attn_inputs, ff_inputs, predecessor.layer, node.row_id, predecessor.row_id)
+						if j == 0 and predecessor.row_id == 98 and node.row_id == 97:
+							import pdb; pdb.set_trace()
+						src_dependencies, dst_dependencies = explain_attn_op(self.model, input, mask, A_matrices, attn_matrices, attn_inputs, ff_inputs, predecessor.layer, node.row_id, predecessor.row_id, sign)
 						op_causes = []
 						for src_dep in src_dependencies:
 							if src_dep >= max_vertex_id+5 and src_dep+1 in dst_dependencies:
@@ -793,9 +825,6 @@ class TransformerTracer:
 
 		for node in all_nodes:
 			node.reachable = [int(input[node.row_id]),max_vertex_id+5+node.row_id]
-		for node in reversed(all_nodes):
-			for successor in node.successors:
-				successor.reachable += [n for n in node.reachable if n not in successor.reachable]
 
 		# identify the paths in the graph that can be explained by the path-merging algorithm
 		path_merge_explainable = []
@@ -809,25 +838,39 @@ class TransformerTracer:
 			for k in range(len(node.successors)):
 				successor = node.successors[k]
 				if successor in path_merge_explainable:
+					successor.reachable += [n for n in node.reachable if n not in successor.reachable]
 					continue
 				if node.op_explanations[k] == None:
 					if node.row_id == successor.row_id:
 						path_merge_explainable.append(successor)
+						successor.reachable += [n for n in node.reachable if n not in successor.reachable]
 					continue
-				if node.copy_directions[k] == 'f' and any(e[0]+1 == e[1] and e[0]+1 in successor.reachable and e[1] in node.reachable for e in node.op_explanations[k] if type(e) == tuple and type(e[0]) == int):
+				if node.copy_directions[k] == 'f' and any(e[0]+1 == e[1] and e[0] in successor.reachable and e[1] in node.reachable for e in node.op_explanations[k] if type(e) == tuple and type(e[0]) == int):
 					path_merge_explainable.append(successor)
+					successor.reachable += [n for n in node.reachable if n not in successor.reachable]
 					continue
-				if node.copy_directions[k] == 'b' and any(e[0]-1 == e[1] and e[0]-1 in successor.reachable and e[1] in node.reachable for e in node.op_explanations[k] if type(e) == tuple and type(e[0]) == int):
+				if node.copy_directions[k] == 'b' and any(e[0]-1 == e[1] and e[0] in successor.reachable and e[1] in node.reachable for e in node.op_explanations[k] if type(e) == tuple and type(e[0]) == int):
 					path_merge_explainable.append(successor)
+					successor.reachable += [n for n in node.reachable if n not in successor.reachable]
 					continue
 				for explanation in node.op_explanations[k]:
 					if any(explanation == input[r-(max_vertex_id+5)] for r in node.reachable if r >= max_vertex_id+5):
 						path_merge_explainable.append(successor)
+						successor.reachable += [n for n in node.reachable if n not in successor.reachable]
 						break
-				if (max_vertex_id+5+n-1,(max_vertex_id+5+n-3,max_vertex_id+5+n-4)) in node.op_explanations[k] and successor.row_id == n-1 and max_vertex_id+5+n-3 in node.reachable and max_vertex_id+5+n-4 in node.reachable and successor not in path_merge_explainable:
-					path_merge_explainable.append(successor)
-				if (None,max_vertex_id+5+n-3) in node.op_explanations[k] and successor.row_id == n-1 and max_vertex_id+5+n-3 in node.reachable and successor not in path_merge_explainable:
-					path_merge_explainable.append(successor)
+				if (max_vertex_id+5+n-1,(max_vertex_id+5+n-3,max_vertex_id+5+n-4)) in node.op_explanations[k] and successor.row_id == n-1 and max_vertex_id+5+n-3 in node.reachable and max_vertex_id+5+n-4 in node.reachable:
+					if successor not in path_merge_explainable:
+						path_merge_explainable.append(successor)
+					successor.reachable += [n for n in node.reachable if n not in successor.reachable]
+				if (None,max_vertex_id+5+n-3) in node.op_explanations[k] and successor.row_id == n-1 and max_vertex_id+5+n-3 in node.reachable:
+					if successor not in path_merge_explainable:
+						path_merge_explainable.append(successor)
+					successor.reachable += [n for n in node.reachable if n not in successor.reachable]
+				if (None,max_vertex_id+5+n-3) in node.op_explanations[k] and max_vertex_id+5+n-3 in node.reachable:
+					# this is a hard copy into a token for the purpose of temporary storage
+					if successor not in path_merge_explainable:
+						path_merge_explainable.append(successor)
+					successor.reachable += [n for n in node.reachable if n not in successor.reachable]
 
 		return root, forward_edges, important_ops, path_merge_explainable, prediction
 
@@ -2120,16 +2163,17 @@ if __name__ == "__main__":
 	#input = [46, 46, 46, 46, 46, 46, 46, 45, 31, 39, 45, 42,  4, 45, 21,  7, 45, 19, 20, 45, 13, 22, 45,  7, 42, 45, 20, 21, 45, 17, 19, 45, 17, 31, 45, 10, 14, 45, 39, 10, 45, 14, 13, 47, 17,  4, 44, 17]
 	#input = [62, 62, 62, 62, 62, 61, 15,  8, 61, 11, 18, 61,  9,  5, 61, 19, 14, 61, 19, 17, 61,  1, 11, 61,  6,  7, 61, 10,  3, 61,  2,  1, 61, 13, 10, 61, 12,  4, 61, 17, 16, 61,  7, 12, 61, 14,  2, 61,  3,  9, 61, 16, 15, 61, 18,  6, 61,  8, 13, 63, 19,  4, 60, 19]
 	#input = [44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 43, 21, 40, 43, 21, 22, 43, 22, 34, 43, 13,  3, 43, 31,  2, 43, 24, 13, 43,  4, 41, 43, 30, 31, 43, 17, 15, 43, 34, 38, 43,  3, 28, 43, 18, 17, 43, 14, 24, 43,  2,  4, 43, 32, 30, 43, 40, 18, 43, 15, 14, 43, 38, 32, 45, 21, 28, 42, 21]
-	input = [31, 31, 31, 31, 31, 31, 31, 30,  7, 23, 30,  9, 22, 30,  6,  4, 30, 6, 10, 30, 25, 19, 30, 17,  9, 30, 17, 16, 30,  1, 14, 30, 11, 21, 30, 26,  1, 30, 12, 11, 30, 14,  6, 30, 15, 25, 30,  4, 17, 30, 24, 28, 30, 19,  8, 30, 27, 26, 30, 27, 12, 30, 27,  5, 30, 22, 24, 30, 8,  3, 30, 18, 15, 30,  3,  7, 30,  3, 10, 30,  3,  2, 30, 21, 18, 32, 27, 28, 29, 27]
+	#input = [31, 31, 31, 31, 31, 31, 31, 30,  7, 23, 30,  9, 22, 30,  6,  4, 30, 6, 10, 30, 25, 19, 30, 17,  9, 30, 17, 16, 30,  1, 14, 30, 11, 21, 30, 26,  1, 30, 12, 11, 30, 14,  6, 30, 15, 25, 30,  4, 17, 30, 24, 28, 30, 19,  8, 30, 27, 26, 30, 27, 12, 30, 27,  5, 30, 22, 24, 30, 8,  3, 30, 18, 15, 30,  3,  7, 30,  3, 10, 30,  3,  2, 30, 21, 18, 32, 27, 28, 29, 27]
+	input = [44, 44, 44, 44, 44, 44, 43, 29, 36, 43, 25, 23, 43, 15,  4, 43, 16, 14, 43, 21, 29, 43, 27, 40, 43,  4,  9, 43,  8, 19, 43, 31,  8, 43, 31, 10, 43, 31,  2, 43,  9, 21, 43, 17, 28, 43,  2, 15, 43,  2, 12, 43, 33, 10, 43, 22, 37, 43, 34, 26, 43, 18,  7, 43, 19, 39, 43, 28, 27, 43, 37, 20, 43, 14, 11, 43, 20, 30, 43, 10,  3, 43, 26,  8, 43, 39, 38, 43, 30, 35, 43, 23, 17, 43,  7, 25, 43, 11, 32, 43, 35, 33, 43,  5, 16, 43, 12, 22, 43, 32, 34, 43, 36,  5, 43,  1,  2, 43,  1, 31, 43,  3, 18, 45,  2, 40, 42,  2]
 	input = torch.LongTensor(input).to(device)
 	other_input = input.clone().detach()
 	other_input[-3] = 7
 	#other_input[next(i for i in range(len(input)) if input[i] ==  1 and input[i+1] == 14) + 1] = 21
 	#other_input[next(i for i in range(len(input)) if input[i] == 11 and input[i+1] == 21) + 1] = 14
-	#other_input[next(i for i in range(len(input)) if input[i] ==  6 and input[i+1] ==   4) + 0] = 18
-	#other_input[next(i for i in range(len(input)) if input[i] ==  6 and input[i+1] ==   4) + 1] = 15
-	#other_input[next(i for i in range(len(input)) if input[i] == 18 and input[i+1] ==  15) + 0] =  6
-	#other_input[next(i for i in range(len(input)) if input[i] == 18 and input[i+1] ==  15) + 1] =  4
+	#other_input[next(i for i in range(len(input)) if input[i] ==  6 and input[i+1] ==  4) + 0] = 18
+	#other_input[next(i for i in range(len(input)) if input[i] ==  6 and input[i+1] ==  4) + 1] = 15
+	#other_input[next(i for i in range(len(input)) if input[i] == 18 and input[i+1] == 15) + 0] =  6
+	#other_input[next(i for i in range(len(input)) if input[i] == 18 and input[i+1] == 15) + 1] =  4
 	#other_input[next(i for i in range(len(input)) if input[i] == 17 and input[i+1] ==  9) + 0] = 25
 	#other_input[next(i for i in range(len(input)) if input[i] == 17 and input[i+1] ==  9) + 1] = 19
 	#other_input[next(i for i in range(len(input)) if input[i] == 25 and input[i+1] == 19) + 0] = 17
@@ -2144,6 +2188,40 @@ if __name__ == "__main__":
 	NUM_SAMPLES = int(argv[3])
 	inputs,outputs = generate_eval_data(max_input_size, min_path_length=1, distance_from_start=1, distance_from_end=-1, lookahead_steps=int(argv[2]), num_paths_at_fork=None, num_samples=NUM_SAMPLES)
 	inputs = torch.LongTensor(inputs).to(device)
+
+	def filter_irrelevant_nodes(path_merge_explainable, input, root):
+		# filter out nodes that are not along the path from the input to the root
+		new_path_merge_explainable = []
+		queue = [root]
+		while len(queue) != 0:
+			node = queue.pop()
+			if node not in path_merge_explainable:
+				continue
+			if node not in new_path_merge_explainable:
+				new_path_merge_explainable.append(node)
+			for predecessor in node.predecessors:
+				queue.append(predecessor)
+		path_merge_explainable = new_path_merge_explainable
+
+		# check that the final node's activations contain the path from the start vertex to the goal vertex
+		def is_reachable(input, start, end, subgraph):
+			if input[start] > max_vertex_id or input[end] > max_vertex_id:
+				return False
+			queue = [input[start]]
+			while len(queue) != 0:
+				current = queue.pop()
+				if current == input[end]:
+					return True
+				for child in forward_edges[current]:
+					if child in subgraph:
+						queue.append(child)
+			return False
+		if root in path_merge_explainable:
+			vertices = [i-(max_vertex_id+5) for i in root.reachable if i >= max_vertex_id+5]
+			subgraph = [int(input[v]) for v in vertices]
+			if not is_reachable(input, max_input_size-4, max_input_size-3, subgraph):
+				path_merge_explainable.remove(root)
+		return path_merge_explainable
 
 	def print_computation_graph(root, input):
 		queue = [root]
@@ -2164,9 +2242,12 @@ if __name__ == "__main__":
 		from analyze import print_graph
 		print_graph(input.cpu().detach().numpy())
 
-	#root, forward_edges, important_ops, path_merge_explainable, prediction = tracer.trace2(inputs[1,:])
-	#print_computation_graph(root, inputs[1,:])
-	#import pdb; pdb.set_trace()
+	debug_input = input
+	root, forward_edges, important_ops, path_merge_explainable, prediction = tracer.trace2(debug_input, quiet=False)
+	print_computation_graph(root, debug_input)
+	print('### path_merge_explainable: ' + str(path_merge_explainable))
+	print('### after filtering: ' + str(filter_irrelevant_nodes(path_merge_explainable, debug_input, root)))
+	import pdb; pdb.set_trace()
 
 	total = 0
 	num_correct_vs_explainable = torch.zeros((2,2))
@@ -2299,36 +2380,7 @@ if __name__ == "__main__":
 			continue
 
 		if path_merge_explainable != None:
-			# filter out nodes that are not along the path from the input to the root
-			new_path_merge_explainable = []
-			queue = [root]
-			while len(queue) != 0:
-				node = queue.pop()
-				if node not in path_merge_explainable:
-					continue
-				new_path_merge_explainable.append(node)
-				for predecessor in node.predecessors:
-					queue.append(predecessor)
-			path_merge_explainable = new_path_merge_explainable
-
-			# check that the final node's activations contain the path from the start vertex to the goal vertex
-			def is_reachable(input, start, end, subgraph):
-				if input[start] > max_vertex_id or input[end] > max_vertex_id:
-					return False
-				queue = [input[start]]
-				while len(queue) != 0:
-					current = queue.pop()
-					if current == input[end]:
-						return True
-					for child in forward_edges[current]:
-						if child in subgraph:
-							queue.append(child)
-				return False
-			if root in path_merge_explainable:
-				vertices = [i-(max_vertex_id+5) for i in root.reachable if i >= max_vertex_id+5]
-				subgraph = [int(inputs[i,v]) for v in vertices]
-				if not is_reachable(inputs[i,:], max_input_size-4, max_input_size-3, subgraph):
-					path_merge_explainable.remove(root)
+			path_merge_explainable = filter_irrelevant_nodes(path_merge_explainable, inputs[i], root)
 
 		if path_merge_explainable != None and root in path_merge_explainable:
 			def shortest_distances(input, start, subgraph=None):
