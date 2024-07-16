@@ -445,7 +445,7 @@ bool has_path(const node* start, const node* end)
 	return false;
 }
 
-py::tuple generate_training_set(const unsigned int max_input_size, const uint64_t dataset_size, const unsigned int max_lookahead, const py::object& reserved_inputs, const int distance_from_start, const bool quiet=false)
+py::tuple generate_training_set(const unsigned int max_input_size, const uint64_t dataset_size, const unsigned int max_lookahead, const unsigned int max_edges, const py::object& reserved_inputs, const int distance_from_start, const bool quiet=false)
 {
 	const unsigned int QUERY_PREFIX_TOKEN = (max_input_size-5) / 3 + 4;
 	const unsigned int PADDING_TOKEN = (max_input_size-5) / 3 + 3;
@@ -491,11 +491,11 @@ py::tuple generate_training_set(const unsigned int max_input_size, const uint64_
 			if (lookahead == 0) {
 				num_paths = randrange(1, 3);
 			} else {
-				unsigned int max_num_paths = ((max_input_size - 5) / 3 - 1) / lookahead;
+				unsigned int max_num_paths = (max_edges - 1) / lookahead;
 				num_paths = randrange(2, max_num_paths + 1);
 			}
 
-			unsigned int num_vertices = std::min(lookahead * num_paths + 1 + randrange(0, 6), (max_input_size-5) / 3);
+			unsigned int num_vertices = std::min(std::min(lookahead * num_paths + 1 + randrange(0, 6), (max_input_size-5) / 3), max_edges + 1);
 			if (!generate_example(g, start, end, paths, num_vertices, 4, (max_input_size - 5) / 3, true, lookahead, num_paths)) {
 				for (node& n : g) core::free(n);
 				for (array<node*>& a : paths) core::free(a);
@@ -517,7 +517,7 @@ py::tuple generate_training_set(const unsigned int max_input_size, const uint64_
 		for (node& vertex : g)
 			for (node* child : vertex.children)
 				edges.add(make_pair(vertex.id, child->id));
-		if (edges.length * 3 + 4 > max_input_size) {
+		if (edges.length > max_edges || edges.length * 3 + 4 > max_input_size) {
 			for (node& n : g) core::free(n);
 			for (array<node*>& a : paths) core::free(a);
 			g.length = 0; paths.length = 0;
@@ -626,7 +626,7 @@ py::tuple generate_training_set(const unsigned int max_input_size, const uint64_
 	return py::make_tuple(inputs, outputs, valid_outputs, num_collisions);
 }
 
-py::tuple generate_reachable_training_set(const unsigned int max_input_size, const uint64_t dataset_size, const unsigned int lookahead, const py::object& reserved_inputs, const int distance_from_start, const int reachable_distance, const unsigned int start_vertex_index, const bool exclude_start_vertex)
+py::tuple generate_reachable_training_set(const unsigned int max_input_size, const uint64_t dataset_size, const unsigned int lookahead, const unsigned int max_edges, const py::object& reserved_inputs, const int distance_from_start, const int reachable_distance, const unsigned int start_vertex_index, const bool exclude_start_vertex)
 {
 	const unsigned int QUERY_PREFIX_TOKEN = (max_input_size-5) / 3 + 4;
 	const unsigned int PADDING_TOKEN = (max_input_size-5) / 3 + 3;
@@ -653,11 +653,11 @@ py::tuple generate_reachable_training_set(const unsigned int max_input_size, con
 			if (lookahead == 0) {
 				num_paths = randrange(1, 3);
 			} else {
-				unsigned int max_num_paths = ((max_input_size - 5) / 3 - 1) / lookahead;
+				unsigned int max_num_paths = (max_edges - 1) / lookahead;
 				num_paths = randrange(2, max_num_paths + 1);
 			}
 
-			unsigned int num_vertices = std::min(lookahead * num_paths + 1 + randrange(0, 6), (max_input_size-5) / 3);
+			unsigned int num_vertices = std::min(std::min(lookahead * num_paths + 1 + randrange(0, 6), (max_input_size-5) / 3), max_edges + 1);
 			if (!generate_example(g, start, end, paths, num_vertices, 4, max_vertex_id, true, lookahead, num_paths)) {
 				for (node& n : g) core::free(n);
 				for (array<node*>& a : paths) core::free(a);
@@ -679,7 +679,7 @@ py::tuple generate_reachable_training_set(const unsigned int max_input_size, con
 		for (node& vertex : g)
 			for (node* child : vertex.children)
 				edges.add(make_pair(vertex.id, child->id));
-		if (edges.length * 3 + 4 > max_input_size) {
+		if (edges.length > max_edges || edges.length * 3 + 4 > max_input_size) {
 			for (node& n : g) core::free(n);
 			for (array<node*>& a : paths) core::free(a);
 			g.length = 0; paths.length = 0;
