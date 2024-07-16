@@ -666,7 +666,7 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 		toeplitz = ToeplitzMode.NONE
 	if len(existing_epochs) == 0:
 		if curriculum_mode in ('layerbylayer','layerbylayer2'):
-			initial_layers = min(2, nlayers)
+			initial_layers = min(3, nlayers)
 		else:
 			initial_layers = nlayers
 		model = Transformer(
@@ -712,7 +712,7 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 		initial_max_edges = (max_input_size - 5) // 3
 	elif curriculum_mode == 'layerbylayer':
 		initial_lookahead = 2
-		initial_max_edges = 3
+		initial_max_edges = 5
 	elif curriculum_mode == 'layerbylayer2':
 		initial_lookahead = 2
 		initial_max_edges = 5
