@@ -124,8 +124,11 @@ bool has_cycles(array<node>& vertices) {
 	return false;
 }
 
+unsigned int debug = 0;
+
 bool generate_graph_with_lookahead(array<node>& vertices, node*& start, node*& end, unsigned int num_vertices, unsigned int max_num_parents, unsigned int max_vertex_id, unsigned int lookahead, unsigned int num_paths)
 {
+	debug++;
 	num_vertices = std::max(std::max(2u, num_vertices), 1 + num_paths * lookahead);
 
 	if (!vertices.ensure_capacity(num_vertices))
@@ -157,6 +160,7 @@ bool generate_graph_with_lookahead(array<node>& vertices, node*& start, node*& e
 			}
 		}
 	}
+	unsigned int num_fork_vertices = index;
 
 	unsigned int num_prefix_vertices = randrange(num_vertices - index + 1);
 	node* prev_vertex = &vertices[0];
@@ -184,7 +188,7 @@ bool generate_graph_with_lookahead(array<node>& vertices, node*& start, node*& e
 	}
 	for (unsigned int i = index; i < num_vertices; i++) {
 		/* sample the number of child and parent vertices */
-		unsigned int num_children = randrange(1, max_num_parents);
+		unsigned int num_children = randrange(0, max_num_parents);
 		unsigned int num_parents = randrange(num_children == 0 ? 1 : 0, max_num_parents);
 		num_children = std::min(num_children, i);
 		num_parents = std::min(num_parents, i);
@@ -214,7 +218,9 @@ bool generate_graph_with_lookahead(array<node>& vertices, node*& start, node*& e
 
 		/* sample the parents of this new node */
 		total_probability = 0.0f;
-		for (unsigned int j = 0; j < index; j++) {
+		for (unsigned int j = 0; j < num_fork_vertices; j++)
+			probabilities[j] = 0.0f; /* prevent creating any new paths to the goal */
+		for (unsigned int j = num_fork_vertices; j < index; j++) {
 			probabilities[j] = out_degrees[j];
 			total_probability += probabilities[j];
 		}

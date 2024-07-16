@@ -155,6 +155,7 @@ def generate_graph_with_lookahead(num_vertices, max_num_parents, max_vertex_id, 
 				vertices[index].parents.append(vertices[index - 1])
 				vertices[index - 1].children.append(vertices[index])
 				index += 1
+	num_fork_vertices = index
 
 	num_prefix_vertices = randrange(num_vertices - index + 1)
 	prev_vertex = vertices[0]
@@ -189,6 +190,8 @@ def generate_graph_with_lookahead(num_vertices, max_num_parents, max_vertex_id, 
 		# to avoid creating a cycle, we have to remove any descendants from the possible parents
 		descendants = get_descendants(vertices[index])
 		probabilities = out_degrees[:index].copy()
+		probabilities[:num_fork_vertices] = 0 # prevent creating any new paths to the goal
+
 		for descendant in descendants:
 			probabilities[descendant.id] = 0
 		total_probability = np.sum(probabilities)
