@@ -890,7 +890,7 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 							# increase the maximum number of edges by 1
 							print("Increasing maximum number of edges to {}".format(model.max_edges + 1))
 							model.max_edges += 1
-						elif curriculum_mode in ('layerbylayer','layerbylayer2') and model.lookahead + 1 > 2 ** (len(model.transformers) - 1) and len(model.transformers) < nlayers:
+						elif curriculum_mode in ('layerbylayer','layerbylayer2') and model.lookahead + 1 > 2 ** (len(model.transformers) - 2) and len(model.transformers) < nlayers:
 							# add another layer to the model
 							print("Increasing number of transformer layers to {}".format(len(model.transformers) + 1))
 							if absolute_pos_emb:
