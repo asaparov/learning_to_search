@@ -714,8 +714,8 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 		initial_lookahead = 2
 		initial_max_edges = 3
 	elif curriculum_mode == 'layerbylayer2':
-		initial_lookahead = 1
-		initial_max_edges = 3
+		initial_lookahead = 2
+		initial_max_edges = 5
 	if hasattr(model, 'lookahead'):
 		initial_lookahead = model.lookahead
 	else:
