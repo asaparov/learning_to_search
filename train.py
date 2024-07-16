@@ -7,7 +7,7 @@ import numpy as np
 import torch
 from torch import nn, Tensor, LongTensor
 import torch.nn.functional as F
-from torch.nn import CrossEntropyLoss
+from torch.nn import CrossEntropyLoss, BCEWithLogitsLoss
 from torch.utils.data import Dataset, DataLoader
 from gpt2 import Transformer, TransformerLayer, ToeplitzMode, AblationMode
 from Sophia import SophiaG
@@ -155,7 +155,6 @@ def generate_graph_with_lookahead(num_vertices, max_num_parents, max_vertex_id, 
 				vertices[index].parents.append(vertices[index - 1])
 				vertices[index - 1].children.append(vertices[index])
 				index += 1
-	num_fork_vertices = index
 
 	num_prefix_vertices = randrange(num_vertices - index + 1)
 	prev_vertex = vertices[0]
@@ -190,7 +189,6 @@ def generate_graph_with_lookahead(num_vertices, max_num_parents, max_vertex_id, 
 		# to avoid creating a cycle, we have to remove any descendants from the possible parents
 		descendants = get_descendants(vertices[index])
 		probabilities = out_degrees[:index].copy()
-		probabilities[:num_fork_vertices] = 0 # prevent creating any new paths to the goal
 
 		for descendant in descendants:
 			probabilities[descendant.id] = 0
@@ -699,7 +697,7 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 		np.random.set_state(np_random_state)
 		torch.set_rng_state(torch_random_state.cpu())
 
-	loss_func = CrossEntropyLoss(ignore_index=PADDING_TOKEN, reduction='mean')
+	loss_func = BCEWithLogitsLoss(reduction='mean')
 	optimizer = SophiaG((p for p in model.parameters() if p.requires_grad), lr=1.0e-5, weight_decay=0.1)
 
 	log_interval = 1
@@ -875,7 +873,7 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 				if epoch % eval_interval == 0:
 					model.eval()
 					logits, _ = model(input)
-					training_acc = torch.sum(torch.argmax(logits[:,-1,:],dim=1) == output).item() / output.size(0)
+					training_acc = torch.sum(torch.gather(output, 1, torch.argmax(logits[:,-1,:],dim=1).unsqueeze(1))).item() / output.size(0)
 					print("training accuracy: %.2f±%.2f" % (training_acc, binomial_confidence_int(training_acc, output.size(0))))
 					del input, output
 					stdout.flush()
