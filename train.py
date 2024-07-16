@@ -545,7 +545,7 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 	torch.manual_seed(seed_value)
 	np.random.seed(seed_value)
 	PADDING_TOKEN = (max_input_size-5) // 3 + 3
-	BATCH_SIZE = 2 ** 12
+	BATCH_SIZE = 2 ** 10
 	print('Number of available CPUs: {}'.format(len(sched_getaffinity(0))))
 	stdout.flush()
 
@@ -581,7 +581,7 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 		eval_inputs = eval_inputs[:BATCH_SIZE,:]
 		eval_outputs = eval_outputs[:BATCH_SIZE]
 
-	train_filename = 'train{}_v2_inputsize{}_maxlookahead{}_{}seed{}.pkl'.format(dataset_size, max_input_size, max_lookahead, 'padded_' if add_padding else '', seed_value)
+	train_filename = 'train{}_v3_inputsize{}_maxlookahead{}_{}seed{}.pkl'.format(dataset_size, max_input_size, max_lookahead, 'padded_' if add_padding else '', seed_value)
 	if dataset_size != -1:
 		train_path = 'useful_path_results/' + train_filename
 		if isfile(train_path):
@@ -611,7 +611,7 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 		train_loader = DataLoader(train_data, batch_size=BATCH_SIZE, shuffle=True)
 
 	# compute the checkpoint filenames and try to resume from the last one
-	filename = 'useful_path_results/checkpoints_v2_{}layer_inputsize{}_maxlookahead{}_seed{}_train{}'.format(nlayers, max_input_size, max_lookahead, seed_value, dataset_size if dataset_size != -1 else 'streaming')
+	filename = 'useful_path_results/checkpoints_v3_{}layer_inputsize{}_maxlookahead{}_seed{}_train{}'.format(nlayers, max_input_size, max_lookahead, seed_value, dataset_size if dataset_size != -1 else 'streaming')
 	if bidirectional:
 		filename += '_nomask'
 	if not absolute_pos_emb:
@@ -705,16 +705,24 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 
 	if curriculum_mode == 'n':
 		initial_lookahead = max_lookahead
+		initial_max_edges = (max_input_size - 5) // 3
 	elif curriculum_mode == 'y':
 		initial_lookahead = 1
+		initial_max_edges = (max_input_size - 5) // 3
 	elif curriculum_mode == 'layerbylayer':
 		initial_lookahead = 2
+		initial_max_edges = 3
 	elif curriculum_mode == 'layerbylayer2':
 		initial_lookahead = 1
+		initial_max_edges = 3
 	if hasattr(model, 'lookahead'):
 		initial_lookahead = model.lookahead
 	else:
 		model.lookahead = initial_lookahead
+	if hasattr(model, 'max_edges'):
+		initial_max_edges = model.max_edges
+	else:
+		model.max_edges = initial_max_edges
 
 	if dataset_size == -1:
 		# we are doing streaming training, so use an IterableDataset
@@ -736,10 +744,11 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 			return seed_values[index]
 
 		class StreamingDataset(torch.utils.data.IterableDataset):
-			def __init__(self, offset, lookahead):
+			def __init__(self, offset, lookahead, max_edges):
 				super(StreamingDataset).__init__()
 				self.offset = offset
 				self.lookahead = lookahead
+				self.max_edges = max_edges
 
 				self.multiprocessing_manager = multiprocessing.Manager()
 				self.total_collisions = self.multiprocessing_manager.Value(int, 0)
@@ -758,7 +767,7 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 					np.random.seed(new_seed)
 
 					generate_start_time = time.perf_counter()
-					inputs, outputs, valid_outputs, num_collisions = generator.generate_training_set(max_input_size, BATCH_SIZE, self.lookahead, reserved_inputs, dist_from_start, True)
+					inputs, outputs, valid_outputs, num_collisions = generator.generate_training_set(max_input_size, BATCH_SIZE, self.lookahead, self.max_edges, reserved_inputs, dist_from_start, True)
 					if num_collisions != 0:
 						with self.collisions_lock:
 							self.total_collisions.value += num_collisions
@@ -777,7 +786,7 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 				worker_id = worker_info.id
 				return self.process_data(self.offset + worker_id)
 
-		iterable_dataset = StreamingDataset(epoch * STREAMING_BLOCK_SIZE // BATCH_SIZE, model.lookahead)
+		iterable_dataset = StreamingDataset(epoch * STREAMING_BLOCK_SIZE // BATCH_SIZE, model.lookahead, model.max_edges)
 		train_loader = DataLoader(iterable_dataset, batch_size=None, num_workers=NUM_DATA_WORKERS, pin_memory=True, prefetch_factor=8)
 
 	while True:
@@ -876,7 +885,11 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 					#stdout.flush()
 
 					if curriculum_mode != 'n' and model.lookahead < max_lookahead and training_acc > 0.99:
-						if curriculum_mode in ('layerbylayer','layerbylayer2') and model.lookahead + 1 > 2 ** (len(model.transformers) - 1) and len(model.transformers) < nlayers:
+						if model.max_edges < (max_input_size - 5) // 3:
+							# increase the maximum number of edges by 1
+							print("Increasing maximum number of edges to {}".format(model.max_edges + 1))
+							model.max_edges += 1
+						elif curriculum_mode in ('layerbylayer','layerbylayer2') and model.lookahead + 1 > 2 ** (len(model.transformers) - 1) and len(model.transformers) < nlayers:
 							# add another layer to the model
 							print("Increasing number of transformer layers to {}".format(len(model.transformers) + 1))
 							if absolute_pos_emb:
@@ -913,7 +926,7 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 							model.lookahead = min(max_lookahead, 2 ** (len(model.transformers) - 1))
 						else:
 							model.lookahead += 1
-						print("Training accuracy is sufficiently high. Increasing training lookahead to {}.".format(model.lookahead))
+						print("Training accuracy is sufficiently high. Training lookahead is {}.".format(model.lookahead))
 						reinit_data_loader = True
 						break
 
@@ -943,7 +956,7 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 			log_time += log_end_time - log_start_time
 
 		if reinit_data_loader:
-			iterable_dataset = StreamingDataset(epoch * STREAMING_BLOCK_SIZE // BATCH_SIZE, model.lookahead)
+			iterable_dataset = StreamingDataset(epoch * STREAMING_BLOCK_SIZE // BATCH_SIZE, model.lookahead, model.max_edges)
 			train_loader = DataLoader(iterable_dataset, batch_size=None, num_workers=NUM_DATA_WORKERS, pin_memory=True, prefetch_factor=8)
 			reinit_data_loader = False
 
