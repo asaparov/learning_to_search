@@ -27,5 +27,5 @@ reserved_inputs = set()
 start_time = time.perf_counter()
 generator.set_seed(9)
 dataset_size = 2 ** 20
-output = generator.generate_training_set(128, dataset_size, 10, 100, reserved_inputs, -1, False)
+output = generator.generate_training_set(128, dataset_size, 2, 5, reserved_inputs, -1, False)
 print("Throughput: {} examples generated/s".format(dataset_size / (time.perf_counter() - start_time)))

@@ -644,7 +644,6 @@ class TransformerTracer:
 
 		major_last_copies = torch.nonzero(zero_output_logit_list[len(self.model.transformers)-1] < layer_inputs[-1][-1,prediction] - math.sqrt(d) / 6)
 		last_copy_srcs = major_last_copies[:,1]
-		import pdb; pdb.set_trace()
 
 		zero_src_product_list = []
 		zero_dst_product_list = []
@@ -2242,12 +2241,12 @@ if __name__ == "__main__":
 		from analyze import print_graph
 		print_graph(input.cpu().detach().numpy())
 
-	debug_input = input
-	root, forward_edges, important_ops, path_merge_explainable, prediction = tracer.trace2(debug_input, quiet=False)
-	print_computation_graph(root, debug_input)
-	print('### path_merge_explainable: ' + str(path_merge_explainable))
-	print('### after filtering: ' + str(filter_irrelevant_nodes(path_merge_explainable, debug_input, root)))
-	import pdb; pdb.set_trace()
+	#debug_input = input
+	#root, forward_edges, important_ops, path_merge_explainable, prediction = tracer.trace2(debug_input, quiet=False)
+	#print_computation_graph(root, debug_input)
+	#print('### path_merge_explainable: ' + str(path_merge_explainable))
+	#print('### after filtering: ' + str(filter_irrelevant_nodes(path_merge_explainable, debug_input, root)))
+	#import pdb; pdb.set_trace()
 
 	total = 0
 	num_correct_vs_explainable = torch.zeros((2,2))
