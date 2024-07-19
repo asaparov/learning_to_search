@@ -1,2 +1,4 @@
 *.png
+*.sbatch
+*.out
 __pycache__

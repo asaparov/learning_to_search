@@ -457,10 +457,13 @@ py::tuple generate_training_set(const unsigned int max_input_size, const uint64_
 	unsigned int ntokens = (max_input_size - 5) / 3 + 5;
 	size_t input_shape[2]{dataset_size, max_input_size};
 	size_t output_shape[2]{dataset_size, ntokens};
+	size_t label_shape[1]{dataset_size};
 	py::array_t<int64_t, py::array::c_style> inputs(input_shape);
 	py::array_t<float, py::array::c_style> outputs(output_shape);
+	py::array_t<int64_t, py::array::c_style> labels(label_shape);
 	auto inputs_mem = inputs.mutable_unchecked<2>();
 	auto outputs_mem = outputs.mutable_unchecked<2>();
+	auto labels_mem = labels.mutable_unchecked<1>();
 	unsigned int* lookahead_step_histogram = (unsigned int*) alloca(sizeof(unsigned int) * max_input_size);
 	unsigned int* path_length_histogram = (unsigned int*) alloca(sizeof(unsigned int) * max_input_size);
 	for (unsigned int i = 0; i < max_input_size; i++) {
@@ -473,7 +476,6 @@ py::tuple generate_training_set(const unsigned int max_input_size, const uint64_
 	for (unsigned int i = max_lookahead + 1; i < max_input_size; i++)
 		MAX_FREQS_PER_BUCKET[i] = 0.0;
 	MAX_FREQS_PER_BUCKET[max_lookahead] += 0.05;
-	py::list valid_outputs;
 
 	unsigned int* potential_lookaheads = (unsigned int*) alloca(sizeof(unsigned int) * (max_lookahead + 1));
 	unsigned int potential_lookahead_count = 0;
@@ -580,10 +582,7 @@ py::tuple generate_training_set(const unsigned int max_input_size, const uint64_
 					outputs_mem(num_generated, i) = 0.0f;
 				for (unsigned int i = 0; i < useful_steps.length; i++)
 					outputs_mem(num_generated, useful_steps[i]->id) = 1.0f;
-				py::list valid_output;
-				for (node* n : useful_steps)
-					valid_output.append(n->id);
-				valid_outputs.append(valid_output);
+				labels_mem(num_generated) = choice(useful_steps.data, useful_steps.length)->id;
 				num_generated++;
 				if (num_generated == dataset_size)
 					break;
@@ -627,7 +626,7 @@ py::tuple generate_training_set(const unsigned int max_input_size, const uint64_
 		continue;
 	}
 
-	return py::make_tuple(inputs, outputs, valid_outputs, num_collisions);
+	return py::make_tuple(inputs, outputs, labels, num_collisions);
 }
 
 py::tuple generate_reachable_training_set(const unsigned int max_input_size, const uint64_t dataset_size, const unsigned int lookahead, const unsigned int max_edges, const py::object& reserved_inputs, const int distance_from_start, const int reachable_distance, const unsigned int start_vertex_index, const bool exclude_start_vertex)

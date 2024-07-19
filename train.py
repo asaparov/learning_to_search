@@ -540,7 +540,7 @@ def generate_training_set(max_input_size, dataset_size, max_lookahead, reserved_
 
 	return inputs, outputs, valid_outputs, num_collisions
 
-def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidden_dim, bidirectional, absolute_pos_emb, learnable_token_emb, toeplitz_attn, toeplitz_reg, toeplitz_pos_only, add_padding, ablate, pre_ln, curriculum_mode):
+def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidden_dim, bidirectional, absolute_pos_emb, learnable_token_emb, toeplitz_attn, toeplitz_reg, toeplitz_pos_only, add_padding, ablate, pre_ln, curriculum_mode, looped):
 	generator.set_seed(seed_value)
 	seed(seed_value)
 	torch.manual_seed(seed_value)
@@ -593,11 +593,11 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 				inputs, outputs, valid_outputs = pickle.load(f)
 		else:
 			# we haven't generated the training data yet, so generate it here
-			inputs, outputs, valid_outputs, _ = generator.generate_training_set(max_input_size, dataset_size, max_lookahead, reserved_inputs, 1 if add_padding else -1, False)
+			inputs, outputs, labels, _ = generator.generate_training_set(max_input_size, dataset_size, max_lookahead, reserved_inputs, 1 if add_padding else -1, False)
 
 			# save the generated training data to file
 			with open(train_path, 'wb') as f:
-				pickle.dump((inputs, outputs, valid_outputs), f)
+				pickle.dump((inputs, outputs, labels), f)
 
 	if not torch.cuda.is_available():
 		print("ERROR: CUDA device is not available.")
@@ -642,6 +642,8 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 		filename += '_layercurriculum'
 	elif curriculum_mode == 'layerbylayer2':
 		filename += '_layercurriculum2'
+	if looped:
+		filename += '_looped'
 	if isdir(filename):
 		existing_epochs = [int(ckpt[(ckpt.rfind('epoch') + len('epoch')):-len('.pt')]) for ckpt in listdir(filename) if ckpt.startswith('epoch')]
 	else:
@@ -683,7 +685,8 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 				learn_token_emb=learnable_token_emb,
 				ablate=ablation_mode,
 				toeplitz=toeplitz,
-				pre_ln=pre_ln)
+				pre_ln=pre_ln,
+				looped=looped)
 		epoch = 0
 		model.to(device)
 	else:
@@ -697,7 +700,7 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 		np.random.set_state(np_random_state)
 		torch.set_rng_state(torch_random_state.cpu())
 
-	loss_func = BCEWithLogitsLoss(reduction='mean')
+	loss_func = CrossEntropyLoss(ignore_index=PADDING_TOKEN, reduction='mean')
 	optimizer = SophiaG((p for p in model.parameters() if p.requires_grad), lr=1.0e-5, weight_decay=0.1)
 
 	log_interval = 1
@@ -768,7 +771,7 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 					np.random.seed(new_seed)
 
 					generate_start_time = time.perf_counter()
-					inputs, outputs, valid_outputs, num_collisions = generator.generate_training_set(max_input_size, BATCH_SIZE, self.lookahead, self.max_edges, reserved_inputs, dist_from_start, True)
+					inputs, outputs, labels, num_collisions = generator.generate_training_set(max_input_size, BATCH_SIZE, self.lookahead, self.max_edges, reserved_inputs, dist_from_start, True)
 					if num_collisions != 0:
 						with self.collisions_lock:
 							self.total_collisions.value += num_collisions
@@ -779,7 +782,7 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 					#print('[WORKER {}] yield = {}, throughput = {} examples/s, rank = {}'.format(worker_id, current, BATCH_SIZE / (worker_end_time - worker_start_time), multiprocessing.current_process()._identity[0]))
 					#print('[WORKER {}] time to get seed = {}s, time to generate data = {}s'.format(worker_id, generate_start_time - worker_start_time, worker_end_time - generate_start_time))
 					#stdout.flush()
-					yield inputs, outputs
+					yield inputs, outputs, labels
 					current += NUM_DATA_WORKERS
 
 			def __iter__(self):
@@ -804,9 +807,10 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 			model.train()
 			optimizer.zero_grad()
 
-			input, output = batch
+			input, output, label = batch
 			input = input.to(device, non_blocking=True)
 			output = output.to(device, non_blocking=True)
+			label = label.to(device, non_blocking=True)
 
 			#if device.type == 'cuda':
 			#	torch.cuda.synchronize(device)
@@ -814,7 +818,7 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 			transfer_time += train_start_time - batch_start_time
 
 			logits = model(input)
-			loss_val = loss_func(logits[:, -1, :], output)
+			loss_val = loss_func(logits[:, -1, :], label)
 			if toeplitz_reg != 0.0:
 				def compute_toeplitz_regularization(m):
 					regularization = 0.0
@@ -890,7 +894,7 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 							# increase the maximum number of edges by 1
 							print("Increasing maximum number of edges to {}".format(model.max_edges + 1))
 							model.max_edges += 1
-						elif curriculum_mode in ('layerbylayer','layerbylayer2') and model.lookahead + 1 > 2 ** (len(model.transformers) - 2) and len(model.transformers) < nlayers:
+						elif curriculum_mode in ('layerbylayer','layerbylayer2') and model.lookahead + 1 > 2 ** (len(model.transformers) - 2) and len(model.transformers) < nlayers and not model.looped:
 							# add another layer to the model
 							print("Increasing number of transformer layers to {}".format(len(model.transformers) + 1))
 							if absolute_pos_emb:
@@ -990,6 +994,7 @@ if __name__ == "__main__":
 	parser.add_argument("--ablate", type=str, default="none", choices=["none", "attn_linear", "attn_linear_projv"])
 	parser.add_argument("--preLN", type=parse_bool_arg, required=True, metavar="'y/n'")
 	parser.add_argument("--curriculum", type=str, required=True, choices=["y", "n", "layerbylayer", "layerbylayer2"])
+	parser.add_argument("--looped", type=parse_bool_arg, default=False)
 	args = parser.parse_args()
 
 	train(
@@ -1008,4 +1013,5 @@ if __name__ == "__main__":
 		add_padding=args.add_padding,
 		ablate=args.ablate,
 		pre_ln=args.preLN,
-		curriculum_mode=args.curriculum)
+		curriculum_mode=args.curriculum,
+		looped=args.looped)

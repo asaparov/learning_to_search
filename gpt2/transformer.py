@@ -97,11 +97,13 @@ class Transformer(nn.Module):
                  learn_token_emb: bool = False,
                  ablate: AblationMode = AblationMode.ABLATE_ATTN_LINEAR_PROJV,
                  toeplitz: ToeplitzMode = ToeplitzMode.NONE,
-                 pre_ln: bool = True):
+                 pre_ln: bool = True,
+                 looped: bool = False):
         super().__init__()
         self.bidirectional = bidirectional
         self.pad_masking = PadMasking(pad_idx)
         self.future_masking = FutureMasking()
+        self.looped = looped
 
         #self.positional_embedding = PositionalEmbedding(seq_len, dims)
         if learn_token_emb:
@@ -173,12 +175,32 @@ class Transformer(nn.Module):
 
         # Apply transformer layers sequentially.
         present = []
-        for i, transformer in enumerate(self.transformers):
-            x = transformer(x, past[i] if past is not None else None, mask)
-
+        if self.looped:
+            x = self.transformers[0](x, past[0] if past is not None else None, mask)
             if not self.training:
                 present.append(x[1])
                 x = x[0]
+            for i in range(1, len(self.transformers)-2):
+                x = self.transformers[1](x, past[i] if past is not None else None, mask)
+                if not self.training:
+                    present.append(x[1])
+                    x = x[0]
+            x = self.transformers[-2](x, past[len(self.transformers)-2] if past is not None else None, mask)
+            if not self.training:
+                present.append(x[1])
+                x = x[0]
+            x = self.transformers[-1](x, past[len(self.transformers)-2] if past is not None else None, mask)
+            if not self.training:
+                present.append(x[1])
+                x = x[0]
+
+        else:
+            for i, transformer in enumerate(self.transformers):
+                x = transformer(x, past[i] if past is not None else None, mask)
+
+                if not self.training:
+                    present.append(x[1])
+                    x = x[0]
 
         if self.ln_head:
             x = self.ln_head(x)
