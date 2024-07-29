@@ -216,21 +216,7 @@ def generate_graph_with_lookahead(num_vertices, max_num_parents, max_vertex_id, 
 	shuffle(vertices)
 	return vertices, start, end
 
-def generate_example(num_vertices, max_num_parents, max_vertex_id, get_shortest_paths=True, lookahead=None, num_paths=None):
-	if lookahead == None:
-		graph = generate_graph(num_vertices, max_num_parents, max_vertex_id)
-
-		# randomly select two vertices
-		start = graph[randrange(len(graph) - 1)]
-		while True:
-			end = graph[randrange(len(graph) - 1)]
-			if end != start:
-				break
-	else:
-		graph, start, end = generate_graph_with_lookahead(num_vertices, max_num_parents, max_vertex_id, lookahead, num_paths)
-		if graph == None:
-			return None, None, None, None
-
+def compute_paths(graph, start, end, get_shortest_paths):
 	# find the shortest paths from `start` to `end`
 	queue = [(start, 0)]
 	reverse_pointers = {}
@@ -256,7 +242,7 @@ def generate_example(num_vertices, max_num_parents, max_vertex_id, get_shortest_
 				queue.append((child, distance + 1))
 
 	if end not in reverse_pointers:
-		return None, None, None, None
+		return None
 
 	forward_pointers = {}
 	queue = [end]
@@ -284,15 +270,108 @@ def generate_example(num_vertices, max_num_parents, max_vertex_id, get_shortest_
 		if partial_path[-1] == end:
 			paths.append(partial_path)
 			if len(paths) > 64:
-				return None, None, None, None
+				return None
 			continue
 		for next in forward_pointers[partial_path[-1]]:
 			queue.append(partial_path + [next])
 
+	return paths
+
+def generate_example(num_vertices, max_num_parents, max_vertex_id, get_shortest_paths=True, lookahead=None, num_paths=None):
+	if lookahead == None:
+		graph = generate_graph(num_vertices, max_num_parents, max_vertex_id)
+
+		# randomly select two vertices
+		start = graph[randrange(len(graph) - 1)]
+		while True:
+			end = graph[randrange(len(graph) - 1)]
+			if end != start:
+				break
+	else:
+		graph, start, end = generate_graph_with_lookahead(num_vertices, max_num_parents, max_vertex_id, lookahead, num_paths)
+		if graph == None:
+			return None, None, None, None
+
+	paths = compute_paths(graph, start, end, get_shortest_paths)
+	if paths == None:
+		return None, None, None, None
+
 	return (graph, start, end, paths)
+
+def generate_star_graph(num_spokes, spoke_length, max_vertex_id):
+	num_vertices = 1 + num_spokes * spoke_length
+
+	vertices = []
+	for i in range(num_vertices):
+		vertices.append(Node(i))
+
+	vertices[1].parents.append(vertices[0])
+	vertices[0].children.append(vertices[1])
+	for i in range(1, spoke_length):
+		vertices[1 + i].parents.append(vertices[i])
+		vertices[i].children.append(vertices[1 + i])
+	if spoke_length == 0:
+		index = 2
+	else:
+		index = 1 + spoke_length
+		for j in range(num_spokes - 1):
+			vertices[index].parents.append(vertices[0])
+			vertices[0].children.append(vertices[index])
+			index += 1
+			for i in range(1, spoke_length):
+				vertices[index].parents.append(vertices[index - 1])
+				vertices[index - 1].children.append(vertices[index])
+				index += 1
+
+	start = vertices[0]
+	end = vertices[max(1, spoke_length)]
+
+	# remove any correlation between graph topology and vertex IDs by shuffling the vertices
+	new_indices = list(range(max_vertex_id + 1))
+	shuffle(new_indices)
+	src_index = 0
+	for i in range(len(vertices)):
+		if new_indices[src_index] in RESERVED_INDICES:
+			src_index += 1
+		vertices[i].id = new_indices[src_index]
+		src_index += 1
+	shuffle(vertices)
+	return vertices, start, end
 
 def binomial_confidence_int(p, n):
 	return 1.96 * np.sqrt(p * (1.0 - p) / n)
+
+def generate_star_graph_data(max_input_size, num_spokes, spoke_length, num_samples=1000):
+	QUERY_PREFIX_TOKEN = (max_input_size-5) // 3 + 4
+	PADDING_TOKEN = (max_input_size-5) // 3 + 3
+	EDGE_PREFIX_TOKEN = (max_input_size-5) // 3 + 2
+	PATH_PREFIX_TOKEN = (max_input_size-5) // 3 + 1
+
+	total_predictions = 0
+	inputs = np.empty((num_samples, max_input_size), dtype=np.int64)
+	outputs = np.empty(num_samples, dtype=np.int64)
+	while total_predictions < num_samples:
+		g, start, end = generate_star_graph(num_spokes, spoke_length, (max_input_size - 5) // 3)
+
+		paths = compute_paths(g, start, end, get_shortest_paths=True)
+		if paths == None:
+			continue
+
+		prefix = []
+		for vertex in g:
+			for child in vertex.children:
+				prefix.extend([EDGE_PREFIX_TOKEN, vertex.id, child.id])
+		prefix.extend([QUERY_PREFIX_TOKEN, start.id, end.id, PATH_PREFIX_TOKEN])
+
+		prefix.append(start.id)
+		input = [PADDING_TOKEN] * (max_input_size - len(prefix)) + prefix
+		inputs[total_predictions,:] = input
+		outputs[total_predictions] = paths[0][1].id
+		total_predictions += 1
+		if total_predictions == num_samples:
+			break
+
+	return inputs, outputs
 
 def generate_eval_data(max_input_size, min_path_length=2, distance_from_start=-1, distance_from_end=-1, lookahead_steps=None, num_paths_at_fork=None, num_samples=1000):
 	QUERY_PREFIX_TOKEN = (max_input_size-5) // 3 + 4
@@ -403,14 +482,19 @@ def evaluate_model(model, inputs, outputs):
 	outputs = outputs.to(device)
 	max_input_size = inputs.shape[1]
 
-	model.eval()
-	loss_func = CrossEntropyLoss(reduction='mean')
+	if outputs.dim() == 2:
+		loss_func = BCEWithLogitsLoss(reduction='mean')
+	else:
+		loss_func = CrossEntropyLoss(reduction='mean')
 	logits, _ = model(inputs)
 	loss = loss_func(logits[:, -1, :], outputs).item()
 
 	predictions = torch.argmax(logits[:, -1, :], 1)
-	acc = sum(predictions == outputs) / len(predictions)
-	return acc.item(), loss, predictions
+	if outputs.dim() == 2:
+		acc = torch.sum(torch.gather(outputs, 1, torch.argmax(logits[:,-1,:],dim=1).unsqueeze(1))).item() / outputs.size(0)
+	else:
+		acc = sum(predictions == outputs).item() / len(predictions)
+	return acc, loss, predictions
 
 class DummyDataset(Dataset):
 	def __init__(self, inputs, outputs, device, x_type=LongTensor, y_type=LongTensor):
@@ -540,7 +624,7 @@ def generate_training_set(max_input_size, dataset_size, max_lookahead, reserved_
 
 	return inputs, outputs, valid_outputs, num_collisions
 
-def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidden_dim, bidirectional, absolute_pos_emb, learnable_token_emb, toeplitz_attn, toeplitz_reg, toeplitz_pos_only, add_padding, ablate, pre_ln, curriculum_mode, looped):
+def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidden_dim, bidirectional, absolute_pos_emb, learnable_token_emb, toeplitz_attn, toeplitz_reg, toeplitz_pos_only, add_padding, ablate, pre_ln, curriculum_mode, looped, dfs):
 	generator.set_seed(seed_value)
 	seed(seed_value)
 	torch.manual_seed(seed_value)
@@ -560,31 +644,45 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 	np_random_state = np.random.get_state()
 	torch_random_state = torch.get_rng_state()
 
-	max_test_lookahead = ((max_input_size - 5) // 3 - 1) // 2
 	reserved_inputs = set()
-	dist_from_start = 1 if add_padding else -1
-	for lookahead in list(range(1, max_test_lookahead + 1)) + [None]:
-		gen_eval_start_time = time.perf_counter()
-		setstate(random_state)
-		np.random.set_state(np_random_state)
-		torch.set_rng_state(torch_random_state)
+	NUM_TEST_SAMPLES = 10000
+	if dfs:
+		# TODO: i think we could theoretically generate examples with `backtrack_distance = (max_input_size - 4) // 4 - 1`, but the rejection rate in the current rejection sampling method is too high to feasibly generate such samples
+		max_backtrack_distance = (max_input_size - 4) // 4 - 2
+		for backtrack_distance in [-1] + list(range(1, max_backtrack_distance + 1)):
+			generator.set_seed(seed_value)
+			print('Reserving OOD test data for lookahead = {}'.format(lookahead))
+			stdout.flush();
+			inputs,outputs,_,_ = generator.generate_dfs_training_set(max_input_size, NUM_TEST_SAMPLES, reserved_inputs, backtrack_distance, True)
+			for i in range(inputs.shape[0]):
+				reserved_inputs.add(tuple([x for x in inputs[i,:] if x != PADDING_TOKEN]))
+			if backtrack_distance == -1:
+				eval_inputs, eval_outputs = inputs, outputs
+	else:
+		max_test_lookahead = ((max_input_size - 5) // 3 - 1) // 2
+		dist_from_start = 1 if add_padding else -1
+		for lookahead in list(range(1, max_test_lookahead + 1)) + [None]:
+			gen_eval_start_time = time.perf_counter()
+			setstate(random_state)
+			np.random.set_state(np_random_state)
+			torch.set_rng_state(torch_random_state)
 
-		print('Reserving OOD test data for lookahead = {}'.format(lookahead))
-		stdout.flush()
-		NUM_TEST_SAMPLES = 10000
-		inputs,outputs = generate_eval_data(max_input_size, min_path_length=2, distance_from_start=dist_from_start, distance_from_end=-1, lookahead_steps=lookahead, num_paths_at_fork=None, num_samples=NUM_TEST_SAMPLES)
-		print('Done. Throughput: {} examples/s'.format(NUM_TEST_SAMPLES / (time.perf_counter() - gen_eval_start_time)))
-		for i in range(inputs.shape[0]):
-			reserved_inputs.add(tuple([x for x in inputs[i,:] if x != PADDING_TOKEN]))
-		if lookahead == None:
-			eval_inputs, eval_outputs = inputs, outputs
+			print('Reserving OOD test data for lookahead = {}'.format(lookahead))
+			stdout.flush()
+			inputs,outputs = generate_eval_data(max_input_size, min_path_length=2, distance_from_start=dist_from_start, distance_from_end=-1, lookahead_steps=lookahead, num_paths_at_fork=None, num_samples=NUM_TEST_SAMPLES)
+			print('Done. Throughput: {} examples/s'.format(NUM_TEST_SAMPLES / (time.perf_counter() - gen_eval_start_time)))
+			for i in range(inputs.shape[0]):
+				reserved_inputs.add(tuple([x for x in inputs[i,:] if x != PADDING_TOKEN]))
+			if lookahead == None:
+				eval_inputs, eval_outputs = inputs, outputs
 	if BATCH_SIZE < eval_inputs.shape[0]:
-		eval_inputs = eval_inputs[:BATCH_SIZE,:]
+		eval_inputs = eval_inputs[:BATCH_SIZE]
 		eval_outputs = eval_outputs[:BATCH_SIZE]
 
 	train_filename = 'train{}_v3_inputsize{}_maxlookahead{}_{}seed{}.pkl'.format(dataset_size, max_input_size, max_lookahead, 'padded_' if add_padding else '', seed_value)
+	prefix = 'dfs_results/' if dfs else 'useful_path_results/'
 	if dataset_size != -1:
-		train_path = 'useful_path_results/' + train_filename
+		train_path = prefix + train_filename
 		if isfile(train_path):
 			# check if we've already generated the training data
 			print("Loading training data from '{}'...".format(train_path))
@@ -612,7 +710,7 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 		train_loader = DataLoader(train_data, batch_size=BATCH_SIZE, shuffle=True)
 
 	# compute the checkpoint filenames and try to resume from the last one
-	filename = 'useful_path_results/checkpoints_v3_{}layer_inputsize{}_maxlookahead{}_seed{}_train{}'.format(nlayers, max_input_size, max_lookahead, seed_value, dataset_size if dataset_size != -1 else 'streaming')
+	filename = prefix + 'checkpoints_v3_{}layer_inputsize{}_maxlookahead{}_seed{}_train{}'.format(nlayers, max_input_size, max_lookahead, seed_value, dataset_size if dataset_size != -1 else 'streaming')
 	if bidirectional:
 		filename += '_nomask'
 	if not absolute_pos_emb:
@@ -644,6 +742,8 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 		filename += '_layercurriculum2'
 	if looped:
 		filename += '_looped'
+	if dfs:
+		filename += '_dfs'
 	if isdir(filename):
 		existing_epochs = [int(ckpt[(ckpt.rfind('epoch') + len('epoch')):-len('.pt')]) for ckpt in listdir(filename) if ckpt.startswith('epoch')]
 	else:
@@ -771,7 +871,10 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 					np.random.seed(new_seed)
 
 					generate_start_time = time.perf_counter()
-					inputs, outputs, labels, num_collisions = generator.generate_training_set(max_input_size, BATCH_SIZE, self.lookahead, self.max_edges, reserved_inputs, dist_from_start, True)
+					if dfs:
+						inputs, outputs, labels, num_collisions = generator.generate_dfs_training_set(max_input_size, BATCH_SIZE, reserved_inputs, -1, True)
+					else:
+						inputs, outputs, labels, num_collisions = generator.generate_training_set(max_input_size, BATCH_SIZE, self.lookahead, self.max_edges, reserved_inputs, dist_from_start, True)
 					if num_collisions != 0:
 						with self.collisions_lock:
 							self.total_collisions.value += num_collisions
@@ -995,6 +1098,7 @@ if __name__ == "__main__":
 	parser.add_argument("--preLN", type=parse_bool_arg, required=True, metavar="'y/n'")
 	parser.add_argument("--curriculum", type=str, required=True, choices=["y", "n", "layerbylayer", "layerbylayer2"])
 	parser.add_argument("--looped", type=parse_bool_arg, default=False)
+	parser.add_argument("--dfs", type=parse_bool_arg, default=False)
 	args = parser.parse_args()
 
 	train(
@@ -1014,4 +1118,5 @@ if __name__ == "__main__":
 		ablate=args.ablate,
 		pre_ln=args.preLN,
 		curriculum_mode=args.curriculum,
-		looped=args.looped)
+		looped=args.looped,
+		dfs=args.dfs)

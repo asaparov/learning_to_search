@@ -179,8 +179,8 @@ bool generate_graph_with_lookahead(array<node>& vertices, node*& start, node*& e
 		return false;
 	}
 	for (unsigned int i = 0; i < num_vertices; i++) {
-		in_degrees[i] = ALPHA + vertices[i].parents.length;
-		out_degrees[i] = ALPHA + vertices[i].children.length;
+		in_degrees[i] = vertices[i].parents.length;
+		out_degrees[i] = vertices[i].children.length;
 	}
 	for (unsigned int i = index; i < num_vertices; i++) {
 		/* sample the number of child and parent vertices */
@@ -193,7 +193,7 @@ bool generate_graph_with_lookahead(array<node>& vertices, node*& start, node*& e
 		array<float> probabilities(index);
 		float total_probability = 0.0f;
 		for (unsigned int j = 0; j < index; j++) {
-			probabilities[j] = in_degrees[j];
+			probabilities[j] = ALPHA + in_degrees[j];
 			total_probability += probabilities[j];
 		}
 		probabilities.length = index;
@@ -215,7 +215,7 @@ bool generate_graph_with_lookahead(array<node>& vertices, node*& start, node*& e
 		/* sample the parents of this new node */
 		total_probability = 0.0f;
 		for (unsigned int j = 0; j < index; j++) {
-			probabilities[j] = out_degrees[j];
+			probabilities[j] = ALPHA + out_degrees[j];
 			total_probability += probabilities[j];
 		}
 
@@ -783,8 +783,249 @@ py::tuple generate_reachable_training_set(const unsigned int max_input_size, con
 	return py::make_tuple(inputs, outputs, num_collisions);
 }
 
+bool generate_dfs_example(array<node>& vertices, const node*& start, const node*& end, array<const node*>& path, unsigned int num_vertices, unsigned int max_num_parents, unsigned int max_vertex_id)
+{
+	if (!vertices.ensure_capacity(num_vertices))
+		return false;
+	for (unsigned int i = 0; i < num_vertices; i++)
+		if (!init(vertices[i], i)) return false;
+	vertices.length = num_vertices;
+
+	/* sample some parent/ancestor vertices */
+	constexpr float ALPHA = 1.0f;
+	unsigned int* out_degrees = (unsigned int*) calloc(num_vertices, sizeof(unsigned int));
+	if (out_degrees == nullptr)
+		return false;
+	for (unsigned int i = 1; i < num_vertices; i++) {
+		/* sample the number of child and parent vertices */
+		unsigned int num_parents = randrange(1, max_num_parents);
+		num_parents = std::min(num_parents, i);
+
+		/* sample the parents of this new node */
+		float total_probability = 0.0f;
+		array<float> probabilities(i);
+		for (unsigned int j = 0; j < i; j++) {
+			probabilities[j] = ALPHA + out_degrees[j];
+			total_probability += probabilities[j];
+		}
+		probabilities.length = i;
+
+		array<unsigned int> sampled_parents(std::max(1u, num_parents));
+		for (unsigned int j = 0; j < num_parents; j++) {
+			unsigned int u = sample_categorical(probabilities.data, total_probability, probabilities.length);
+			sampled_parents.add(u);
+			total_probability -= probabilities[u];
+			probabilities[u] = 0.0f;
+		}
+
+		for (unsigned int parent_id : sampled_parents) {
+			vertices[parent_id].children.add(&vertices[i]);
+			vertices[i].parents.add(&vertices[parent_id]);
+			out_degrees[parent_id] += 1;
+		}
+	}
+	free(out_degrees);
+
+	/* remove any correlation between graph topology and vertex IDs by shuffling the vertices */
+	unsigned int* new_indices = (unsigned int*) alloca(sizeof(unsigned int) * (max_vertex_id + 1));
+	for (unsigned int i = 0; i < max_vertex_id + 1; i++) new_indices[i] = i;
+	shuffle(new_indices, max_vertex_id + 1);
+	unsigned int src_index = 0;
+	for (unsigned int i = 0; i < vertices.length; i++) {
+		bool is_reserved = false;
+		for (unsigned int j = 0; j < array_length(RESERVED_INDICES); j++) {
+			if (new_indices[src_index] == RESERVED_INDICES[j]) {
+				is_reserved = true;
+				break;
+			}
+		}
+		if (is_reserved)
+			src_index++;
+		vertices[i].id = new_indices[src_index];
+		src_index++;
+	}
+
+	while (true) {
+		/* select a start and goal vertex uniformly at random */
+		start = &choice(vertices.data, vertices.length);
+		end = &choice(vertices.data, vertices.length);
+		if (start == end) continue;
+
+		/* perform DFS from the start vertex */
+		array<const node*> queue(8);
+		queue[0] = start;
+		queue.length = 1;
+		bool found_goal = false;
+		while (queue.length != 0) {
+			const node* current = queue.pop();
+			path.add(current);
+
+			if (current->children.contains(end)) {
+				found_goal = true;
+				path.add(end);
+				break;
+			}
+
+			for (const node* child : current->children) {
+				if (path.contains(child)) continue;
+				queue.add(child);
+			}
+		}
+
+		/* check if the goal vertex is reachable from the start vertex */
+		if (found_goal)
+			break;
+		path.clear();
+	}
+
+	return true;
+}
+
+py::tuple generate_dfs_training_set(const unsigned int max_input_size, const uint64_t dataset_size, const py::object& reserved_inputs, const int requested_backtrack, const bool quiet=false)
+{
+	const unsigned int QUERY_PREFIX_TOKEN = (max_input_size-5) / 3 + 4;
+	const unsigned int PADDING_TOKEN = (max_input_size-5) / 3 + 3;
+	const unsigned int EDGE_PREFIX_TOKEN = (max_input_size-5) / 3 + 2;
+	const unsigned int PATH_PREFIX_TOKEN = (max_input_size-5) / 3 + 1;
+
+	unsigned int longest_path_length = (max_input_size - 4) / 4;
+
+	unsigned int num_generated = 0;
+	unsigned int num_collisions = 0;
+	unsigned int ntokens = (max_input_size - 5) / 3 + 5;
+	size_t input_shape[2]{dataset_size, max_input_size};
+	size_t output_shape[2]{dataset_size, ntokens};
+	size_t label_shape[1]{dataset_size};
+	py::array_t<int64_t, py::array::c_style> inputs(input_shape);
+	py::array_t<float, py::array::c_style> outputs(output_shape);
+	py::array_t<int64_t, py::array::c_style> labels(label_shape);
+	auto inputs_mem = inputs.mutable_unchecked<2>();
+	auto outputs_mem = outputs.mutable_unchecked<2>();
+	auto labels_mem = labels.mutable_unchecked<1>();
+
+	unsigned int* backtrack_distance_histogram = (unsigned int*) alloca(sizeof(unsigned int) * max_input_size);
+	for (unsigned int i = 0; i < max_input_size; i++)
+		backtrack_distance_histogram[i] = 0;
+
+	array<const node*> path(32);
+	while (num_generated < dataset_size) {
+		array<node> g(32);
+		const node* start; const node* end;
+		while (true) {
+			unsigned int num_vertices = std::max(2u, randrange(longest_path_length + 1));
+			if (requested_backtrack != -1)
+				num_vertices = std::max((unsigned int) requested_backtrack + 3, num_vertices);
+			if (!generate_dfs_example(g, start, end, path, num_vertices, max_input_size / 24 + 1, (max_input_size - 5) / 3)) {
+				for (node& n : g) core::free(n);
+				g.length = 0; path.length = 0;
+				continue;
+			}
+			break;
+		}
+
+		array<pair<unsigned int, unsigned int>> edges(8);
+		for (node& vertex : g)
+			for (node* child : vertex.children)
+				edges.add(make_pair(vertex.id, child->id));
+		if (edges.length > longest_path_length) {
+			for (node& n : g) core::free(n);
+			g.length = 0; path.length = 0;
+			continue;
+		}
+		shuffle(edges);
+
+		array<unsigned int> prefix(max_input_size);
+		for (auto& entry : edges) {
+			prefix[prefix.length++] = EDGE_PREFIX_TOKEN;
+			prefix[prefix.length++] = entry.key;
+			prefix[prefix.length++] = entry.value;
+		}
+		prefix[prefix.length++] = QUERY_PREFIX_TOKEN;
+		prefix[prefix.length++] = start->id;
+		prefix[prefix.length++] = end->id;
+		prefix[prefix.length++] = PATH_PREFIX_TOKEN;
+
+		/* randomly select a vertex in the DFS trace */
+		unsigned int index = randrange(path.length - 1);
+		path.length = index + 1;
+
+		array<const node*> unvisited(4);
+		unsigned int backtrack_distance = max_input_size - 1;
+		for (unsigned int j = index + 1; j > 0; j--) {
+			for (const node* child : path[j-1]->children) {
+				if (!path.contains(child))
+					unvisited.add(child);
+			}
+			if (unvisited.length != 0) {
+				backtrack_distance = index + 1 - j;
+				break;
+			}
+		}
+
+		if (requested_backtrack != -1 && (unsigned int) requested_backtrack != backtrack_distance) {
+			for (node& n : g) core::free(n);
+			g.length = 0; path.length = 0;
+			continue;
+		}
+
+		while (prefix.length < max_input_size - path.length)
+			prefix[prefix.length++] = PATH_PREFIX_TOKEN;
+		for (unsigned int j = 0; j < path.length; j++)
+			prefix[prefix.length++] = path[j]->id;
+
+		/* check if this input is reserved */
+		py::object contains = reserved_inputs.attr("__contains__");
+		py::tuple example_tuple(prefix.length);
+		for (unsigned int i = 0; i < prefix.length; i++)
+			example_tuple[i] = prefix[i];
+		if (contains(example_tuple).is(py_true)) {
+			for (node& n : g) core::free(n);
+			g.length = 0; path.length = 0;
+			num_collisions += 1;
+			continue;
+		}
+
+		backtrack_distance_histogram[backtrack_distance]++;
+
+		for (unsigned int i = 0; i < max_input_size - prefix.length; i++)
+			inputs_mem(num_generated, i) = PADDING_TOKEN;
+		for (unsigned int i = 0; i < prefix.length; i++)
+			inputs_mem(num_generated, max_input_size - prefix.length + i) = prefix[i];
+		for (unsigned int i = 0; i < ntokens; i++)
+			outputs_mem(num_generated, i) = 0.0f;
+		for (unsigned int i = 0; i < unvisited.length; i++)
+			outputs_mem(num_generated, unvisited[i]->id) = 1.0f;
+		labels_mem(num_generated) = path[index+1]->id;
+		num_generated++;
+
+		if (!quiet && num_generated > 0 && (num_generated % 1000 == 0 || num_generated >= dataset_size)) {
+			printf("%d examples generated.\n", num_generated);
+			fflush(stdout);
+
+			printf("Backtrack distance histogram:\n");
+			printf("[");
+			bool first = true;
+			for (unsigned int i = 0; i < max_input_size; i++) {
+				if (backtrack_distance_histogram[i] == 0)
+					continue;
+				if (!first) printf(", ");
+				printf("%d:%.2f", i, (float) backtrack_distance_histogram[i] / num_generated + 1e-9);
+				first = false;
+			}
+			printf("]\n");
+		}
+
+		for (node& n : g) core::free(n);
+		g.length = 0; path.length = 0;
+		continue;
+	}
+
+	return py::make_tuple(inputs, outputs, labels, num_collisions);
+}
+
 PYBIND11_MODULE(generator, m) {
 	m.def("generate_training_set", &generate_training_set);
 	m.def("generate_reachable_training_set", &generate_reachable_training_set);
+	m.def("generate_dfs_training_set", &generate_dfs_training_set);
 	m.def("set_seed", &core::set_seed);
 }
