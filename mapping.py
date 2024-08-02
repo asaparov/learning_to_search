@@ -20,10 +20,23 @@ NOUNS = [
     ]
 
 
+CONNECTORS = {
+    "is a": 'singular',
+    "has": 'plural',
+    "wants": 'plural',
+    "likes": 'plural',
+    "cares for a": "singular",
+    "is friends with a": "singular",
+}
+
 def generate_atoms(atom_count):
     atoms = set()
     while len(atoms)<atom_count:
-        atoms.add(f"{random.choice(NAMES)} is a {random.choice(NOUNS)}.")
+        connector = random.choice(list(CONNECTORS.keys()))
+        predicate = random.choice(NOUNS)
+        if CONNECTORS[connector] == 'plural':
+            predicate += 'es'
+        atoms.add(f"{random.choice(NAMES)} {connector} {predicate}.")
 	# create a map from indices to atoms
     # atom_map = {i:atom for i, atom in enumerate(atoms)}
     atoms = list(atoms)
@@ -56,30 +69,39 @@ def map_tokens_to_natural_language(tokens, output, max_input_size, verbose=False
     out_tokens = []
     i = 0
     try:
+        out_tokens.append(["Statements:"])
         while i < len(tokens):
             if tokens[i] == QUERY_PREFIX_TOKEN:
-                out_tokens.append(["<|query_prefix|>"])
-                out_tokens.append([token_to_atom[tokens[i+1]]])
+                out_tokens.append(["\nQuery:"])
+                out_tokens.append(['Given'])
+                out_tokens.append([token_to_atom[tokens[i+1]][:-1] + ','])
+                out_tokens.append(['prove'])
                 out_tokens.append([token_to_atom[tokens[i+2]]])
                 i+=2
             elif tokens[i] == EDGE_PREFIX_TOKEN:
-                out_tokens.append(["<|edge_prefix|>"])
+                # out_tokens.append(["<|edge_prefix|>"])
                 edge = generate_edge(tokens[i+1], tokens[i+2], token_to_atom)
                 out_tokens.extend(edge)
                 i += 2
             elif tokens[i] == PATH_PREFIX_TOKEN:
-                out_tokens.append(["<|path_prefix|>"])
+                out_tokens.append(["\nPrefix:"])
                 while(i+1<len(tokens)):
                     if tokens[i+1] == PATH_PREFIX_TOKEN:
-                        out_tokens.append(["<|path_prefix|>"])
+                        # out_tokens.append(["\nPath:"])
+                        pass
                     else:
                         atom = token_to_atom[tokens[i+1]]
                         out_tokens.append([atom])
                     i+=1
             elif tokens[i] == PADDING_TOKEN:
-                out_tokens.append(["<|padding|>"])
+                # out_tokens.append(["<|padding|>"])
+                pass
             i += 1
     except Exception as e:
+        import traceback
+        print("Stack trace:")
+        print(traceback.format_exc())
+        print(f"Error mapping tokens to natural language: {e}")
         import pdb; pdb.set_trace()
 
     if verbose:
@@ -89,7 +111,19 @@ def map_tokens_to_natural_language(tokens, output, max_input_size, verbose=False
     flattened_out_tokens = [item for sublist in out_tokens for item in sublist]
     return flattened_out_tokens, token_to_atom[int(output)]
 
-import argparse
+
+VOCAB = NAMES + \
+            NOUNS + \
+            ['a', 'is', 'has', 'wants', 'likes', 'cares', 'for', 'friends', 'with', 'then', 'Given' ] + \
+            ['.', ' ', ',', '\n', ":"] +\
+            ['Query', 'Prefix', 'Statements']
+
+VOCAB_MAP = {token: i for i, token in enumerate(VOCAB)}
+
+def tokenize(input):
+    return [VOCAB_MAP[token] for token in input]
+
+
 parser = argparse.ArgumentParser(description="Generate training set using DFS")
 parser.add_argument("--seed", type=int, default=9, help="Random seed for generator")
 parser.add_argument("--dataset_size", type=int, default=3, help="Size of the dataset to generate")
@@ -115,12 +149,16 @@ for i, (data, output_tokens) in enumerate(zip(generated_data[0], generated_data[
     print(f"Example {i}:")
     tokens, output = map_tokens_to_natural_language(data, output_tokens, args.input_size)
     # map
-    print("Input tokens:")
-    for a,b in zip(data, tokens):
-        print(f"{a} -> {b}")
+    # print("Input tokens:")
+    # for a,b in zip(data, tokens):
+    #     print(f"{a} -> {b}")
 
-    print("Output tokens:")
-    for a,b in zip([output_tokens], [output]):
-        print(f"{a} -> {b}")
+    # print("Output tokens:")
+    # for a,b in zip([output_tokens], [output]):
+    #     print(f"{a} -> {b}")
 
-    print("==================")
+    # print("==================")
+
+    print(' '.join(tokens))
+    print(output)
+    print('==================')
