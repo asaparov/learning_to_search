@@ -695,7 +695,7 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 		ntoken = (max_input_size-5) // 3 + 5
 	
 	
-	BATCH_SIZE = 2**10
+	BATCH_SIZE = 1024
 	print('Number of available CPUs: {}'.format(len(sched_getaffinity(0))))
 	stdout.flush()
 
@@ -755,7 +755,8 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 		# eval_num_collisions = eval_num_collisions[:BATCH_SIZE]
 
 	train_filename = 'train{}_v3_inputsize{}_maxlookahead{}_{}seed{}.pkl'.format(dataset_size, max_input_size, max_lookahead, 'padded_' if add_padding else '', seed_value)
-	prefix = 'dfs_results/' if dfs else 'useful_path_results/'
+	prefix = 'dfs_results/' if dfs else 'useful_path_results_nl/'
+	makedirs(prefix, exist_ok=True)
 	if dataset_size != -1:
 		train_path = prefix + train_filename
 		if isfile(train_path):
@@ -950,8 +951,8 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 					else:
 						inputs, outputs, labels, num_collisions = generator.generate_training_set(max_input_size, BATCH_SIZE, self.lookahead, self.max_edges, reserved_inputs, dist_from_start, nl, True)
 
-						if nl:
-							inputs, outputs, labels = map_tokens_to_natural_language_batched(tokenizer, inputs, labels, max_input_size, TRANSFORMER_LENGTH)
+						# if nl:
+							# inputs, outputs, labels = map_tokens_to_natural_language_batched(tokenizer, inputs, labels, max_input_size, TRANSFORMER_LENGTH)
 					if num_collisions != 0:
 						with self.collisions_lock:
 							self.total_collisions.value += num_collisions
@@ -980,9 +981,13 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 		log_time = 0.0
 		epoch_loss = 0.0
 		num_batches = 0
-		effective_dataset_size = 8  # (STREAMING_BLOCK_SIZE if dataset_size == -1 else dataset_size)
+		effective_dataset_size = (STREAMING_BLOCK_SIZE if dataset_size == -1 else dataset_size)
 		reinit_data_loader = False
 		for batch in (train_loader if dataset_size == -1 else cycle(train_loader)):
+
+			num_batches += 1
+			print("batch = {}".format(num_batches))
+			continue
 
 			batch_start_time = time.perf_counter()
 			model.train()
@@ -1002,6 +1007,7 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 			logits = model(input)
 			if nl: 
 				loss_val = loss_func(logits[:, :-1, :].reshape(-1, logits.shape[-1]), label[:,1:].reshape(-1))
+				# loss_val = loss_func(logits[:, :-1].view(-1, logits.shape[-1]), label[:, 1:].view(-1))
 			else:
 				loss_val = loss_func(logits[:, -1, :], label)
 

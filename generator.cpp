@@ -2,6 +2,7 @@
 #include <pybind11/numpy.h>
 #include <core/array.h>
 #include <core/random.h>
+#include <string>
 
 using namespace core;
 
@@ -59,159 +60,249 @@ inline bool operator == (const node& first, const node& second) {
 
 using namespace core;
 
-// const array<std::string> NAMES = {
-//     "Alex", "Bob", "Charlie", "David", "Eve", "Fred", "Gina", "Hank", "Ivy", "Jack",
-//     "Kyle", "Lily", "Mia", "Nate", "Olivia", "Pam", "Quinn", "Ryan", "Sam", "Tara",
-//     "Uma", "Victor", "Wendy", "Xavier", "Yara", "Zara"
-// };
 
-// const array<std::string> NOUNS = {
-//     "qumpus", "shumpus", "grumpus", "plumpus", "clumpus", "kumpus", "sumpus", "slumpus", "umpus",
-//     "flumpus", "lumpus", "rumpus", "numpus", "glumpus", "mumpus", "tumpus", "humpus", "bumpus",
-//     "pumpus", "xumpus", "wumpus", "jumpus", "yumpus", "zumpus", "blumpus", "dumpus", "frumpus", "vumpus"
-// };
+core::array<std::string> NAMES = core::array<std::string>(26);
+core::array<std::string> NOUNS = core::array<std::string>(28);
+core::array_map<std::string, std::string> CONNECTORS = core::array_map<std::string, std::string>(6);
+core::array<std::string> ADDITIONAL_WORDS = core::array<std::string>(20);
 
-// const array_map<std::string, std::string> CONNECTORS = {
-//     {"is a", "singular"},
-//     {"has", "plural"},
-//     {"wants", "plural"},
-//     {"likes", "plural"},
-//     {"cares for a", "singular"},
-//     {"is friends with a", "singular"}
-// };
+void initialize_vocab() {
 
-// array<std::string> VOCAB;
 
-// void initialize_vocab() {
-//     VOCAB = NAMES;
-//     VOCAB.append(NOUNS.data, NOUNS.length);
+	NAMES.add("Alex");
+	NAMES.add("Bob");
+	NAMES.add("Charlie");
+	NAMES.add("David");
+	NAMES.add("Eve");
+	NAMES.add("Fred");
+	NAMES.add("Gina");
+	NAMES.add("Hank");
+	NAMES.add("Ivy");
+	NAMES.add("Jack");
+	NAMES.add("Kyle");
+	NAMES.add("Lily");
+	NAMES.add("Mia");
+	NAMES.add("Nate");
+	NAMES.add("Olivia");
+	NAMES.add("Pam");
+	NAMES.add("Quinn");
+	NAMES.add("Ryan");
+	NAMES.add("Sam");
+	NAMES.add("Tara");
+	NAMES.add("Uma");
+	NAMES.add("Victor");
+	NAMES.add("Wendy");
+	NAMES.add("Xavier");
+	NAMES.add("Yara");
+	NAMES.add("Zara");
+	
+	NOUNS.add("qumpus");
+	NOUNS.add("shumpus");
+	NOUNS.add("grumpus");
+	NOUNS.add("plumpus");
+	NOUNS.add("clumpus");
+	NOUNS.add("kumpus");
+	NOUNS.add("sumpus");
+	NOUNS.add("slumpus");
+	NOUNS.add("umpus");
+	NOUNS.add("flumpus");
+	NOUNS.add("lumpus");
+	NOUNS.add("rumpus");
+	NOUNS.add("numpus");
+	NOUNS.add("glumpus");
+	NOUNS.add("mumpus");
+	NOUNS.add("tumpus");
+	NOUNS.add("humpus");
+	NOUNS.add("bumpus");
+	NOUNS.add("pumpus");
+	NOUNS.add("xumpus");
+	NOUNS.add("wumpus");
+	NOUNS.add("jumpus");
+	NOUNS.add("yumpus");
+	NOUNS.add("zumpus");
+	NOUNS.add("blumpus");
+	NOUNS.add("dumpus");
+	NOUNS.add("frumpus");
+	NOUNS.add("vumpus");
+	
+	CONNECTORS.put("is a", "singular");
+	CONNECTORS.put("has", "plural");
+	CONNECTORS.put("wants", "plural");
+	CONNECTORS.put("likes", "plural");
+	CONNECTORS.put("cares for a", "singular");
+	CONNECTORS.put("is friends with a", "singular");
+
+	array<std::string> VOCAB = array<std::string>(150);
+
+    VOCAB = NAMES;
+    VOCAB.append(NOUNS.data, NOUNS.length);
     
-//     for (const auto& noun : NOUNS) {
-//         VOCAB.add(noun + "es");
-//     }
-    
-//     array<std::string> additional_words = {
-//         "a", "is", "has", "wants", "likes", "cares", "for", "friends", "with", "then", "Given", "If", "prove",
-//         ".", " ", ",", "\n", ":",
-//         "Query", "Prefix", "Statements",
-//         "[PAD]", "[UNK]", "[CLS]", "[SEP]", "[MASK]"
-//     };
-    
-//     VOCAB.append(additional_words.data, additional_words.length);
-// }
+    for (const auto& noun : NOUNS) {
+        VOCAB.add(noun + "es");
+    }
 
-// array<std::string> generate_atoms(unsigned int atom_count) {
-//     array<std::string> atoms(atom_count);
-//     while (atoms.length < atom_count) {
-//         std::string connector = choice(CONNECTORS.keys().data(), CONNECTORS.size());
-//         std::string predicate = choice(NOUNS.data(), NOUNS.size());
+	ADDITIONAL_WORDS.add("a");
+	ADDITIONAL_WORDS.add("is");
+	ADDITIONAL_WORDS.add("has");
+	ADDITIONAL_WORDS.add("wants");
+	ADDITIONAL_WORDS.add("likes");
+	ADDITIONAL_WORDS.add("cares");
+	ADDITIONAL_WORDS.add("for");
+	ADDITIONAL_WORDS.add("friends");
+	ADDITIONAL_WORDS.add("with");
+	ADDITIONAL_WORDS.add("then");
+	ADDITIONAL_WORDS.add("Given");
+	ADDITIONAL_WORDS.add("If");
+	ADDITIONAL_WORDS.add("prove");
+	ADDITIONAL_WORDS.add(".");
+	ADDITIONAL_WORDS.add(" ");
+	ADDITIONAL_WORDS.add(",");
+	ADDITIONAL_WORDS.add("\n");
+	ADDITIONAL_WORDS.add(":");
+	ADDITIONAL_WORDS.add("Query");
+	ADDITIONAL_WORDS.add("Prefix");
+	ADDITIONAL_WORDS.add("Statements");
+	ADDITIONAL_WORDS.add("[PAD]");
+	ADDITIONAL_WORDS.add("[UNK]");
+	ADDITIONAL_WORDS.add("[CLS]");
+	ADDITIONAL_WORDS.add("[SEP]");
+	ADDITIONAL_WORDS.add("[MASK]");
+
+    VOCAB.append(ADDITIONAL_WORDS.data, ADDITIONAL_WORDS.length);
+}
+
+// Function to shuffle an array of strings
+void shuffle_string_array(array<std::string>& arr) {
+    if (arr.length <= 1) return;
+    
+    std::random_device rd;
+    std::mt19937 gen(rd());
+    
+    for (int i = arr.length - 1; i > 0; --i) {
+        std::uniform_int_distribution<> dis(0, i);
+        int j = dis(gen);
+        if (i != j) {
+            std::swap(arr[i], arr[j]);
+        }
+    }
+}
+
+
+array<std::string> generate_atoms(unsigned int atom_count) {
+    array<std::string> atoms(atom_count);
+    while (atoms.length < atom_count) {
+        std::string connector = choice(CONNECTORS.keys, CONNECTORS.size);
+        std::string predicate = choice(NOUNS.data, NOUNS.length);
         
-//         if (CONNECTORS.at(connector) == "plural") {
-//             predicate += "es";
-//         }
+        if (CONNECTORS.get(connector) == "plural") {
+            predicate += "es";
+        }
         
-//         std::string atom = choice(NAMES.data(), NAMES.size()) + " " + connector + " " + predicate + ".";
-//         if (!atoms.contains(atom))
-//             atoms.add(atom);
-//     }
-//     shuffle(atoms.data, atoms.length);
-//     return atoms;
-// }
+        std::string atom = choice(NAMES.data, NAMES.length) + " " + connector + " " + predicate + ".";
+        if (!atoms.contains(atom))
+            atoms.add(atom);
+    }
 
-// array<std::string> generate_edge(unsigned int src, unsigned int dest, const array<std::string>& atom_map) {
-//     array<std::string> result(2);
-//     result.add("If " + atom_map[src].substr(0, atom_map[src].length() - 1) + ",");
-//     result.add("then " + atom_map[dest].substr(0, atom_map[dest].length() - 1) + ".");
-//     return result;
-// }
+    shuffle_string_array(atoms);
 
-// std::pair<std::string, std::string> map_tokens_to_natural_language(const array<int64_t>& tokens, int64_t output, unsigned int max_input_size, bool verbose = false) {
-//     const unsigned int QUERY_PREFIX_TOKEN = (max_input_size - 5) / 3 + 4;
-//     const unsigned int PADDING_TOKEN = (max_input_size - 5) / 3 + 3;
-//     const unsigned int EDGE_PREFIX_TOKEN = (max_input_size - 5) / 3 + 2;
-//     const unsigned int PATH_PREFIX_TOKEN = (max_input_size - 5) / 3 + 1;
+    return atoms;
+}
 
-//     array<int64_t> unique_tokens(tokens.length);
-//     for (int64_t token : tokens) {
-//         if (token != QUERY_PREFIX_TOKEN && token != PADDING_TOKEN &&
-//             token != EDGE_PREFIX_TOKEN && token != PATH_PREFIX_TOKEN) {
-//             if (!unique_tokens.contains(token))
-//                 unique_tokens.add(token);
-//         }
-//     }
+array<std::string> generate_edge(unsigned int src, unsigned int dest, const array<std::string>& atom_map) {
+    array<std::string> result(2);
+    result.add("If " + atom_map[src].substr(0, atom_map[src].length() - 1) + ",");
+    result.add("then " + atom_map[dest].substr(0, atom_map[dest].length() - 1) + ".");
+    return result;
+}
 
-//     array<std::string> atoms = generate_atoms(unique_tokens.length);
-//     array_map<int64_t, std::string> token_to_atom(unique_tokens.length);
-//     for (size_t i = 0; i < unique_tokens.length; ++i) {
-//         token_to_atom.add(unique_tokens[i], atoms[i]);
-//     }
+std::pair<std::string, std::string> map_tokens_to_natural_language(const array<int64_t>& tokens, int64_t output, unsigned int max_input_size, bool verbose = false) {
+    const unsigned int QUERY_PREFIX_TOKEN = (max_input_size - 5) / 3 + 4;
+    const unsigned int PADDING_TOKEN = (max_input_size - 5) / 3 + 3;
+    const unsigned int EDGE_PREFIX_TOKEN = (max_input_size - 5) / 3 + 2;
+    const unsigned int PATH_PREFIX_TOKEN = (max_input_size - 5) / 3 + 1;
 
-//     array<std::string> out_tokens(tokens.length);
-//     size_t i = 0;
-//     try {
-//         while (i < tokens.length) {
-//             if (tokens[i] == QUERY_PREFIX_TOKEN) {
-//                 out_tokens.add("Given");
-//                 out_tokens.add(token_to_atom.get(tokens[i+1]).substr(0, token_to_atom.get(tokens[i+1]).length() - 1) + ",");
-//                 out_tokens.add("prove");
-//                 out_tokens.add(token_to_atom.get(tokens[i+2]));
-//                 i += 2;
-//             } else if (tokens[i] == EDGE_PREFIX_TOKEN) {
-//                 array<std::string> edge = generate_edge(tokens[i+1], tokens[i+2], atoms);
-//                 out_tokens.append(edge.data, edge.length);
-//                 i += 2;
-//             } else if (tokens[i] == PATH_PREFIX_TOKEN) {
-//                 while (i + 1 < tokens.length) {
-//                     if (tokens[i+1] == PATH_PREFIX_TOKEN) {
-//                         // Do nothing
-//                     } else {
-//                         std::string atom = token_to_atom.get(tokens[i+1]);
-//                     }
-//                     i++;
-//                 }
-//             } else if (tokens[i] == PADDING_TOKEN) {
-//                 // Do nothing
-//             }
-//             i++;
-//         }
-//     } catch (const std::exception& e) {
-//         fprintf(stderr, "Error mapping tokens to natural language: %s\n", e.what());
-//     }
+    array<int64_t> unique_tokens(tokens.length);
+    for (int64_t token : tokens) {
+        if (token != QUERY_PREFIX_TOKEN && token != PADDING_TOKEN &&
+            token != EDGE_PREFIX_TOKEN && token != PATH_PREFIX_TOKEN) {
+            if (!unique_tokens.contains(token))
+                unique_tokens.add(token);
+        }
+    }
 
-//     if (verbose) {
-//         for (size_t i = 0; i < tokens.length; ++i) {
-//             printf("%ld -> %s\n", tokens[i], (i < out_tokens.length ? out_tokens[i].c_str() : "N/A"));
-//         }
-//     }
+    array<std::string> atoms = generate_atoms(unique_tokens.length);
+    array_map<int64_t, std::string> token_to_atom(unique_tokens.length);
+    for (size_t i = 0; i < unique_tokens.length; ++i) {
+        token_to_atom.put(unique_tokens[i], atoms[i]);
+    }
 
-//     std::string full_out = "";
-//     for (const auto& token : out_tokens) {
-//         full_out += token + " ";
-//     }
-//     full_out += "\n" + token_to_atom.get(output);
+    array<std::string> out_tokens(tokens.length);
+    size_t i = 0;
+    try {
+        while (i < tokens.length) {
+            if (tokens[i] == QUERY_PREFIX_TOKEN) {
+                out_tokens.add("Given");
+                out_tokens.add(token_to_atom.get(tokens[i+1]).substr(0, token_to_atom.get(tokens[i+1]).length() - 1) + ",");
+                out_tokens.add("prove");
+                out_tokens.add(token_to_atom.get(tokens[i+2]));
+                i += 2;
+            } else if (tokens[i] == EDGE_PREFIX_TOKEN) {
+                array<std::string> edge = generate_edge(tokens[i+1], tokens[i+2], atoms);
+                out_tokens.append(edge.data, edge.length);
+                i += 2;
+            } else if (tokens[i] == PATH_PREFIX_TOKEN) {
+                while (i + 1 < tokens.length) {
+                    if (tokens[i+1] == PATH_PREFIX_TOKEN) {
+                        // Do nothing
+                    } else {
+                        std::string atom = token_to_atom.get(tokens[i+1]);
+                    }
+                    i++;
+                }
+            } else if (tokens[i] == PADDING_TOKEN) {
+                // Do nothing
+            }
+            i++;
+        }
+    } catch (const std::exception& e) {
+        fprintf(stderr, "Error mapping tokens to natural language: %s\n", e.what());
+    }
 
-//     return std::make_pair(full_out, token_to_atom.get(output));
-// }
+    if (verbose) {
+        for (size_t i = 0; i < tokens.length; ++i) {
+            printf("%ld -> %s\n", tokens[i], (i < out_tokens.length ? out_tokens[i].c_str() : "N/A"));
+        }
+    }
+
+    std::string full_out = "";
+    for (const auto& token : out_tokens) {
+        full_out += token + " ";
+    }
+    full_out += "\n" + token_to_atom.get(output);
+
+    return std::make_pair(full_out, token_to_atom.get(output));
+}
 
 py::tuple map_tokens_to_natural_language_batched(const py::array_t<int64_t>& data, const py::array_t<int64_t>& output_tokens, unsigned int input_size, unsigned int TRANSFORMER_LENGTH, bool verbose = false) {
-    // auto data_unchecked = data.unchecked<2>();
-    // auto output_tokens_unchecked = output_tokens.unchecked<1>();
-    // size_t batch_size = data_unchecked.shape(0);
+	
+    auto data_unchecked = data.unchecked<2>();
+    auto output_tokens_unchecked = output_tokens.unchecked<1>();
+    size_t batch_size = data_unchecked.shape(0);
 
-    // array<std::string> all_tok(batch_size);
-    // array<std::string> all_out(batch_size);
+    array<std::string> all_tok(batch_size);
+    array<std::string> all_out(batch_size);
     
-    // for (size_t i = 0; i < batch_size; ++i) {
-    //     array<int64_t> tokens(input_size);
-    //     for (size_t j = 0; j < input_size; ++j) {
-    //         tokens.add(data_unchecked(i, j));
-    //     }
-    //     auto [tokens_str, output_str] = map_tokens_to_natural_language(tokens, output_tokens_unchecked(i), input_size, verbose);
-    //     all_tok.add(tokens_str);
-    //     all_out.add(output_str);
-    // }
+    for (size_t i = 0; i < batch_size; ++i) {
+        array<int64_t> tokens(input_size);
+        for (size_t j = 0; j < input_size; ++j) {
+            tokens.add(data_unchecked(i, j));
+        }
+        auto [tokens_str, output_str] = map_tokens_to_natural_language(tokens, output_tokens_unchecked(i), input_size, verbose);
+        all_tok.add(tokens_str);
+        all_out.add(output_str);
+    }
     
-    // return py::make_tuple(all_tok, all_out);
+    return py::make_tuple(all_tok, all_out);
 }
 
 /* computes the number of lookahead steps to find the answer */
@@ -788,15 +879,15 @@ py::tuple generate_training_set(const unsigned int max_input_size, const uint64_
 		continue;
 	}
 
-    // if (false) {
-    //     auto [new_inputs, new_outputs, new_labels] = map_tokens_to_natural_language_batched(inputs, labels, max_input_size, 192);
-    //     inputs = new_inputs;
-    //     outputs = new_outputs;
-    //     labels = new_labels;
+    if (true) {
+        // auto [new_inputs, new_labels] = map_tokens_to_natural_language_batched(inputs, labels, max_input_size, 192);
+		py::tuple result = map_tokens_to_natural_language_batched(inputs, labels, max_input_size, 192);
+        py::list new_inputs = result[0].cast<py::list>();
+        py::list new_labels = result[1].cast<py::list>();
 
-	// 	return py::make_tuple(inputs, outputs, labels, num_collisions);
-    // }
-	// else
+		return py::make_tuple(new_inputs, outputs, new_labels, num_collisions);
+    }
+	else
 		return py::make_tuple(inputs, outputs, labels, num_collisions);
 }
 

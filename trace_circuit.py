@@ -5,6 +5,10 @@ from torch import nn, LongTensor, FloatTensor
 from train import generate_example, lookahead_depth, generate_eval_data
 from gpt2 import TokenEmbedding
 import math
+import generator
+from vocab import VOCAB
+from train import create_custom_tokenizer
+from mapping import map_tokens_to_natural_language_batched
 
 def normalize_conditions(conditions):
 	# normalize the list of conditions
@@ -2137,8 +2141,8 @@ if __name__ == "__main__":
 
 	torch.set_printoptions(sci_mode=False)
 	from sys import argv, exit
-	if len(argv) != 4:
-		print("Usage: trace_circuit [checkpoint_filepath] [lookahead] [num_samples]")
+	if len(argv) != 5:
+		print("Usage: trace_circuit [checkpoint_filepath] [lookahead] [num_samples] [nl]")
 		exit(1)
 
 	if not torch.cuda.is_available():
@@ -2155,6 +2159,8 @@ if __name__ == "__main__":
 		if not hasattr(transformer, 'pre_ln'):
 			transformer.pre_ln = True
 	tracer = TransformerTracer(tfm_model)
+
+	nl = argv[4]
 
 	#input = [22, 21,  5, 19, 21, 11,  5, 21, 10,  3, 21,  4, 10, 21,  9,  4, 21,  9, 11, 23,  9,  3, 20,  9]
 	#input = [22, 22, 22, 21, 14,  3, 21, 14,  6, 21, 18, 14, 21,  3,  1, 21,  6, 16, 23, 18,  1, 20, 18, 14]
@@ -2186,6 +2192,23 @@ if __name__ == "__main__":
 
 	NUM_SAMPLES = int(argv[3])
 	inputs,outputs = generate_eval_data(max_input_size, min_path_length=1, distance_from_start=1, distance_from_end=-1, lookahead_steps=int(argv[2]), num_paths_at_fork=None, num_samples=NUM_SAMPLES)
+	
+	max_edges = (max_input_size - 5) // 3
+	inputs, outputs, labels, num_collisions = generator.generate_training_set(max_input_size, NUM_SAMPLES, int(argv[2]), max_edges, set(), 1, True,True)
+# py::tuple generate_training_set(const unsigned int max_input_size, const uint64_t dataset_size, const unsigned int max_lookahead, const unsigned int max_edges, const py::object& reserved_inputs, const int distance_from_start, const bool nl, const bool quiet=false)
+
+	if nl:
+		TRANSFORMER_LENGTH = max_input_size * 6
+		tokenizer = create_custom_tokenizer(vocab=VOCAB, max_length=TRANSFORMER_LENGTH)
+		ntoken = len(tokenizer)
+		PADDING_TOKEN = tokenizer.pad_token_id
+
+		inputs, outputs, labels = map_tokens_to_natural_language_batched(tokenizer, inputs, labels, max_input_size, TRANSFORMER_LENGTH)
+	else:
+		eval_inputs, eval_outputs, eval_labels, eval_num_collisions = inputs, outputs, labels, num_collisions
+
+
+	
 	inputs = torch.LongTensor(inputs).to(device)
 
 	def filter_irrelevant_nodes(path_merge_explainable, input, root):
