@@ -1,6 +1,6 @@
 {
   "added_tokens_decoder": {
-    "73": {
+    "103": {
       "content": "[PAD]",
       "lstrip": false,
       "normalized": false,
@@ -8,7 +8,7 @@
       "single_word": false,
       "special": true
     },
-    "74": {
+    "104": {
       "content": "[UNK]",
       "lstrip": false,
       "normalized": false,
@@ -16,7 +16,7 @@
       "single_word": false,
       "special": true
     },
-    "75": {
+    "105": {
       "content": "[CLS]",
       "lstrip": false,
       "normalized": false,
@@ -24,7 +24,7 @@
       "single_word": false,
       "special": true
     },
-    "76": {
+    "106": {
       "content": "[SEP]",
       "lstrip": false,
       "normalized": false,
@@ -32,7 +32,7 @@
       "single_word": false,
       "special": true
     },
-    "77": {
+    "107": {
       "content": "[MASK]",
       "lstrip": false,
       "normalized": false,
@@ -46,6 +46,7 @@
   "mask_token": "[MASK]",
   "model_max_length": 1000000000000000019884624838656,
   "pad_token": "[PAD]",
+  "padding_side": "left",
   "sep_token": "[SEP]",
   "tokenizer_class": "PreTrainedTokenizerFast",
   "unk_token": "[UNK]"
