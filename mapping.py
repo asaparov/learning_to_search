@@ -1,33 +1,22 @@
 #!/usr/bin/python
+
+import json
 import numpy as np
 import time
 import random
+import torch
+import os
 from compile import compile_if_needed
+from transformers import PreTrainedTokenizerFast
+from tokenizers import BertWordPieceTokenizer
+from transformers import BertTokenizerFast
+from vocab import NAMES, NOUNS, CONNECTORS, VOCAB
+from test_tk import create_custom_tokenizer
 
 compile_if_needed()
 import generator
 
-NAMES = [
-	'Alex', 'Bob', 'Charlie', 'David', 'Eve', 'Fred', 'Gina', 'Hank', 'Ivy', 'Jack', 
-    'Kyle', 'Lily', 'Mia', 'Nate', 'Olivia', 'Pam', 'Quinn', 'Ryan', 'Sam', 'Tara', 
-	'Uma', 'Victor', 'Wendy', 'Xavier', 'Yara', 'Zara'
-	]
-
-NOUNS = [
-    'qumpus', 'shumpus', 'grumpus', 'plumpus', 'clumpus', 'kumpus', 'sumpus', 'slumpus', 'umpus', 
-    'flumpus', 'lumpus', 'rumpus', 'numpus', 'glumpus', 'mumpus', 'tumpus', 'humpus', 'bumpus', 
-    'pumpus', 'xumpus', 'wumpus', 'jumpus', 'yumpus', 'zumpus', 'blumpus', 'dumpus', 'frumpus', 'vumpus'
-    ]
-
-
-CONNECTORS = {
-    "is a": 'singular',
-    "has": 'plural',
-    "wants": 'plural',
-    "likes": 'plural',
-    "cares for a": "singular",
-    "is friends with a": "singular",
-}
+tokenizer = create_custom_tokenizer(VOCAB)
 
 def generate_atoms(atom_count):
     atoms = set()
@@ -45,7 +34,7 @@ def generate_atoms(atom_count):
 
 
 def generate_edge(src, dest, atom_map):
-    return [[f"If {atom_map[src][:-1]},"], [f"then {atom_map[dest][:-1]}."]]
+    return [f"If {atom_map[src][:-1]},", f"then {atom_map[dest][:-1]}."]
 
 def map_tokens_to_natural_language(tokens, output, max_input_size, verbose=False):
 
@@ -69,14 +58,14 @@ def map_tokens_to_natural_language(tokens, output, max_input_size, verbose=False
     out_tokens = []
     i = 0
     try:
-        out_tokens.append(["Statements:"])
+        # out_tokens.append(["Statements:"])
         while i < len(tokens):
             if tokens[i] == QUERY_PREFIX_TOKEN:
-                out_tokens.append(["\nQuery:"])
-                out_tokens.append(['Given'])
-                out_tokens.append([token_to_atom[tokens[i+1]][:-1] + ','])
-                out_tokens.append(['prove'])
-                out_tokens.append([token_to_atom[tokens[i+2]]])
+                # out_tokens.append(["\nQuery:"])
+                out_tokens.append('Given')
+                out_tokens.append(token_to_atom[tokens[i+1]][:-1] + ',')
+                out_tokens.append('prove')
+                out_tokens.append(token_to_atom[tokens[i+2]])
                 i+=2
             elif tokens[i] == EDGE_PREFIX_TOKEN:
                 # out_tokens.append(["<|edge_prefix|>"])
@@ -84,14 +73,14 @@ def map_tokens_to_natural_language(tokens, output, max_input_size, verbose=False
                 out_tokens.extend(edge)
                 i += 2
             elif tokens[i] == PATH_PREFIX_TOKEN:
-                out_tokens.append(["\nPrefix:"])
+                # out_tokens.append(["\nPrefix:"])
                 while(i+1<len(tokens)):
                     if tokens[i+1] == PATH_PREFIX_TOKEN:
                         # out_tokens.append(["\nPath:"])
                         pass
                     else:
                         atom = token_to_atom[tokens[i+1]]
-                        out_tokens.append([atom])
+                        # out_tokens.append([atom])
                     i+=1
             elif tokens[i] == PADDING_TOKEN:
                 # out_tokens.append(["<|padding|>"])
@@ -108,57 +97,71 @@ def map_tokens_to_natural_language(tokens, output, max_input_size, verbose=False
         for i in range(len(tokens)):
             print(f"{tokens[i]} -> {out_tokens[i]}")
 
-    flattened_out_tokens = [item for sublist in out_tokens for item in sublist]
-    return flattened_out_tokens, token_to_atom[int(output)]
+    # flattened_out_tokens = [item for sublist in out_tokens for item in sublist]
+    return " ".join(out_tokens), token_to_atom[int(output)]
+
+def map_tokens_to_natural_language_batched(data, output_tokens, input_size, verbose=False):
+
+    batch_size = data.shape[0]
+    all_tok = []
+    all_out = []
+    
+    for i in range(batch_size):
+        tokens, output = map_tokens_to_natural_language(data[i], output_tokens[i], input_size, verbose)
+        all_tok.append(tokens)
+        all_out.append(output)
+    
+    # tokenize
+    all_tok = tokenizer.batch_encode_plus(all_tok, return_tensors='pt', padding=True)['input_ids']
+    all_out = tokenizer.batch_encode_plus(all_out, return_tensors='pt', padding=True)['input_ids']
+
+    return all_tok, all_out
+
+def tokenize_and_join(tokens):
+    return ' '.join(tokens)
 
 
-VOCAB = NAMES + \
-            NOUNS + \
-            ['a', 'is', 'has', 'wants', 'likes', 'cares', 'for', 'friends', 'with', 'then', 'Given' ] + \
-            ['.', ' ', ',', '\n', ":"] +\
-            ['Query', 'Prefix', 'Statements']
 
-VOCAB_MAP = {token: i for i, token in enumerate(VOCAB)}
+if __name__ == "__main__":
 
-def tokenize(input):
-    return [VOCAB_MAP[token] for token in input]
+    import argparse
+    parser = argparse.ArgumentParser(description="Generate training set using DFS")
+    parser.add_argument("--seed", type=int, default=9, help="Random seed for generator")
+    parser.add_argument("--dataset_size", type=int, default=3, help="Size of the dataset to generate")
+    parser.add_argument("--input_size", type=int, default=64, help="Size of input for each example")
+    parser.add_argument("--verbose", action="store_true", help="Enable verbose output")
+    parser.add_argument('--dfs', action='store_true', help='Use DFS')
+    parser.add_argument('--max_lookahead', type=int, default=-1, help='Maximum lookahead distance')
+    parser.add_argument('--requested_backtrack', type=int, default=4, help='Requested backtrack distance')
+    args = parser.parse_args()
 
+    generator.set_seed(args.seed)
+    dataset_size = args.dataset_size
+    reserved_inputs = set()
 
-parser = argparse.ArgumentParser(description="Generate training set using DFS")
-parser.add_argument("--seed", type=int, default=9, help="Random seed for generator")
-parser.add_argument("--dataset_size", type=int, default=3, help="Size of the dataset to generate")
-parser.add_argument("--input_size", type=int, default=64, help="Size of input for each example")
-parser.add_argument("--verbose", action="store_true", help="Enable verbose output")
-parser.add_argument('--dfs', action='store_true', help='Use DFS')
-parser.add_argument('--max_lookahead', type=int, default=-1, help='Maximum lookahead distance')
-parser.add_argument('--requested_backtrack', type=int, default=4, help='Requested backtrack distance')
-args = parser.parse_args()
+    print("generating dataset...")
 
-generator.set_seed(args.seed)
-dataset_size = args.dataset_size
-reserved_inputs = set()
+    if args.dfs:
+        generated_data = generator.generate_dfs_training_set(args.input_size, dataset_size, reserved_inputs, args.requested_backtrack, args.verbose)
+    else:
+        generated_data = generator.generate_training_set(args.input_size, dataset_size, 3, 7, reserved_inputs, -1, False)
 
-print("generating dataset...")
+    # for i, (data, output_tokens) in enumerate(zip(generated_data[0], generated_data[2])):
+        # print(f"Example {i}:")
+    tokens, output = map_tokens_to_natural_language_batched(generated_data[0], generated_data[2], args.input_size)
+    import pdb; pdb.set_trace()
+        # map
+        # print("Input tokens:")
+        # for a,b in zip(data, tokens):
+        #     print(f"{a} -> {b}")
 
-if args.dfs:
-    generated_data = generator.generate_dfs_training_set(args.input_size, dataset_size, reserved_inputs, args.requested_backtrack, args.verbose)
-else:
-    generated_data = generator.generate_training_set(args.input_size, dataset_size, 3, 7, reserved_inputs, -1, False)
+        # print("Output tokens:")
+        # for a,b in zip([output_tokens], [output]):
+        #     print(f"{a} -> {b}")
 
-for i, (data, output_tokens) in enumerate(zip(generated_data[0], generated_data[2])):
-    print(f"Example {i}:")
-    tokens, output = map_tokens_to_natural_language(data, output_tokens, args.input_size)
-    # map
-    # print("Input tokens:")
-    # for a,b in zip(data, tokens):
-    #     print(f"{a} -> {b}")
+        # print("==================")
 
-    # print("Output tokens:")
-    # for a,b in zip([output_tokens], [output]):
-    #     print(f"{a} -> {b}")
-
-    # print("==================")
-
-    print(' '.join(tokens))
-    print(output)
-    print('==================')
+        # print(tokens)
+        # print(' '.join(tokens))
+        # print(output)
+        # print('==================')

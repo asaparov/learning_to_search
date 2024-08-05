@@ -13,6 +13,7 @@ from gpt2 import Transformer, TransformerLayer, ToeplitzMode, AblationMode
 from Sophia import SophiaG
 import time
 import multiprocessing
+from mapping import map_tokens_to_natural_language, map_tokens_to_natural_language_batched
 
 def build_module(name):
 	from os import system
@@ -624,7 +625,7 @@ def generate_training_set(max_input_size, dataset_size, max_lookahead, reserved_
 
 	return inputs, outputs, valid_outputs, num_collisions
 
-def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidden_dim, bidirectional, absolute_pos_emb, learnable_token_emb, toeplitz_attn, toeplitz_reg, toeplitz_pos_only, add_padding, ablate, pre_ln, curriculum_mode, looped, dfs):
+def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidden_dim, bidirectional, absolute_pos_emb, learnable_token_emb, toeplitz_attn, toeplitz_reg, toeplitz_pos_only, add_padding, ablate, pre_ln, curriculum_mode, looped, dfs, nl):
 	generator.set_seed(seed_value)
 	seed(seed_value)
 	torch.manual_seed(seed_value)
@@ -646,38 +647,41 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 
 	reserved_inputs = set()
 	NUM_TEST_SAMPLES = 10000
-	if dfs:
-		# TODO: i think we could theoretically generate examples with `backtrack_distance = (max_input_size - 4) // 4 - 1`, but the rejection rate in the current rejection sampling method is too high to feasibly generate such samples
-		max_backtrack_distance = (max_input_size - 4) // 4 - 2
-		for backtrack_distance in [-1] + list(range(1, max_backtrack_distance + 1)):
-			generator.set_seed(seed_value)
-			print('Reserving OOD test data for lookahead = {}'.format(lookahead))
-			stdout.flush();
-			inputs,outputs,_,_ = generator.generate_dfs_training_set(max_input_size, NUM_TEST_SAMPLES, reserved_inputs, backtrack_distance, True)
-			for i in range(inputs.shape[0]):
-				reserved_inputs.add(tuple([x for x in inputs[i,:] if x != PADDING_TOKEN]))
-			if backtrack_distance == -1:
-				eval_inputs, eval_outputs = inputs, outputs
-	else:
-		max_test_lookahead = ((max_input_size - 5) // 3 - 1) // 2
-		dist_from_start = 1 if add_padding else -1
-		for lookahead in list(range(1, max_test_lookahead + 1)) + [None]:
-			gen_eval_start_time = time.perf_counter()
-			setstate(random_state)
-			np.random.set_state(np_random_state)
-			torch.set_rng_state(torch_random_state)
+	test = False
+	dist_from_start = 1
+	if test:
+		if dfs:
+			# TODO: i think we could theoretically generate examples with `backtrack_distance = (max_input_size - 4) // 4 - 1`, but the rejection rate in the current rejection sampling method is too high to feasibly generate such samples
+			max_backtrack_distance = (max_input_size - 4) // 4 - 2
+			for backtrack_distance in [-1] + list(range(1, max_backtrack_distance + 1)):
+				generator.set_seed(seed_value)
+				print('Reserving OOD test data for lookahead = {}'.format(lookahead))
+				stdout.flush();
+				inputs,outputs,_,_ = generator.generate_dfs_training_set(max_input_size, NUM_TEST_SAMPLES, reserved_inputs, backtrack_distance, True)
+				for i in range(inputs.shape[0]):
+					reserved_inputs.add(tuple([x for x in inputs[i,:] if x != PADDING_TOKEN]))
+				if backtrack_distance == -1:
+					eval_inputs, eval_outputs = inputs, outputs
+		else:
+			max_test_lookahead = ((max_input_size - 5) // 3 - 1) // 2
+			dist_from_start = 1 if add_padding else -1
+			for lookahead in list(range(1, max_test_lookahead + 1)) + [None]:
+				gen_eval_start_time = time.perf_counter()
+				setstate(random_state)
+				np.random.set_state(np_random_state)
+				torch.set_rng_state(torch_random_state)
 
-			print('Reserving OOD test data for lookahead = {}'.format(lookahead))
-			stdout.flush()
-			inputs,outputs = generate_eval_data(max_input_size, min_path_length=2, distance_from_start=dist_from_start, distance_from_end=-1, lookahead_steps=lookahead, num_paths_at_fork=None, num_samples=NUM_TEST_SAMPLES)
-			print('Done. Throughput: {} examples/s'.format(NUM_TEST_SAMPLES / (time.perf_counter() - gen_eval_start_time)))
-			for i in range(inputs.shape[0]):
-				reserved_inputs.add(tuple([x for x in inputs[i,:] if x != PADDING_TOKEN]))
-			if lookahead == None:
-				eval_inputs, eval_outputs = inputs, outputs
-	if BATCH_SIZE < eval_inputs.shape[0]:
-		eval_inputs = eval_inputs[:BATCH_SIZE]
-		eval_outputs = eval_outputs[:BATCH_SIZE]
+				print('Reserving OOD test data for lookahead = {}'.format(lookahead))
+				stdout.flush()
+				inputs,outputs = generate_eval_data(max_input_size, min_path_length=2, distance_from_start=dist_from_start, distance_from_end=-1, lookahead_steps=lookahead, num_paths_at_fork=None, num_samples=NUM_TEST_SAMPLES)
+				print('Done. Throughput: {} examples/s'.format(NUM_TEST_SAMPLES / (time.perf_counter() - gen_eval_start_time)))
+				for i in range(inputs.shape[0]):
+					reserved_inputs.add(tuple([x for x in inputs[i,:] if x != PADDING_TOKEN]))
+				if lookahead == None:
+					eval_inputs, eval_outputs = inputs, outputs
+		if BATCH_SIZE < eval_inputs.shape[0]:
+			eval_inputs = eval_inputs[:BATCH_SIZE]
+			eval_outputs = eval_outputs[:BATCH_SIZE]
 
 	train_filename = 'train{}_v3_inputsize{}_maxlookahead{}_{}seed{}.pkl'.format(dataset_size, max_input_size, max_lookahead, 'padded_' if add_padding else '', seed_value)
 	prefix = 'dfs_results/' if dfs else 'useful_path_results/'
@@ -875,6 +879,10 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 						inputs, outputs, labels, num_collisions = generator.generate_dfs_training_set(max_input_size, BATCH_SIZE, reserved_inputs, -1, True)
 					else:
 						inputs, outputs, labels, num_collisions = generator.generate_training_set(max_input_size, BATCH_SIZE, self.lookahead, self.max_edges, reserved_inputs, dist_from_start, True)
+
+						if nl:
+							inputs, labels = map_tokens_to_natural_language_batched(inputs, labels, max_input_size)
+
 					if num_collisions != 0:
 						with self.collisions_lock:
 							self.total_collisions.value += num_collisions
@@ -906,6 +914,10 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 		effective_dataset_size = (STREAMING_BLOCK_SIZE if dataset_size == -1 else dataset_size)
 		reinit_data_loader = False
 		for batch in (train_loader if dataset_size == -1 else cycle(train_loader)):
+
+			print(batch)
+			import pdb; pdb.set_trace()
+
 			batch_start_time = time.perf_counter()
 			model.train()
 			optimizer.zero_grad()
@@ -1099,6 +1111,7 @@ if __name__ == "__main__":
 	parser.add_argument("--curriculum", type=str, required=True, choices=["y", "n", "layerbylayer", "layerbylayer2"])
 	parser.add_argument("--looped", type=parse_bool_arg, default=False)
 	parser.add_argument("--dfs", type=parse_bool_arg, default=False)
+	parser.add_argument('--nl',type=parse_bool_arg, default=False )
 	args = parser.parse_args()
 
 	train(
@@ -1119,4 +1132,5 @@ if __name__ == "__main__":
 		pre_ln=args.preLN,
 		curriculum_mode=args.curriculum,
 		looped=args.looped,
-		dfs=args.dfs)
+		dfs=args.dfs,
+		nl=args.nl)
