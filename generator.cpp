@@ -3,6 +3,7 @@
 #include <core/array.h>
 #include <core/random.h>
 #include <string>
+#include <iostream>
 
 using namespace core;
 
@@ -189,22 +190,40 @@ void shuffle_string_array(array<std::string>& arr) {
 
 
 array<std::string> generate_atoms(unsigned int atom_count) {
+    std::cout << "Debug: Entering generate_atoms with atom_count = " << atom_count << std::endl;
     array<std::string> atoms(atom_count);
+    std::cout << "Debug: Initialized atoms array with capacity " << atom_count << std::endl;
     while (atoms.length < atom_count) {
+
+		// print the connectors.keys array
+		for (unsigned int i = 0; i < CONNECTORS.size; i++) {
+			std::cout << "Debug: Connector: " << CONNECTORS.keys[i] << std::endl;
+		}
+
         std::string connector = choice(CONNECTORS.keys, CONNECTORS.size);
+        std::cout << "Debug: Selected connector: " << connector << std::endl;
         std::string predicate = choice(NOUNS.data, NOUNS.length);
+        std::cout << "Debug: Selected predicate: " << predicate << std::endl;
         
         if (CONNECTORS.get(connector) == "plural") {
             predicate += "es";
+            std::cout << "Debug: Pluralized predicate: " << predicate << std::endl;
         }
         
         std::string atom = choice(NAMES.data, NAMES.length) + " " + connector + " " + predicate + ".";
-        if (!atoms.contains(atom))
+        std::cout << "Debug: Generated atom: " << atom << std::endl;
+        if (!atoms.contains(atom)) {
             atoms.add(atom);
+            std::cout << "Debug: Added atom to atoms array. Current length: " << atoms.length << std::endl;
+        } else {
+            std::cout << "Debug: Atom already exists, skipping" << std::endl;
+        }
     }
 
+    std::cout << "Debug: Shuffling atoms array" << std::endl;
     shuffle_string_array(atoms);
 
+    std::cout << "Debug: Exiting generate_atoms, returning " << atoms.length << " atoms" << std::endl;
     return atoms;
 }
 
@@ -221,33 +240,52 @@ std::pair<std::string, std::string> map_tokens_to_natural_language(const array<i
     const unsigned int EDGE_PREFIX_TOKEN = (max_input_size - 5) / 3 + 2;
     const unsigned int PATH_PREFIX_TOKEN = (max_input_size - 5) / 3 + 1;
 
+    std::cout << "Debug: max_input_size = " << max_input_size << std::endl;
+    std::cout << "Debug: QUERY_PREFIX_TOKEN = " << QUERY_PREFIX_TOKEN << std::endl;
+
     array<int64_t> unique_tokens(tokens.length);
     for (int64_t token : tokens) {
         if (token != QUERY_PREFIX_TOKEN && token != PADDING_TOKEN &&
             token != EDGE_PREFIX_TOKEN && token != PATH_PREFIX_TOKEN) {
+			std::cout << "Debug: token = " << token << std::endl;
             if (!unique_tokens.contains(token))
                 unique_tokens.add(token);
         }
     }
 
+    std::cout << "Debug: unique_tokens.length = " << unique_tokens.length << std::endl;
+
     array<std::string> atoms = generate_atoms(unique_tokens.length);
     array_map<int64_t, std::string> token_to_atom(unique_tokens.length);
     for (size_t i = 0; i < unique_tokens.length; ++i) {
+		std::cout << "Debug: unique_tokens[i] = " << unique_tokens[i] << " " << std::endl;
         token_to_atom.put(unique_tokens[i], atoms[i]);
     }
+
+	std::cout << "Debug: token_to_atom.size = " << token_to_atom.size << std::endl;
 
     array<std::string> out_tokens(tokens.length);
     size_t i = 0;
     try {
         while (i < tokens.length) {
+            std::cout << "Debug: Processing token " << i << ": " << tokens[i] << std::endl;
             if (tokens[i] == QUERY_PREFIX_TOKEN) {
+                if (i + 2 >= tokens.length) {
+                    std::cout << "Debug: Not enough tokens after QUERY_PREFIX_TOKEN" << std::endl;
+                    break;
+                }
                 out_tokens.add("Given");
                 out_tokens.add(token_to_atom.get(tokens[i+1]).substr(0, token_to_atom.get(tokens[i+1]).length() - 1) + ",");
                 out_tokens.add("prove");
                 out_tokens.add(token_to_atom.get(tokens[i+2]));
                 i += 2;
             } else if (tokens[i] == EDGE_PREFIX_TOKEN) {
+                if (i + 2 >= tokens.length) {
+                    std::cout << "Debug: Not enough tokens after EDGE_PREFIX_TOKEN" << std::endl;
+                    break;
+                }
                 array<std::string> edge = generate_edge(tokens[i+1], tokens[i+2], atoms);
+                std::cout << "Debug: edge.length = " << edge.length << std::endl;
                 out_tokens.append(edge.data, edge.length);
                 i += 2;
             } else if (tokens[i] == PATH_PREFIX_TOKEN) {
@@ -256,6 +294,7 @@ std::pair<std::string, std::string> map_tokens_to_natural_language(const array<i
                         // Do nothing
                     } else {
                         std::string atom = token_to_atom.get(tokens[i+1]);
+						std::cout << "Debug: atom = " << atom << std::endl;
                     }
                     i++;
                 }
@@ -289,10 +328,14 @@ py::tuple map_tokens_to_natural_language_batched(const py::array_t<int64_t>& dat
     auto output_tokens_unchecked = output_tokens.unchecked<1>();
     size_t batch_size = data_unchecked.shape(0);
 
+    std::cout << "Debug: batch_size = " << batch_size << std::endl;
+    std::cout << "Debug: input_size = " << input_size << std::endl;
+
     array<std::string> all_tok(batch_size);
     array<std::string> all_out(batch_size);
     
     for (size_t i = 0; i < batch_size; ++i) {
+        std::cout << "Debug: Processing batch " << i << std::endl;
         array<int64_t> tokens(input_size);
         for (size_t j = 0; j < input_size; ++j) {
             tokens.add(data_unchecked(i, j));
