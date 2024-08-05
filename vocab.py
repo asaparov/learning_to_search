@@ -23,8 +23,9 @@ CONNECTORS = {
 
 
 VOCAB = NAMES + \
-            NOUNS + \
-            ['a', 'is', 'has', 'wants', 'likes', 'cares', 'for', 'friends', 'with', 'then', 'Given' ] + \
-            ['.', ' ', ',', '\n', ":"] +\
-            ['Query', 'Prefix', 'Statements'] + \
-            ["[PAD]", "[UNK]", "[CLS]", "[SEP]", "[MASK]"]
+        NOUNS + \
+        [noun + 'es' for noun in NOUNS] + \
+        ['a', 'is', 'has', 'wants', 'likes', 'cares', 'for', 'friends', 'with', 'then', 'Given', 'If', 'prove' ] + \
+        ['.', ' ', ',', '\n', ":"] +\
+        ['Query', 'Prefix', 'Statements'] + \
+        ["[PAD]", "[UNK]", "[CLS]", "[SEP]", "[MASK]"]
