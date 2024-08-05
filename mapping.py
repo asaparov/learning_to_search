@@ -15,7 +15,7 @@ compile_if_needed()
 import generator
 
 from vocab import NAMES, NOUNS, CONNECTORS, VOCAB
-from test_tk import tokenizer
+# from test_tk import tokenizer
 
 def generate_atoms(atom_count):
     atoms = set()
@@ -97,9 +97,10 @@ def map_tokens_to_natural_language(tokens, output, max_input_size, verbose=False
             print(f"{tokens[i]} -> {out_tokens[i]}")
 
     # flattened_out_tokens = [item for sublist in out_tokens for item in sublist]
-    return " ".join(out_tokens), token_to_atom[int(output)]
+    full_out = " ".join(out_tokens) + "\n" + token_to_atom[int(output)]
+    return full_out, token_to_atom[int(output)]
 
-def map_tokens_to_natural_language_batched(data, output_tokens, input_size, verbose=False):
+def map_tokens_to_natural_language_batched(tokenizer, data, output_tokens, input_size, TRANSFORMER_LENGTH, verbose=False):
 
     batch_size = data.shape[0]
     all_tok = []
@@ -111,8 +112,8 @@ def map_tokens_to_natural_language_batched(data, output_tokens, input_size, verb
         all_out.append(output)
     
     # tokenize
-    all_tok = tokenizer.batch_encode_plus(all_tok, return_tensors='pt', padding=True)['input_ids']
-    all_out = tokenizer.batch_encode_plus(all_out, return_tensors='pt', padding=True)['input_ids']
+    all_tok = tokenizer.batch_encode_plus(all_tok, return_tensors='pt', padding='max_length', pad_to_max_length=True, max_length=TRANSFORMER_LENGTH)['input_ids']
+    all_out = tokenizer.batch_encode_plus(all_out, return_tensors='pt', padding='max_length', pad_to_max_length=True, max_length=TRANSFORMER_LENGTH)['input_ids']
 
     return all_tok, all_out
 
@@ -147,7 +148,7 @@ if __name__ == "__main__":
 
     # for i, (data, output_tokens) in enumerate(zip(generated_data[0], generated_data[2])):
         # print(f"Example {i}:")
-    tokens, output = map_tokens_to_natural_language_batched(generated_data[0], generated_data[2], args.input_size)
+    tokens, output = map_tokens_to_natural_language_batched(tokenizer, generated_data[0], generated_data[2], args.input_size)
     import pdb; pdb.set_trace()
         # map
         # print("Input tokens:")

@@ -11,9 +11,46 @@ from torch.nn import CrossEntropyLoss, BCEWithLogitsLoss
 from torch.utils.data import Dataset, DataLoader
 from gpt2 import Transformer, TransformerLayer, ToeplitzMode, AblationMode
 from Sophia import SophiaG
+from vocab import VOCAB
 import time
 import multiprocessing
 from mapping import map_tokens_to_natural_language, map_tokens_to_natural_language_batched
+
+from tokenizers import Tokenizer
+from tokenizers.models import WordLevel
+from tokenizers.pre_tokenizers import Whitespace, Punctuation
+from tokenizers.processors import TemplateProcessing
+from transformers import PreTrainedTokenizerFast
+from tokenizers import processors
+from tokenizers.pre_tokenizers import BertPreTokenizer
+
+def create_custom_tokenizer(vocab, max_length, save_path="./"):
+    tokenizer = Tokenizer(WordLevel(vocab=dict(zip(vocab, range(len(vocab)))), unk_token="[UNK]"))
+    
+    tokenizer.pre_tokenizer = BertPreTokenizer()
+    # Set up post-processing
+    # tokenizer.post_processor = TemplateProcessing(
+    #     single="[CLS] $A [SEP]",
+    #     pair="[CLS] $A [SEP] $B:1 [SEP]:1",
+    #     special_tokens=[
+    #         ("[CLS]", tokenizer.token_to_id("[CLS]")),
+    #         ("[SEP]", tokenizer.token_to_id("[SEP]")),
+    #     ],
+    # )
+
+    fast_tokenizer = PreTrainedTokenizerFast(
+        tokenizer_object=tokenizer,
+        unk_token="[UNK]",
+        pad_token="[PAD]",
+        cls_token="[CLS]",
+        sep_token="[SEP]",
+        mask_token="[MASK]",
+        padding_side="left",
+		max_length=max_length
+    )   
+
+    return fast_tokenizer
+
 
 def build_module(name):
 	from os import system
@@ -630,7 +667,19 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 	seed(seed_value)
 	torch.manual_seed(seed_value)
 	np.random.seed(seed_value)
-	PADDING_TOKEN = (max_input_size-5) // 3 + 3
+
+	
+	if nl:
+		TRANSFORMER_LENGTH = max_input_size * 6
+		tokenizer = create_custom_tokenizer(vocab=VOCAB, max_length=TRANSFORMER_LENGTH)
+		ntoken = len(tokenizer)
+		PADDING_TOKEN = tokenizer.pad_token_id
+	else:
+		PADDING_TOKEN = (max_input_size-5) // 3 + 3
+		TRANSFORMER_LENGTH = max_input_size
+		ntoken = (max_input_size-5) // 3 + 5
+	
+	
 	BATCH_SIZE = 2 ** 10
 	print('Number of available CPUs: {}'.format(len(sched_getaffinity(0))))
 	stdout.flush()
@@ -714,7 +763,7 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 		train_loader = DataLoader(train_data, batch_size=BATCH_SIZE, shuffle=True)
 
 	# compute the checkpoint filenames and try to resume from the last one
-	filename = prefix + 'checkpoints_v3_{}layer_inputsize{}_maxlookahead{}_seed{}_train{}'.format(nlayers, max_input_size, max_lookahead, seed_value, dataset_size if dataset_size != -1 else 'streaming')
+	filename = prefix + 'checkpoints_v3_{}_{}layer_inputsize{}_maxlookahead{}_seed{}_train{}'.format(nl, nlayers, max_input_size, max_lookahead, seed_value, dataset_size if dataset_size != -1 else 'streaming')
 	if bidirectional:
 		filename += '_nomask'
 	if not absolute_pos_emb:
@@ -754,7 +803,6 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 		existing_epochs = []
 		makedirs(filename)
 
-	ntoken = (max_input_size-5) // 3 + 5
 	nhead = 1
 	d_hid = ntoken + hidden_dim
 	dropout = 0
@@ -779,7 +827,7 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 				layers=initial_layers,
 				pad_idx=PADDING_TOKEN,
 				words=ntoken,
-				seq_len=max_input_size,
+				seq_len=TRANSFORMER_LENGTH,
 				heads=nhead,
 				dims=max(ntoken,d_hid),
 				rate=1,
@@ -881,7 +929,7 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 						inputs, outputs, labels, num_collisions = generator.generate_training_set(max_input_size, BATCH_SIZE, self.lookahead, self.max_edges, reserved_inputs, dist_from_start, True)
 
 						if nl:
-							inputs, labels = map_tokens_to_natural_language_batched(inputs, labels, max_input_size)
+							inputs, labels = map_tokens_to_natural_language_batched(tokenizer, inputs, labels, max_input_size, TRANSFORMER_LENGTH)
 
 					if num_collisions != 0:
 						with self.collisions_lock:
@@ -890,7 +938,7 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 						stdout.flush()
 
 					worker_end_time = time.perf_counter()
-					#print('[WORKER {}] yield = {}, throughput = {} examples/s, rank = {}'.format(worker_id, current, BATCH_SIZE / (worker_end_time - worker_start_time), multiprocessing.current_process()._identity[0]))
+					#print('[WORKER {}] yield = {}, throughput = {} examples/s, rank = {}'.format(worker_id, curreinpunt, BATCH_SIZE / (worker_end_time - worker_start_time), multiprocessing.current_process()._identity[0]))
 					#print('[WORKER {}] time to get seed = {}s, time to generate data = {}s'.format(worker_id, generate_start_time - worker_start_time, worker_end_time - generate_start_time))
 					#stdout.flush()
 					yield inputs, outputs, labels
@@ -915,25 +963,28 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 		reinit_data_loader = False
 		for batch in (train_loader if dataset_size == -1 else cycle(train_loader)):
 
-			print(batch)
-			import pdb; pdb.set_trace()
-
 			batch_start_time = time.perf_counter()
 			model.train()
 			optimizer.zero_grad()
 
 			input, output, label = batch
-			input = input.to(device, non_blocking=True)
-			output = output.to(device, non_blocking=True)
-			label = label.to(device, non_blocking=True)
-
-			#if device.type == 'cuda':
+			
+				#if device.type == 'cuda':
 			#	torch.cuda.synchronize(device)
 			train_start_time = time.perf_counter()
 			transfer_time += train_start_time - batch_start_time
 
+			input = input.to(device, non_blocking=True)
+			output = output.to(device, non_blocking=True)
+			label = label.to(device, non_blocking=True)
+
 			logits = model(input)
-			loss_val = loss_func(logits[:, -1, :], label)
+			if nl: 
+				loss_val = loss_func(logits[:, :-1, :].reshape(-1, logits.shape[-1]), label[:,1:].reshape(-1))
+
+			else:
+				loss_val = loss_func(logits[:, -1, :], label)
+
 			if toeplitz_reg != 0.0:
 				def compute_toeplitz_regularization(m):
 					regularization = 0.0
