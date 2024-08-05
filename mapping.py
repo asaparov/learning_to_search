@@ -115,7 +115,10 @@ def map_tokens_to_natural_language_batched(tokenizer, data, output_tokens, input
     all_tok = tokenizer.batch_encode_plus(all_tok, return_tensors='pt', padding='max_length', pad_to_max_length=True, max_length=TRANSFORMER_LENGTH)['input_ids']
     all_out = tokenizer.batch_encode_plus(all_out, return_tensors='pt', padding='max_length', pad_to_max_length=True, max_length=TRANSFORMER_LENGTH)['input_ids']
 
-    return all_tok, all_out
+    # do one hot encoding of all_out
+    all_out_vec = torch.nn.functional.one_hot(all_out, num_classes=len(VOCAB)).float()
+
+    return all_tok, all_out_vec, all_out
 
 def tokenize_and_join(tokens):
     return ' '.join(tokens)

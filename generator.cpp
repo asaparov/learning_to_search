@@ -52,6 +52,168 @@ inline bool operator == (const node& first, const node& second) {
 	return first.id == second.id;
 }
 
+
+#include <core/array.h>
+#include <core/map.h>
+#include <string>
+
+using namespace core;
+
+// const array<std::string> NAMES = {
+//     "Alex", "Bob", "Charlie", "David", "Eve", "Fred", "Gina", "Hank", "Ivy", "Jack",
+//     "Kyle", "Lily", "Mia", "Nate", "Olivia", "Pam", "Quinn", "Ryan", "Sam", "Tara",
+//     "Uma", "Victor", "Wendy", "Xavier", "Yara", "Zara"
+// };
+
+// const array<std::string> NOUNS = {
+//     "qumpus", "shumpus", "grumpus", "plumpus", "clumpus", "kumpus", "sumpus", "slumpus", "umpus",
+//     "flumpus", "lumpus", "rumpus", "numpus", "glumpus", "mumpus", "tumpus", "humpus", "bumpus",
+//     "pumpus", "xumpus", "wumpus", "jumpus", "yumpus", "zumpus", "blumpus", "dumpus", "frumpus", "vumpus"
+// };
+
+// const array_map<std::string, std::string> CONNECTORS = {
+//     {"is a", "singular"},
+//     {"has", "plural"},
+//     {"wants", "plural"},
+//     {"likes", "plural"},
+//     {"cares for a", "singular"},
+//     {"is friends with a", "singular"}
+// };
+
+// array<std::string> VOCAB;
+
+// void initialize_vocab() {
+//     VOCAB = NAMES;
+//     VOCAB.append(NOUNS.data, NOUNS.length);
+    
+//     for (const auto& noun : NOUNS) {
+//         VOCAB.add(noun + "es");
+//     }
+    
+//     array<std::string> additional_words = {
+//         "a", "is", "has", "wants", "likes", "cares", "for", "friends", "with", "then", "Given", "If", "prove",
+//         ".", " ", ",", "\n", ":",
+//         "Query", "Prefix", "Statements",
+//         "[PAD]", "[UNK]", "[CLS]", "[SEP]", "[MASK]"
+//     };
+    
+//     VOCAB.append(additional_words.data, additional_words.length);
+// }
+
+// array<std::string> generate_atoms(unsigned int atom_count) {
+//     array<std::string> atoms(atom_count);
+//     while (atoms.length < atom_count) {
+//         std::string connector = choice(CONNECTORS.keys().data(), CONNECTORS.size());
+//         std::string predicate = choice(NOUNS.data(), NOUNS.size());
+        
+//         if (CONNECTORS.at(connector) == "plural") {
+//             predicate += "es";
+//         }
+        
+//         std::string atom = choice(NAMES.data(), NAMES.size()) + " " + connector + " " + predicate + ".";
+//         if (!atoms.contains(atom))
+//             atoms.add(atom);
+//     }
+//     shuffle(atoms.data, atoms.length);
+//     return atoms;
+// }
+
+// array<std::string> generate_edge(unsigned int src, unsigned int dest, const array<std::string>& atom_map) {
+//     array<std::string> result(2);
+//     result.add("If " + atom_map[src].substr(0, atom_map[src].length() - 1) + ",");
+//     result.add("then " + atom_map[dest].substr(0, atom_map[dest].length() - 1) + ".");
+//     return result;
+// }
+
+// std::pair<std::string, std::string> map_tokens_to_natural_language(const array<int64_t>& tokens, int64_t output, unsigned int max_input_size, bool verbose = false) {
+//     const unsigned int QUERY_PREFIX_TOKEN = (max_input_size - 5) / 3 + 4;
+//     const unsigned int PADDING_TOKEN = (max_input_size - 5) / 3 + 3;
+//     const unsigned int EDGE_PREFIX_TOKEN = (max_input_size - 5) / 3 + 2;
+//     const unsigned int PATH_PREFIX_TOKEN = (max_input_size - 5) / 3 + 1;
+
+//     array<int64_t> unique_tokens(tokens.length);
+//     for (int64_t token : tokens) {
+//         if (token != QUERY_PREFIX_TOKEN && token != PADDING_TOKEN &&
+//             token != EDGE_PREFIX_TOKEN && token != PATH_PREFIX_TOKEN) {
+//             if (!unique_tokens.contains(token))
+//                 unique_tokens.add(token);
+//         }
+//     }
+
+//     array<std::string> atoms = generate_atoms(unique_tokens.length);
+//     array_map<int64_t, std::string> token_to_atom(unique_tokens.length);
+//     for (size_t i = 0; i < unique_tokens.length; ++i) {
+//         token_to_atom.add(unique_tokens[i], atoms[i]);
+//     }
+
+//     array<std::string> out_tokens(tokens.length);
+//     size_t i = 0;
+//     try {
+//         while (i < tokens.length) {
+//             if (tokens[i] == QUERY_PREFIX_TOKEN) {
+//                 out_tokens.add("Given");
+//                 out_tokens.add(token_to_atom.get(tokens[i+1]).substr(0, token_to_atom.get(tokens[i+1]).length() - 1) + ",");
+//                 out_tokens.add("prove");
+//                 out_tokens.add(token_to_atom.get(tokens[i+2]));
+//                 i += 2;
+//             } else if (tokens[i] == EDGE_PREFIX_TOKEN) {
+//                 array<std::string> edge = generate_edge(tokens[i+1], tokens[i+2], atoms);
+//                 out_tokens.append(edge.data, edge.length);
+//                 i += 2;
+//             } else if (tokens[i] == PATH_PREFIX_TOKEN) {
+//                 while (i + 1 < tokens.length) {
+//                     if (tokens[i+1] == PATH_PREFIX_TOKEN) {
+//                         // Do nothing
+//                     } else {
+//                         std::string atom = token_to_atom.get(tokens[i+1]);
+//                     }
+//                     i++;
+//                 }
+//             } else if (tokens[i] == PADDING_TOKEN) {
+//                 // Do nothing
+//             }
+//             i++;
+//         }
+//     } catch (const std::exception& e) {
+//         fprintf(stderr, "Error mapping tokens to natural language: %s\n", e.what());
+//     }
+
+//     if (verbose) {
+//         for (size_t i = 0; i < tokens.length; ++i) {
+//             printf("%ld -> %s\n", tokens[i], (i < out_tokens.length ? out_tokens[i].c_str() : "N/A"));
+//         }
+//     }
+
+//     std::string full_out = "";
+//     for (const auto& token : out_tokens) {
+//         full_out += token + " ";
+//     }
+//     full_out += "\n" + token_to_atom.get(output);
+
+//     return std::make_pair(full_out, token_to_atom.get(output));
+// }
+
+py::tuple map_tokens_to_natural_language_batched(const py::array_t<int64_t>& data, const py::array_t<int64_t>& output_tokens, unsigned int input_size, unsigned int TRANSFORMER_LENGTH, bool verbose = false) {
+    // auto data_unchecked = data.unchecked<2>();
+    // auto output_tokens_unchecked = output_tokens.unchecked<1>();
+    // size_t batch_size = data_unchecked.shape(0);
+
+    // array<std::string> all_tok(batch_size);
+    // array<std::string> all_out(batch_size);
+    
+    // for (size_t i = 0; i < batch_size; ++i) {
+    //     array<int64_t> tokens(input_size);
+    //     for (size_t j = 0; j < input_size; ++j) {
+    //         tokens.add(data_unchecked(i, j));
+    //     }
+    //     auto [tokens_str, output_str] = map_tokens_to_natural_language(tokens, output_tokens_unchecked(i), input_size, verbose);
+    //     all_tok.add(tokens_str);
+    //     all_out.add(output_str);
+    // }
+    
+    // return py::make_tuple(all_tok, all_out);
+}
+
 /* computes the number of lookahead steps to find the answer */
 unsigned int lookahead_depth(const node* vertex, const node* next_vertex, const node* goal)
 {
@@ -445,7 +607,7 @@ bool has_path(const node* start, const node* end)
 	return false;
 }
 
-py::tuple generate_training_set(const unsigned int max_input_size, const uint64_t dataset_size, const unsigned int max_lookahead, const unsigned int max_edges, const py::object& reserved_inputs, const int distance_from_start, const bool quiet=false)
+py::tuple generate_training_set(const unsigned int max_input_size, const uint64_t dataset_size, const unsigned int max_lookahead, const unsigned int max_edges, const py::object& reserved_inputs, const int distance_from_start, const bool nl, const bool quiet=false)
 {
 	const unsigned int QUERY_PREFIX_TOKEN = (max_input_size-5) / 3 + 4;
 	const unsigned int PADDING_TOKEN = (max_input_size-5) / 3 + 3;
@@ -626,8 +788,21 @@ py::tuple generate_training_set(const unsigned int max_input_size, const uint64_
 		continue;
 	}
 
-	return py::make_tuple(inputs, outputs, labels, num_collisions);
+    // if (false) {
+    //     auto [new_inputs, new_outputs, new_labels] = map_tokens_to_natural_language_batched(inputs, labels, max_input_size, 192);
+    //     inputs = new_inputs;
+    //     outputs = new_outputs;
+    //     labels = new_labels;
+
+	// 	return py::make_tuple(inputs, outputs, labels, num_collisions);
+    // }
+	// else
+		return py::make_tuple(inputs, outputs, labels, num_collisions);
 }
+
+
+
+
 
 py::tuple generate_reachable_training_set(const unsigned int max_input_size, const uint64_t dataset_size, const unsigned int lookahead, const unsigned int max_edges, const py::object& reserved_inputs, const int distance_from_start, const int reachable_distance, const unsigned int start_vertex_index, const bool exclude_start_vertex)
 {
@@ -1028,4 +1203,5 @@ PYBIND11_MODULE(generator, m) {
 	m.def("generate_reachable_training_set", &generate_reachable_training_set);
 	m.def("generate_dfs_training_set", &generate_dfs_training_set);
 	m.def("set_seed", &core::set_seed);
+	m.def("map_tokens_to_natural_language_batched", &map_tokens_to_natural_language_batched);
 }

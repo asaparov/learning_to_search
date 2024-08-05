@@ -167,7 +167,6 @@ class Transformer(nn.Module):
                 pos = self.positional_embedding.unsqueeze(0).expand(x.shape[0], -1, -1)
             x = torch.cat((x, pos), -1)
         x = self.dropout_embedding(x)
-        #import pdb; pdb.set_trace()
 
         '''print("embedded input:")
         for i in range(x.size(0)):

@@ -512,10 +512,12 @@ def generate_eval_data(max_input_size, min_path_length=2, distance_from_start=-1
 
 	return inputs, outputs
 
-def evaluate_model(model, inputs, outputs):
+def evaluate_model(model, inputs, labels, outputs, nl, PADDING_TOKEN):
 	device = next(model.parameters()).device
 	inputs = torch.tensor(inputs)
 	outputs = torch.tensor(outputs)
+	labels = torch.tensor(labels)
+	labels = labels.to(device)
 	inputs = inputs.to(device)
 	outputs = outputs.to(device)
 	max_input_size = inputs.shape[1]
@@ -524,15 +526,28 @@ def evaluate_model(model, inputs, outputs):
 		loss_func = BCEWithLogitsLoss(reduction='mean')
 	else:
 		loss_func = CrossEntropyLoss(reduction='mean')
-	logits, _ = model(inputs)
-	loss = loss_func(logits[:, -1, :], outputs).item()
 
-	predictions = torch.argmax(logits[:, -1, :], 1)
-	if outputs.dim() == 2:
-		acc = torch.sum(torch.gather(outputs, 1, torch.argmax(logits[:,-1,:],dim=1).unsqueeze(1))).item() / outputs.size(0)
+	logits, _ = model(inputs)
+	
+	if nl:
+		loss_func = CrossEntropyLoss(ignore_index=PADDING_TOKEN, reduction='mean')
+		loss = loss_func(logits[:, :-1, :].reshape(-1, logits.shape[2]), labels[:, 1:].reshape(-1)).item()
+		
+		training_acc = (labels[:, 1:] == torch.argmax(logits[:, :-1, :], dim=2)) * (labels[:, 1:] != PADDING_TOKEN)  # b x (l-1)
+		padding_mask = (labels[:, 1:] == PADDING_TOKEN)
+		training_acc = torch.all(torch.logical_or(padding_mask, training_acc), dim=1).float()  # b
+		training_acc = torch.sum(training_acc).item() / labels.size(0)
+		return training_acc, loss, None
+
 	else:
-		acc = sum(predictions == outputs).item() / len(predictions)
-	return acc, loss, predictions
+		loss = loss_func(logits[:, -1, :], outputs).item()
+
+		predictions = torch.argmax(logits[:, -1, :], 1)
+		if outputs.dim() == 2:
+			acc = torch.sum(torch.gather(outputs, 1, torch.argmax(logits[:,-1,:],dim=1).unsqueeze(1))).item() / outputs.size(0)
+		else:
+			acc = sum(predictions == outputs).item() / len(predictions)
+		return acc, loss, predictions
 
 class DummyDataset(Dataset):
 	def __init__(self, inputs, outputs, device, x_type=LongTensor, y_type=LongTensor):
@@ -680,7 +695,7 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 		ntoken = (max_input_size-5) // 3 + 5
 	
 	
-	BATCH_SIZE = 2 ** 10
+	BATCH_SIZE = 2**10
 	print('Number of available CPUs: {}'.format(len(sched_getaffinity(0))))
 	stdout.flush()
 
@@ -696,41 +711,48 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 
 	reserved_inputs = set()
 	NUM_TEST_SAMPLES = 10000
-	test = False
 	dist_from_start = 1
-	if test:
-		if dfs:
-			# TODO: i think we could theoretically generate examples with `backtrack_distance = (max_input_size - 4) // 4 - 1`, but the rejection rate in the current rejection sampling method is too high to feasibly generate such samples
-			max_backtrack_distance = (max_input_size - 4) // 4 - 2
-			for backtrack_distance in [-1] + list(range(1, max_backtrack_distance + 1)):
-				generator.set_seed(seed_value)
-				print('Reserving OOD test data for lookahead = {}'.format(lookahead))
-				stdout.flush();
-				inputs,outputs,_,_ = generator.generate_dfs_training_set(max_input_size, NUM_TEST_SAMPLES, reserved_inputs, backtrack_distance, True)
-				for i in range(inputs.shape[0]):
-					reserved_inputs.add(tuple([x for x in inputs[i,:] if x != PADDING_TOKEN]))
-				if backtrack_distance == -1:
-					eval_inputs, eval_outputs = inputs, outputs
-		else:
-			max_test_lookahead = ((max_input_size - 5) // 3 - 1) // 2
-			dist_from_start = 1 if add_padding else -1
-			for lookahead in list(range(1, max_test_lookahead + 1)) + [None]:
-				gen_eval_start_time = time.perf_counter()
-				setstate(random_state)
-				np.random.set_state(np_random_state)
-				torch.set_rng_state(torch_random_state)
+	if dfs:
+		# TODO: i think we could theoretically generate examples with `backtrack_distance = (max_input_size - 4) // 4 - 1`, but the rejection rate in the current rejection sampling method is too high to feasibly generate such samples
+		max_backtrack_distance = (max_input_size - 4) // 4 - 2
+		for backtrack_distance in [-1] + list(range(1, max_backtrack_distance + 1)):
+			generator.set_seed(seed_value)
+			print('Reserving OOD test data for lookahead = {}'.format(lookahead))
+			stdout.flush();
+			inputs,outputs,_,_ = generator.generate_dfs_training_set(max_input_size, NUM_TEST_SAMPLES, reserved_inputs, backtrack_distance, True)
+			for i in range(inputs.shape[0]):
+				reserved_inputs.add(tuple([x for x in inputs[i,:] if x != PADDING_TOKEN]))
+			if backtrack_distance == -1:
+				eval_inputs, eval_outputs = inputs, outputs
+	else:
+		max_test_lookahead = ((max_input_size - 5) // 3 - 1) // 2
+		dist_from_start = 1 if add_padding else -1
+		for lookahead in list(range(1, max_test_lookahead + 1)):
+			gen_eval_start_time = time.perf_counter()
+			setstate(random_state)
+			np.random.set_state(np_random_state)
+			torch.set_rng_state(torch_random_state)
 
-				print('Reserving OOD test data for lookahead = {}'.format(lookahead))
-				stdout.flush()
-				inputs,outputs = generate_eval_data(max_input_size, min_path_length=2, distance_from_start=dist_from_start, distance_from_end=-1, lookahead_steps=lookahead, num_paths_at_fork=None, num_samples=NUM_TEST_SAMPLES)
-				print('Done. Throughput: {} examples/s'.format(NUM_TEST_SAMPLES / (time.perf_counter() - gen_eval_start_time)))
-				for i in range(inputs.shape[0]):
-					reserved_inputs.add(tuple([x for x in inputs[i,:] if x != PADDING_TOKEN]))
-				if lookahead == None:
-					eval_inputs, eval_outputs = inputs, outputs
-		if BATCH_SIZE < eval_inputs.shape[0]:
-			eval_inputs = eval_inputs[:BATCH_SIZE]
-			eval_outputs = eval_outputs[:BATCH_SIZE]
+			print('Reserving OOD test data for lookahead = {}'.format(lookahead))
+			stdout.flush()
+			# inputs,outputs = generate_eval_data(max_input_size, min_path_length=2, distance_from_start=dist_from_start, distance_from_end=-1, lookahead_steps=lookahead, num_paths_at_fork=None, num_samples=NUM_TEST_SAMPLES)
+			max_edges = (max_input_size - 5) // 3
+			inputs, outputs, labels, num_collisions = generator.generate_training_set(max_input_size, NUM_TEST_SAMPLES, lookahead, max_edges, reserved_inputs, dist_from_start, nl,True)
+
+			print('Done. Throughput: {} examples/s'.format(NUM_TEST_SAMPLES / (time.perf_counter() - gen_eval_start_time)))
+			for i in range(inputs.shape[0]):
+				reserved_inputs.add(tuple([x for x in inputs[i,:] if x != PADDING_TOKEN]))
+
+			if nl:
+				eval_inputs, eval_outputs, eval_labels, eval_num_collisions = inputs, outputs, labels, num_collisions
+				eval_inputs, eval_outputs, eval_labels = map_tokens_to_natural_language_batched(tokenizer, eval_inputs, eval_labels, max_input_size, TRANSFORMER_LENGTH)
+			else:
+				eval_inputs, eval_outputs, eval_labels, eval_num_collisions = inputs, outputs, labels, num_collisions
+	if BATCH_SIZE < eval_inputs.shape[0]:
+		eval_inputs = eval_inputs[:BATCH_SIZE]
+		eval_outputs = eval_outputs[:BATCH_SIZE]
+		eval_labels = eval_labels[:BATCH_SIZE]
+		# eval_num_collisions = eval_num_collisions[:BATCH_SIZE]
 
 	train_filename = 'train{}_v3_inputsize{}_maxlookahead{}_{}seed{}.pkl'.format(dataset_size, max_input_size, max_lookahead, 'padded_' if add_padding else '', seed_value)
 	prefix = 'dfs_results/' if dfs else 'useful_path_results/'
@@ -926,11 +948,10 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 					if dfs:
 						inputs, outputs, labels, num_collisions = generator.generate_dfs_training_set(max_input_size, BATCH_SIZE, reserved_inputs, -1, True)
 					else:
-						inputs, outputs, labels, num_collisions = generator.generate_training_set(max_input_size, BATCH_SIZE, self.lookahead, self.max_edges, reserved_inputs, dist_from_start, True)
+						inputs, outputs, labels, num_collisions = generator.generate_training_set(max_input_size, BATCH_SIZE, self.lookahead, self.max_edges, reserved_inputs, dist_from_start, nl, True)
 
 						if nl:
-							inputs, labels = map_tokens_to_natural_language_batched(tokenizer, inputs, labels, max_input_size, TRANSFORMER_LENGTH)
-
+							inputs, outputs, labels = map_tokens_to_natural_language_batched(tokenizer, inputs, labels, max_input_size, TRANSFORMER_LENGTH)
 					if num_collisions != 0:
 						with self.collisions_lock:
 							self.total_collisions.value += num_collisions
@@ -959,7 +980,7 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 		log_time = 0.0
 		epoch_loss = 0.0
 		num_batches = 0
-		effective_dataset_size = (STREAMING_BLOCK_SIZE if dataset_size == -1 else dataset_size)
+		effective_dataset_size = 8  # (STREAMING_BLOCK_SIZE if dataset_size == -1 else dataset_size)
 		reinit_data_loader = False
 		for batch in (train_loader if dataset_size == -1 else cycle(train_loader)):
 
@@ -981,7 +1002,6 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 			logits = model(input)
 			if nl: 
 				loss_val = loss_func(logits[:, :-1, :].reshape(-1, logits.shape[-1]), label[:,1:].reshape(-1))
-
 			else:
 				loss_val = loss_func(logits[:, -1, :], label)
 
@@ -1043,12 +1063,20 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 				if epoch % eval_interval == 0:
 					model.eval()
 					logits, _ = model(input)
-					training_acc = torch.sum(torch.gather(output, 1, torch.argmax(logits[:,-1,:],dim=1).unsqueeze(1))).item() / output.size(0)
+					
+					if nl:					
+						training_acc = (label[:, 1:] == torch.argmax(logits[:, :-1, :], dim=2)) * (label[:, 1:] != PADDING_TOKEN)  # b x (l-1)
+						padding_mask = (label[:, 1:] == PADDING_TOKEN)
+						training_acc = torch.all(torch.logical_or(padding_mask, training_acc), dim=1).float()  # b
+						training_acc = torch.sum(training_acc).item() / output.size(0)
+					else:
+						training_acc = torch.sum(torch.gather(output, 1, torch.argmax(logits[:,-1,:],dim=1).unsqueeze(1))).item() / output.size(0)
+
 					print("training accuracy: %.2f±%.2f" % (training_acc, binomial_confidence_int(training_acc, output.size(0))))
 					del input, output
 					stdout.flush()
 
-					test_acc,test_loss,_ = evaluate_model(model, eval_inputs, eval_outputs)
+					test_acc,test_loss,_ = evaluate_model(model, eval_inputs, eval_labels, eval_outputs, nl, PADDING_TOKEN)
 					print("test accuracy = %.2f±%.2f, test loss = %f" % (test_acc, binomial_confidence_int(test_acc, 1000), test_loss))
 					stdout.flush()
 					#time6 = time.perf_counter()
