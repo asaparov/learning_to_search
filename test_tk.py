@@ -1,15 +1,20 @@
 from tokenizers import Tokenizer
 from tokenizers.models import WordLevel
-from tokenizers.pre_tokenizers import WhitespaceSplit
+from tokenizers.pre_tokenizers import Whitespace, Punctuation
 from tokenizers.processors import TemplateProcessing
 from transformers import PreTrainedTokenizerFast
+from tokenizers import processors
+from tokenizers.pre_tokenizers import BertPreTokenizer
+
 
 def create_custom_tokenizer(vocab, save_path="./"):
     # Create a WordLevel tokenizer
     tokenizer = Tokenizer(WordLevel(vocab=dict(zip(vocab, range(len(vocab)))), unk_token="[UNK]"))
     
     # Set the pre-tokenizer to split on whitespace
-    tokenizer.pre_tokenizer = WhitespaceSplit()
+    # tokenizer.pre_tokenizer = processors.Sequence([Whitespace(), Punctuation()])
+    tokenizer.pre_tokenizer = BertPreTokenizer() #processors.Sequence([Whitespace(), Punctuation()])
+
 
     # Set up post-processing
     # tokenizer.post_processor = TemplateProcessing(
@@ -33,7 +38,8 @@ def create_custom_tokenizer(vocab, save_path="./"):
         cls_token="[CLS]",
         sep_token="[SEP]",
         mask_token="[MASK]",
-    )
+        padding_side="left"
+    )   
 
     # Save the tokenizer configuration
     fast_tokenizer.save_pretrained(save_path)
@@ -62,6 +68,10 @@ def test_tokenizer(tokenizer):
     print(f"Decoded with unknown word: {unknown_decoded}")
 
 # Create the custom tokenizer
+
+from vocab import NAMES, NOUNS, CONNECTORS, VOCAB
+from test_tk import create_custom_tokenizer
+tokenizer = create_custom_tokenizer(VOCAB)
 
 
 if __name__ == "__main__":

@@ -10,13 +10,12 @@ from compile import compile_if_needed
 from transformers import PreTrainedTokenizerFast
 from tokenizers import BertWordPieceTokenizer
 from transformers import BertTokenizerFast
-from vocab import NAMES, NOUNS, CONNECTORS, VOCAB
-from test_tk import create_custom_tokenizer
 
 compile_if_needed()
 import generator
 
-tokenizer = create_custom_tokenizer(VOCAB)
+from vocab import NAMES, NOUNS, CONNECTORS, VOCAB
+from test_tk import tokenizer
 
 def generate_atoms(atom_count):
     atoms = set()
