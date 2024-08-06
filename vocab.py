@@ -15,17 +15,17 @@ NOUNS = [
 CONNECTORS = {
     "is a": 'singular',
     "has": 'plural',
-    "wants": 'plural',
-    "likes": 'plural',
+    "wants a": 'singular',
+    "likes many": 'plural',
     "cares for a": "singular",
-    "is friends with a": "singular",
+    "is friends with": "plural",
 }
 
 
 VOCAB = NAMES + \
         NOUNS + \
         [noun + 'es' for noun in NOUNS] + \
-        ['a', 'is', 'has', 'wants', 'likes', 'cares', 'for', 'friends', 'with', 'then', 'Given', 'If', 'prove' ] + \
+        ['a', 'is', 'has', 'wants', 'likes', 'cares', 'for', 'friends', 'with', 'then', 'Given', 'If', 'prove', 'many' ] + \
         ['.', ' ', ',', '\n', ":"] +\
         ['Query', 'Prefix', 'Statements'] + \
         ["[PAD]", "[UNK]", "[CLS]", "[SEP]", "[MASK]"]

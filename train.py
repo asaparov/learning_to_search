@@ -15,42 +15,7 @@ from vocab import VOCAB
 import time
 import multiprocessing
 from mapping import map_tokens_to_natural_language, map_tokens_to_natural_language_batched
-
-from tokenizers import Tokenizer
-from tokenizers.models import WordLevel
-from tokenizers.pre_tokenizers import Whitespace, Punctuation
-from tokenizers.processors import TemplateProcessing
-from transformers import PreTrainedTokenizerFast
-from tokenizers import processors
-from tokenizers.pre_tokenizers import BertPreTokenizer
-
-def create_custom_tokenizer(vocab, max_length, save_path="./"):
-    tokenizer = Tokenizer(WordLevel(vocab=dict(zip(vocab, range(len(vocab)))), unk_token="[UNK]"))
-    
-    tokenizer.pre_tokenizer = BertPreTokenizer()
-    # Set up post-processing
-    # tokenizer.post_processor = TemplateProcessing(
-    #     single="[CLS] $A [SEP]",
-    #     pair="[CLS] $A [SEP] $B:1 [SEP]:1",
-    #     special_tokens=[
-    #         ("[CLS]", tokenizer.token_to_id("[CLS]")),
-    #         ("[SEP]", tokenizer.token_to_id("[SEP]")),
-    #     ],
-    # )
-
-    fast_tokenizer = PreTrainedTokenizerFast(
-        tokenizer_object=tokenizer,
-        unk_token="[UNK]",
-        pad_token="[PAD]",
-        cls_token="[CLS]",
-        sep_token="[SEP]",
-        mask_token="[MASK]",
-        padding_side="left",
-		max_length=max_length
-    )   
-
-    return fast_tokenizer
-
+from mapping import create_custom_tokenizer
 
 def build_module(name):
 	from os import system
@@ -677,7 +642,7 @@ def generate_training_set(max_input_size, dataset_size, max_lookahead, reserved_
 
 	return inputs, outputs, valid_outputs, num_collisions
 
-def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidden_dim, bidirectional, absolute_pos_emb, learnable_token_emb, toeplitz_attn, toeplitz_reg, toeplitz_pos_only, add_padding, ablate, pre_ln, curriculum_mode, looped, dfs, nl):
+def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidden_dim, bidirectional, absolute_pos_emb, learnable_token_emb, toeplitz_attn, toeplitz_reg, toeplitz_pos_only, add_padding, ablate, pre_ln, curriculum_mode, looped, dfs, nl, nl2):
 	generator.set_seed(seed_value)
 	seed(seed_value)
 	torch.manual_seed(seed_value)
@@ -747,7 +712,9 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 				eval_inputs, eval_outputs, eval_labels, eval_num_collisions = inputs, outputs, labels, num_collisions
 				eval_inputs, eval_outputs, eval_labels = map_tokens_to_natural_language_batched(tokenizer, eval_inputs, eval_labels, max_input_size, TRANSFORMER_LENGTH)
 			else:
-				eval_inputs, eval_outputs, eval_labels, eval_num_collisions = inputs, outputs, labels, num_collisions
+				if nl2: 
+					eval_inputs, eval_outputs, eval_labels = map_tokens_to_natural_language_batched(tokenizer, eval_inputs, eval_labels, max_input_size, TRANSFORMER_LENGTH)
+				
 	if BATCH_SIZE < eval_inputs.shape[0]:
 		eval_inputs = eval_inputs[:BATCH_SIZE]
 		eval_outputs = eval_outputs[:BATCH_SIZE]
@@ -951,8 +918,8 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 					else:
 						inputs, outputs, labels, num_collisions = generator.generate_training_set(max_input_size, BATCH_SIZE, self.lookahead, self.max_edges, reserved_inputs, dist_from_start, nl, True)
 
-						# if nl:
-							# inputs, outputs, labels = map_tokens_to_natural_language_batched(tokenizer, inputs, labels, max_input_size, TRANSFORMER_LENGTH)
+						if nl:
+							inputs, outputs, labels = map_tokens_to_natural_language_batched(tokenizer, inputs, labels, max_input_size, TRANSFORMER_LENGTH)
 					if num_collisions != 0:
 						with self.collisions_lock:
 							self.total_collisions.value += num_collisions
@@ -985,9 +952,9 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 		reinit_data_loader = False
 		for batch in (train_loader if dataset_size == -1 else cycle(train_loader)):
 
-			num_batches += 1
-			print("batch = {}".format(num_batches))
-			continue
+			# num_batches += 1
+			# print("batch = {}".format(num_batches))
+			# continue
 
 			batch_start_time = time.perf_counter()
 			model.train()
@@ -1197,6 +1164,7 @@ if __name__ == "__main__":
 	parser.add_argument("--looped", type=parse_bool_arg, default=False)
 	parser.add_argument("--dfs", type=parse_bool_arg, default=False)
 	parser.add_argument('--nl',type=parse_bool_arg, default=False )
+	parser.add_argument('--nl2',type=parse_bool_arg, default=False )
 	args = parser.parse_args()
 
 	train(

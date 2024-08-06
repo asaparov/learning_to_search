@@ -128,10 +128,10 @@ void initialize_vocab() {
 	
 	CONNECTORS.put("is a", "singular");
 	CONNECTORS.put("has", "plural");
+	CONNECTORS.put("likes a", "singular");
 	CONNECTORS.put("wants", "plural");
-	CONNECTORS.put("likes", "plural");
 	CONNECTORS.put("cares for a", "singular");
-	CONNECTORS.put("is friends with a", "singular");
+	CONNECTORS.put("is friends with", "plural");
 
 	array<std::string> VOCAB = array<std::string>(150);
 
@@ -922,7 +922,7 @@ py::tuple generate_training_set(const unsigned int max_input_size, const uint64_
 		continue;
 	}
 
-    if (true) {
+    if (false) {
         // auto [new_inputs, new_labels] = map_tokens_to_natural_language_batched(inputs, labels, max_input_size, 192);
 		py::tuple result = map_tokens_to_natural_language_batched(inputs, labels, max_input_size, 192);
         py::list new_inputs = result[0].cast<py::list>();
@@ -933,10 +933,6 @@ py::tuple generate_training_set(const unsigned int max_input_size, const uint64_
 	else
 		return py::make_tuple(inputs, outputs, labels, num_collisions);
 }
-
-
-
-
 
 py::tuple generate_reachable_training_set(const unsigned int max_input_size, const uint64_t dataset_size, const unsigned int lookahead, const unsigned int max_edges, const py::object& reserved_inputs, const int distance_from_start, const int reachable_distance, const unsigned int start_vertex_index, const bool exclude_start_vertex)
 {
