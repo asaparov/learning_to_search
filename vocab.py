@@ -29,3 +29,6 @@ VOCAB = NAMES + \
         ['.', ' ', ',', '\n', ":"] +\
         ['Query', 'Prefix', 'Statements'] + \
         ["[PAD]", "[UNK]", "[CLS]", "[SEP]", "[MASK]"]
+
+
+VOCAB_DICT = dict(zip(VOCAB, range(len(VOCAB))))

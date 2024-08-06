@@ -14,34 +14,15 @@ from Sophia import SophiaG
 from vocab import VOCAB
 import time
 import multiprocessing
-from mapping import map_tokens_to_natural_language, map_tokens_to_natural_language_batched
-from mapping import create_custom_tokenizer
+from mapping_py import map_tokens_to_natural_language, map_tokens_to_natural_language_batched
+from mapping_py import create_custom_tokenizer
 
-def build_module(name):
-	from os import system
-	if system(f"g++ -Ofast -fno-stack-protector -Wall -Wpedantic -shared -fPIC $(python3 -m pybind11 --includes) -I../ {name}.cpp -o {name}$(python3-config --extension-suffix)") != 0:
-		print(f"ERROR: Unable to compile `{name}.cpp`.")
-		import sys
-		sys.exit(1)
-try:
-	from os.path import getmtime
-	from importlib.util import find_spec
-	generator_spec = find_spec('generator')
-	if generator_spec == None:
-		raise ModuleNotFoundError
-	if getmtime(generator_spec.origin) < getmtime('generator.cpp'):
-		print("C++ module `generator` is out-of-date. Compiling from source...")
-		build_module("generator")
-	import generator
-except ModuleNotFoundError:
-	print("C++ module `generator` not found. Compiling from source...")
-	build_module("generator")
-	import generator
-except ImportError:
-	print("Error loading C++ module `generator`. Compiling from source...")
-	build_module("generator")
-	import generator
-print("C++ module `generator` loaded.")
+from compile import compile_if_needed, compile_mapping_if_needed
+compile_if_needed()
+compile_mapping_if_needed()
+
+import generator
+import mapping
 
 RESERVED_INDICES = (0,)
 
@@ -62,6 +43,19 @@ class Node(object):
 
 	def __repr__(self):
 		return 'n(' + str(self.id) + ')'
+
+
+def map_tokens_to_natural_language_batched_and_tokenize(tokenizer, inputs, labels, max_input_size, TRANSFORMER_LENGTH):
+	# all_tok, all_out = mapping.map_tokens_to_natural_language_batched(inputs, labels, max_input_size, TRANSFORMER_LENGTH)
+
+	# all_tok = tokenizer.batch_encode_plus(all_tok, return_tensors='pt', padding='max_length', pad_to_max_length=True, max_length=TRANSFORMER_LENGTH)['input_ids']
+	# all_out = tokenizer.batch_encode_plus(all_out, return_tensors='pt')['input_ids'].squeeze()
+
+	# all_out_vec = torch.nn.functional.one_hot(all_out, num_classes=len(tokenizer.vocab)).float()
+	all_tok, all_out_vec, all_out = map_tokens_to_natural_language_batched(inputs, labels, max_input_size, TRANSFORMER_LENGTH)
+
+	return all_tok, all_out_vec, all_out
+
 
 # computes the number of lookahead steps to find the answer
 def lookahead_depth(vertex, next_vertex, goal):
@@ -649,8 +643,9 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 	np.random.seed(seed_value)
 
 	
-	if nl:
-		TRANSFORMER_LENGTH = max_input_size * 6
+	if nl or nl2:
+		TRANSFORMER_LENGTH = (max_input_size * 5)
+		print('TRANSFORMER_LENGTH', TRANSFORMER_LENGTH)
 		tokenizer = create_custom_tokenizer(vocab=VOCAB, max_length=TRANSFORMER_LENGTH)
 		ntoken = len(tokenizer)
 		PADDING_TOKEN = tokenizer.pad_token_id
@@ -660,7 +655,7 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 		ntoken = (max_input_size-5) // 3 + 5
 	
 	
-	BATCH_SIZE = 1024
+	BATCH_SIZE = 512
 	print('Number of available CPUs: {}'.format(len(sched_getaffinity(0))))
 	stdout.flush()
 
@@ -677,48 +672,58 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 	reserved_inputs = set()
 	NUM_TEST_SAMPLES = 10000
 	dist_from_start = 1
-	if dfs:
-		# TODO: i think we could theoretically generate examples with `backtrack_distance = (max_input_size - 4) // 4 - 1`, but the rejection rate in the current rejection sampling method is too high to feasibly generate such samples
-		max_backtrack_distance = (max_input_size - 4) // 4 - 2
-		for backtrack_distance in [-1] + list(range(1, max_backtrack_distance + 1)):
-			generator.set_seed(seed_value)
-			print('Reserving OOD test data for lookahead = {}'.format(lookahead))
-			stdout.flush();
-			inputs,outputs,_,_ = generator.generate_dfs_training_set(max_input_size, NUM_TEST_SAMPLES, reserved_inputs, backtrack_distance, True)
-			for i in range(inputs.shape[0]):
-				reserved_inputs.add(tuple([x for x in inputs[i,:] if x != PADDING_TOKEN]))
-			if backtrack_distance == -1:
-				eval_inputs, eval_outputs = inputs, outputs
-	else:
-		max_test_lookahead = ((max_input_size - 5) // 3 - 1) // 2
-		dist_from_start = 1 if add_padding else -1
-		for lookahead in list(range(1, max_test_lookahead + 1)):
-			gen_eval_start_time = time.perf_counter()
-			setstate(random_state)
-			np.random.set_state(np_random_state)
-			torch.set_rng_state(torch_random_state)
+	do_test =True
+	if do_test:
+		if dfs:
+			# TODO: i think we could theoretically generate examples with `backtrack_distance = (max_input_size - 4) // 4 - 1`, but the rejection rate in the current rejection sampling method is too high to feasibly generate such samples
+			max_backtrack_distance = (max_input_size - 4) // 4 - 2
+			for backtrack_distance in [-1] + list(range(1, max_backtrack_distance + 1)):
+				generator.set_seed(seed_value)
+				print('Reserving OOD test data for lookahead = {}'.format(lookahead))
+				stdout.flush();
+				inputs,outputs,_,_ = generator.generate_dfs_training_set(max_input_size, NUM_TEST_SAMPLES, reserved_inputs, backtrack_distance, True)
+				for i in range(inputs.shape[0]):
+					reserved_inputs.add(tuple([x for x in inputs[i,:] if x != PADDING_TOKEN]))
+				if backtrack_distance == -1:
+					eval_inputs, eval_outputs = inputs, outputs
+		else:
+			max_test_lookahead = ((max_input_size - 5) // 3 - 1) // 2
+			dist_from_start = 1 if add_padding else -1
+			for lookahead in list(range(1, max_test_lookahead + 1)):
+				gen_eval_start_time = time.perf_counter()
+				setstate(random_state)
+				np.random.set_state(np_random_state)
+				torch.set_rng_state(torch_random_state)
 
-			print('Reserving OOD test data for lookahead = {}'.format(lookahead))
-			stdout.flush()
-			# inputs,outputs = generate_eval_data(max_input_size, min_path_length=2, distance_from_start=dist_from_start, distance_from_end=-1, lookahead_steps=lookahead, num_paths_at_fork=None, num_samples=NUM_TEST_SAMPLES)
-			max_edges = (max_input_size - 5) // 3
-			inputs, outputs, labels, num_collisions = generator.generate_training_set(max_input_size, NUM_TEST_SAMPLES, lookahead, max_edges, reserved_inputs, dist_from_start, nl,True)
+				print('Reserving OOD test data for lookahead = {}'.format(lookahead))
+				stdout.flush()
 
-			print('Done. Throughput: {} examples/s'.format(NUM_TEST_SAMPLES / (time.perf_counter() - gen_eval_start_time)))
-			for i in range(inputs.shape[0]):
-				reserved_inputs.add(tuple([x for x in inputs[i,:] if x != PADDING_TOKEN]))
+				if nl:
+					max_edges = (max_input_size - 5) // 3
+					inputs, outputs, labels, num_collisions = generator.generate_training_set(max_input_size, NUM_TEST_SAMPLES, lookahead, max_edges, reserved_inputs, dist_from_start, nl,True)
+				else:
+					inputs,labels = generate_eval_data(max_input_size, min_path_length=2, distance_from_start=dist_from_start, distance_from_end=-1, lookahead_steps=lookahead, num_paths_at_fork=None, num_samples=NUM_TEST_SAMPLES)
+					# This line creates one-hot encoded outputs from the labels
+					# It converts each label to a one-hot vector using the vocabulary size
+					outputs = np.eye(len(VOCAB))[labels]
 
-			if nl:
+				print('Done. Throughput: {} examples/s'.format(NUM_TEST_SAMPLES / (time.perf_counter() - gen_eval_start_time)))
+				for i in range(inputs.shape[0]):
+					reserved_inputs.add(tuple([x for x in inputs[i,:] if x != PADDING_TOKEN]))
+
+				if not nl:
+					labels = np.argmax(outputs, axis=-1)
+					num_collisions = 0
+
 				eval_inputs, eval_outputs, eval_labels, eval_num_collisions = inputs, outputs, labels, num_collisions
-				eval_inputs, eval_outputs, eval_labels = map_tokens_to_natural_language_batched(tokenizer, eval_inputs, eval_labels, max_input_size, TRANSFORMER_LENGTH)
-			else:
-				if nl2: 
-					eval_inputs, eval_outputs, eval_labels = map_tokens_to_natural_language_batched(tokenizer, eval_inputs, eval_labels, max_input_size, TRANSFORMER_LENGTH)
-				
-	if BATCH_SIZE < eval_inputs.shape[0]:
-		eval_inputs = eval_inputs[:BATCH_SIZE]
-		eval_outputs = eval_outputs[:BATCH_SIZE]
-		eval_labels = eval_labels[:BATCH_SIZE]
+				if nl or nl2:
+					eval_inputs, eval_outputs, eval_labels = map_tokens_to_natural_language_batched(eval_inputs, eval_labels, max_input_size, TRANSFORMER_LENGTH)
+					
+
+		if BATCH_SIZE < eval_inputs.shape[0]:
+			eval_inputs = eval_inputs[:BATCH_SIZE]
+			eval_outputs = eval_outputs[:BATCH_SIZE]
+			eval_labels = eval_labels[:BATCH_SIZE]
 		# eval_num_collisions = eval_num_collisions[:BATCH_SIZE]
 
 	train_filename = 'train{}_v3_inputsize{}_maxlookahead{}_{}seed{}.pkl'.format(dataset_size, max_input_size, max_lookahead, 'padded_' if add_padding else '', seed_value)
@@ -905,6 +910,7 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 				worker_info = torch.utils.data.get_worker_info()
 				worker_id = worker_info.id
 				while True:
+					start_time = time.perf_counter()
 					worker_start_time = time.perf_counter()
 					new_seed = get_seed(current)
 					generator.set_seed(new_seed)
@@ -918,8 +924,9 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 					else:
 						inputs, outputs, labels, num_collisions = generator.generate_training_set(max_input_size, BATCH_SIZE, self.lookahead, self.max_edges, reserved_inputs, dist_from_start, nl, True)
 
-						if nl:
-							inputs, outputs, labels = map_tokens_to_natural_language_batched(tokenizer, inputs, labels, max_input_size, TRANSFORMER_LENGTH)
+						if nl or nl2:
+							inputs, outputs, labels = map_tokens_to_natural_language_batched_and_tokenize(tokenizer, inputs, labels, max_input_size, TRANSFORMER_LENGTH)
+					
 					if num_collisions != 0:
 						with self.collisions_lock:
 							self.total_collisions.value += num_collisions
@@ -930,6 +937,8 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 					#print('[WORKER {}] yield = {}, throughput = {} examples/s, rank = {}'.format(worker_id, curreinpunt, BATCH_SIZE / (worker_end_time - worker_start_time), multiprocessing.current_process()._identity[0]))
 					#print('[WORKER {}] time to get seed = {}s, time to generate data = {}s'.format(worker_id, generate_start_time - worker_start_time, worker_end_time - generate_start_time))
 					#stdout.flush()
+					end_time = time.perf_counter()
+					print(f"Time taken for natural language mapping: {end_time - start_time:.4f} seconds")
 					yield inputs, outputs, labels
 					current += NUM_DATA_WORKERS
 
@@ -950,11 +959,9 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 		num_batches = 0
 		effective_dataset_size = (STREAMING_BLOCK_SIZE if dataset_size == -1 else dataset_size)
 		reinit_data_loader = False
-		for batch in (train_loader if dataset_size == -1 else cycle(train_loader)):
 
-			# num_batches += 1
-			# print("batch = {}".format(num_batches))
-			# continue
+
+		for batch in (train_loader if dataset_size == -1 else cycle(train_loader)):
 
 			batch_start_time = time.perf_counter()
 			model.train()
@@ -962,8 +969,6 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 
 			input, output, label = batch
 			
-				#if device.type == 'cuda':
-			#	torch.cuda.synchronize(device)
 			train_start_time = time.perf_counter()
 			transfer_time += train_start_time - batch_start_time
 
@@ -974,7 +979,6 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 			logits = model(input)
 			if nl: 
 				loss_val = loss_func(logits[:, :-1, :].reshape(-1, logits.shape[-1]), label[:,1:].reshape(-1))
-				# loss_val = loss_func(logits[:, :-1].view(-1, logits.shape[-1]), label[:, 1:].view(-1))
 			else:
 				loss_val = loss_func(logits[:, -1, :], label)
 
@@ -1010,6 +1014,9 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 			train_time += log_start_time - train_start_time
 
 			num_batches += 1
+			if num_batches > 0:
+				percentage = (num_batches / (effective_dataset_size // BATCH_SIZE)) * 100
+				print("Generation progress: {:.2f}%".format(percentage))
 			if num_batches == effective_dataset_size // BATCH_SIZE:
 				#time4 = time.perf_counter()
 				#print('[MAIN] Time to train: {}s'.format(time4 - time3))
@@ -1186,4 +1193,6 @@ if __name__ == "__main__":
 		curriculum_mode=args.curriculum,
 		looped=args.looped,
 		dfs=args.dfs,
-		nl=args.nl)
+		nl=args.nl,
+		nl2=args.nl2
+		)
