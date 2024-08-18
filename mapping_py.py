@@ -103,9 +103,9 @@ def map_tokens_to_natural_language(tokens, output, max_input_size, TRANSFORMER_L
     atoms = token_to_atom[int(output)] + [VOCAB_DICT['.']]
     
     examples = [full_out.copy()]
-    for i in range(len(atoms) - 1):
-        full_out.append(atoms[i])
-        examples.append(full_out.copy())
+    i = random.randint(0, len(atoms) - 1)
+    full_out.append(atoms[i])
+    examples.append(full_out.copy())
 
     return examples, atoms
 

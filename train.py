@@ -45,14 +45,14 @@ class Node(object):
 		return 'n(' + str(self.id) + ')'
 
 
-def map_tokens_to_natural_language_batched_and_tokenize(tokenizer, inputs, labels, max_input_size, TRANSFORMER_LENGTH):
+def map_tokens_to_natural_language_batched_and_tokenize(inputs, labels, max_input_size, TRANSFORMER_LENGTH):
 	# all_tok, all_out = mapping.map_tokens_to_natural_language_batched(inputs, labels, max_input_size, TRANSFORMER_LENGTH)
 
 	# all_tok = tokenizer.batch_encode_plus(all_tok, return_tensors='pt', padding='max_length', pad_to_max_length=True, max_length=TRANSFORMER_LENGTH)['input_ids']
 	# all_out = tokenizer.batch_encode_plus(all_out, return_tensors='pt')['input_ids'].squeeze()
 
 	# all_out_vec = torch.nn.functional.one_hot(all_out, num_classes=len(tokenizer.vocab)).float()
-	all_tok, all_out_vec, all_out = map_tokens_to_natural_language_batched(inputs, labels, max_input_size, TRANSFORMER_LENGTH)
+	all_tok, all_out_vec, all_out = mapping.map_tokens_to_natural_language_batched(inputs, labels, max_input_size, TRANSFORMER_LENGTH)
 
 	return all_tok, all_out_vec, all_out
 
@@ -655,7 +655,7 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 		ntoken = (max_input_size-5) // 3 + 5
 	
 	
-	BATCH_SIZE = 512
+	BATCH_SIZE = 256
 	print('Number of available CPUs: {}'.format(len(sched_getaffinity(0))))
 	stdout.flush()
 
@@ -705,6 +705,7 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 					inputs,labels = generate_eval_data(max_input_size, min_path_length=2, distance_from_start=dist_from_start, distance_from_end=-1, lookahead_steps=lookahead, num_paths_at_fork=None, num_samples=NUM_TEST_SAMPLES)
 					# This line creates one-hot encoded outputs from the labels
 					# It converts each label to a one-hot vector using the vocabulary size
+
 					outputs = np.eye(len(VOCAB))[labels]
 
 				print('Done. Throughput: {} examples/s'.format(NUM_TEST_SAMPLES / (time.perf_counter() - gen_eval_start_time)))
@@ -717,8 +718,9 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 
 				eval_inputs, eval_outputs, eval_labels, eval_num_collisions = inputs, outputs, labels, num_collisions
 				if nl or nl2:
-					eval_inputs, eval_outputs, eval_labels = map_tokens_to_natural_language_batched(eval_inputs, eval_labels, max_input_size, TRANSFORMER_LENGTH)
-					
+					eval_inputs, eval_outputs, eval_labels = map_tokens_to_natural_language_batched_and_tokenize(eval_inputs, eval_labels, max_input_size, TRANSFORMER_LENGTH)
+
+				
 
 		if BATCH_SIZE < eval_inputs.shape[0]:
 			eval_inputs = eval_inputs[:BATCH_SIZE]
@@ -727,7 +729,12 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 		# eval_num_collisions = eval_num_collisions[:BATCH_SIZE]
 
 	train_filename = 'train{}_v3_inputsize{}_maxlookahead{}_{}seed{}.pkl'.format(dataset_size, max_input_size, max_lookahead, 'padded_' if add_padding else '', seed_value)
-	prefix = 'dfs_results/' if dfs else 'useful_path_results_nl/'
+	if nl:
+		prefix = 'dfs_results/' if dfs else 'useful_path_results_nl/'
+	if nl2:
+		prefix = 'dfs_results/' if dfs else 'useful_path_results_nl2/'
+	else:
+		prefix = 'dfs_results/' if dfs else 'useful_path_results/'
 	makedirs(prefix, exist_ok=True)
 	if dataset_size != -1:
 		train_path = prefix + train_filename
@@ -925,7 +932,7 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 						inputs, outputs, labels, num_collisions = generator.generate_training_set(max_input_size, BATCH_SIZE, self.lookahead, self.max_edges, reserved_inputs, dist_from_start, nl, True)
 
 						if nl or nl2:
-							inputs, outputs, labels = map_tokens_to_natural_language_batched_and_tokenize(tokenizer, inputs, labels, max_input_size, TRANSFORMER_LENGTH)
+							inputs, outputs, labels = map_tokens_to_natural_language_batched_and_tokenize(inputs, labels, max_input_size, TRANSFORMER_LENGTH)
 					
 					if num_collisions != 0:
 						with self.collisions_lock:
@@ -938,7 +945,7 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 					#print('[WORKER {}] time to get seed = {}s, time to generate data = {}s'.format(worker_id, generate_start_time - worker_start_time, worker_end_time - generate_start_time))
 					#stdout.flush()
 					end_time = time.perf_counter()
-					print(f"Time taken for natural language mapping: {end_time - start_time:.4f} seconds")
+					# print(f"Time taken for natural language mapping: {end_time - start_time:.4f} seconds")
 					yield inputs, outputs, labels
 					current += NUM_DATA_WORKERS
 
@@ -957,7 +964,8 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 		log_time = 0.0
 		epoch_loss = 0.0
 		num_batches = 0
-		effective_dataset_size = (STREAMING_BLOCK_SIZE if dataset_size == -1 else dataset_size)
+		DIVIDE = 5 if nl or nl2 else 1
+		effective_dataset_size = (STREAMING_BLOCK_SIZE // DIVIDE if dataset_size == -1 else dataset_size)
 		reinit_data_loader = False
 
 
@@ -975,7 +983,7 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 			input = input.to(device, non_blocking=True)
 			output = output.to(device, non_blocking=True)
 			label = label.to(device, non_blocking=True)
-
+			
 			logits = model(input)
 			if nl: 
 				loss_val = loss_func(logits[:, :-1, :].reshape(-1, logits.shape[-1]), label[:,1:].reshape(-1))
@@ -1014,9 +1022,9 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 			train_time += log_start_time - train_start_time
 
 			num_batches += 1
-			if num_batches > 0:
-				percentage = (num_batches / (effective_dataset_size // BATCH_SIZE)) * 100
-				print("Generation progress: {:.2f}%".format(percentage))
+			# if num_batches > 0:
+			# 	percentage = (num_batches / (effective_dataset_size // BATCH_SIZE)) * 100
+			# 	print("Generation progress: {:.2f}%".format(percentage))
 			if num_batches == effective_dataset_size // BATCH_SIZE:
 				#time4 = time.perf_counter()
 				#print('[MAIN] Time to train: {}s'.format(time4 - time3))
