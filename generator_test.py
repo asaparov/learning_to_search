@@ -28,5 +28,5 @@ start_time = time.perf_counter()
 generator.set_seed(9)
 dataset_size = 2 ** 20
 #output = generator.generate_training_set(128, dataset_size, 2, 5, reserved_inputs, -1, False)
-output = generator.generate_dfs_training_set(32, dataset_size, reserved_inputs, 6, False)
+output = generator.generate_dfs_training_set(64, dataset_size, reserved_inputs, 11, True, False)
 print("Throughput: {} examples generated/s".format(dataset_size / (time.perf_counter() - start_time)))

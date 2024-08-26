@@ -649,11 +649,11 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 	if dfs:
 		# TODO: i think we could theoretically generate examples with `backtrack_distance = (max_input_size - 4) // 4 - 1`, but the rejection rate in the current rejection sampling method is too high to feasibly generate such samples
 		max_backtrack_distance = (max_input_size - 4) // 4 - 2
-		for backtrack_distance in [-1] + list(range(1, max_backtrack_distance + 1)):
+		for backtrack_distance in [-1] + list(range(max_backtrack_distance + 1)):
 			generator.set_seed(seed_value)
-			print('Reserving OOD test data for lookahead = {}'.format(lookahead))
+			print('Reserving OOD test data for backtrack distance = {}'.format(backtrack_distance))
 			stdout.flush();
-			inputs,outputs,_,_ = generator.generate_dfs_training_set(max_input_size, NUM_TEST_SAMPLES, reserved_inputs, backtrack_distance, True)
+			inputs,outputs,_,_ = generator.generate_dfs_training_set(max_input_size, NUM_TEST_SAMPLES, reserved_inputs, backtrack_distance, False, True)
 			for i in range(inputs.shape[0]):
 				reserved_inputs.add(tuple([x for x in inputs[i,:] if x != PADDING_TOKEN]))
 			if backtrack_distance == -1:
@@ -872,13 +872,12 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 
 					generate_start_time = time.perf_counter()
 					if dfs:
-						inputs, outputs, labels, num_collisions = generator.generate_dfs_training_set(max_input_size, BATCH_SIZE, reserved_inputs, -1, True)
+						inputs, outputs, labels, num_collisions = generator.generate_dfs_training_set(max_input_size, BATCH_SIZE, reserved_inputs, -1, add_padding, True)
 					else:
 						inputs, outputs, labels, num_collisions = generator.generate_training_set(max_input_size, BATCH_SIZE, self.lookahead, self.max_edges, reserved_inputs, dist_from_start, True)
 					if num_collisions != 0:
 						with self.collisions_lock:
 							self.total_collisions.value += num_collisions
-						print('Total number of training examples generated that are in the test set: {}'.format(self.total_collisions.value))
 						stdout.flush()
 
 					worker_end_time = time.perf_counter()
@@ -967,6 +966,7 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 						print("throughput = {} examples/s, GPU utilization = {}".format(effective_dataset_size / elapsed_time, utilization))
 					else:
 						print("throughput = {} examples/s".format(effective_dataset_size / elapsed_time))
+					print('Total number of training examples generated that are in the test set: {}'.format(iterable_dataset.total_collisions.value))
 					print("[PROFILE] Total batch time: {}s".format(elapsed_time))
 					print("[PROFILE] Time to transfer data to GPU: {}s".format(transfer_time))
 					print("[PROFILE] Time to train: {}s".format(train_time))
