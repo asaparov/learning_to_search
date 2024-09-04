@@ -725,8 +725,8 @@ def train(max_input_size, dataset_size, distribution, max_lookahead, seed_value,
 
 	# compute the checkpoint filenames and try to resume from the last one
 	filename = prefix + 'checkpoints_v3_{}layer_inputsize{}_maxlookahead{}_seed{}_train{}'.format(nlayers, max_input_size, max_lookahead, seed_value, dataset_size if dataset_size != -1 else 'streaming')
-    if hidden_dim != 16:
-        filename += '_hiddendim{}'.format(hidden_dim)
+	if hidden_dim != 16:
+		filename += '_hiddendim{}'.format(hidden_dim)
 	if bidirectional:
 		filename += '_nomask'
 	if not absolute_pos_emb:
