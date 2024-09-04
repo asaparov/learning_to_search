@@ -52,6 +52,63 @@ inline bool operator == (const node& first, const node& second) {
 	return first.id == second.id;
 }
 
+bool generate_graph(array<node>& vertices, node*& start, node*& end, unsigned int num_vertices, unsigned int max_num_parents, unsigned int max_vertex_id)
+{
+	if (!vertices.ensure_capacity(num_vertices))
+		return false;
+	for (unsigned int i = 0; i < num_vertices; i++)
+		if (!init(vertices[i], i)) return false;
+	vertices.length = num_vertices;
+
+	/* sample a random DAG */
+	for (unsigned int i = 1; i < num_vertices; i++) {
+		/* sample the number of parent vertices */
+		unsigned int num_parents;
+		if (randrange(2) == 0)
+			num_parents = 1;
+		else
+			num_parents = randrange(1, max_num_parents);
+		num_parents = min(num_parents, i);
+
+		array<unsigned int> available_parent_ids(i);
+		for (unsigned int j = 0; j < i; j++)
+			available_parent_ids.add(j);
+		for (unsigned int j = 0; j < num_parents; j++) {
+			unsigned int u = randrange(available_parent_ids.length);
+			unsigned int parent_id = available_parent_ids[u];
+			vertices[parent_id].children.add(&vertices[i]);
+			vertices[i].parents.add(&vertices[parent_id]);
+			available_parent_ids.remove(u);
+		}
+	}
+
+	/* remove any correlation between graph topology and vertex IDs by shuffling the vertices */
+	unsigned int* new_indices = (unsigned int*) alloca(sizeof(unsigned int) * (max_vertex_id + 1));
+	for (unsigned int i = 0; i < max_vertex_id + 1; i++) new_indices[i] = i;
+	shuffle(new_indices, max_vertex_id + 1);
+	unsigned int src_index = 0;
+	for (unsigned int i = 0; i < vertices.length; i++) {
+		bool is_reserved = false;
+		for (unsigned int j = 0; j < array_length(RESERVED_INDICES); j++) {
+			if (new_indices[src_index] == RESERVED_INDICES[j]) {
+				is_reserved = true;
+				break;
+			}
+		}
+		if (is_reserved)
+			src_index++;
+		vertices[i].id = new_indices[src_index];
+		src_index++;
+	}
+
+	/* randomly select two vertices */
+	start = &vertices[randrange(vertices.length - 1)];
+	do {
+		end = &vertices[randrange(vertices.length - 1)];
+	} while (end == start);
+	return true;
+}
+
 /* computes the number of lookahead steps to find the answer */
 unsigned int lookahead_depth(const node* vertex, const node* next_vertex, const node* goal)
 {
@@ -269,10 +326,15 @@ bool generate_graph_with_lookahead(array<node>& vertices, node*& start, node*& e
 	return true;
 }
 
-bool generate_example(array<node>& vertices, node*& start, node*& end, array<array<node*>>& paths, unsigned int num_vertices, unsigned int max_num_parents, unsigned int max_vertex_id, bool get_shortest_paths, unsigned int lookahead, unsigned int num_paths)
+bool generate_example(array<node>& vertices, node*& start, node*& end, array<array<node*>>& paths, unsigned int num_vertices, unsigned int max_num_parents, unsigned int max_vertex_id, bool get_shortest_paths, int lookahead, unsigned int num_paths)
 {
-	if (!generate_graph_with_lookahead(vertices, start, end, num_vertices, max_num_parents, max_vertex_id, lookahead, num_paths))
-		return false;
+	if (lookahead == -1) {
+		if (!generate_graph(vertices, start, end, num_vertices, max_num_parents, max_vertex_id))
+			return false;
+	} else {
+		if (!generate_graph_with_lookahead(vertices, start, end, num_vertices, max_num_parents, max_vertex_id, lookahead, num_paths))
+			return false;
+	}
 
 	/* find the shortest paths from `start` to `end` */
 	array<pair<node*, unsigned int>> queue(16);
@@ -445,7 +507,7 @@ bool has_path(const node* start, const node* end)
 	return false;
 }
 
-py::tuple generate_training_set(const unsigned int max_input_size, const uint64_t dataset_size, const unsigned int max_lookahead, const unsigned int max_edges, const py::object& reserved_inputs, const int distance_from_start, const bool quiet=false)
+py::tuple generate_training_set(const unsigned int max_input_size, const uint64_t dataset_size, const int max_lookahead, const unsigned int max_edges, const py::object& reserved_inputs, const int distance_from_start, const bool quiet=false)
 {
 	const unsigned int QUERY_PREFIX_TOKEN = (max_input_size-5) / 3 + 4;
 	const unsigned int PADDING_TOKEN = (max_input_size-5) / 3 + 3;
@@ -471,39 +533,54 @@ py::tuple generate_training_set(const unsigned int max_input_size, const uint64_
 		path_length_histogram[i] = 0;
 	}
 	float* MAX_FREQS_PER_BUCKET = (float*) alloca(sizeof(float) * max_input_size);
-	for (unsigned int i = 0; i < max_lookahead + 1; i++)
-		MAX_FREQS_PER_BUCKET[i] = 1.0 / (max_lookahead+1);
-	for (unsigned int i = max_lookahead + 1; i < max_input_size; i++)
-		MAX_FREQS_PER_BUCKET[i] = 0.0;
-	MAX_FREQS_PER_BUCKET[max_lookahead] += 0.05;
+	if (max_lookahead == -1) {
+		for (unsigned int i = 0; i < max_input_size; i++)
+			MAX_FREQS_PER_BUCKET[i] = 1.0;
+	} else {
+		for (unsigned int i = 0; i < (unsigned) max_lookahead + 1; i++)
+			MAX_FREQS_PER_BUCKET[i] = 1.0 / (max_lookahead+1);
+		for (unsigned int i = max_lookahead + 1; i < max_input_size; i++)
+			MAX_FREQS_PER_BUCKET[i] = 0.0;
+		MAX_FREQS_PER_BUCKET[max_lookahead] += 0.05;
+	}
 
-	unsigned int* potential_lookaheads = (unsigned int*) alloca(sizeof(unsigned int) * (max_lookahead + 1));
+	unsigned int* potential_lookaheads = (unsigned int*) alloca(max((size_t) 1, sizeof(unsigned int) * (max_lookahead + 1)));
 	unsigned int potential_lookahead_count = 0;
 	while (num_generated < dataset_size) {
 		array<node> g(32);
 		node* start; node* end;
 		array<array<node*>> paths(8);
 		while (true) {
-			potential_lookahead_count = 0;
-			for (unsigned int i = 0; i < max_lookahead + 1; i++)
-				if (num_generated == 0 || lookahead_step_histogram[i] / num_generated < MAX_FREQS_PER_BUCKET[i])
-					potential_lookaheads[potential_lookahead_count++] = i;
-			unsigned int lookahead = choice(potential_lookaheads, potential_lookahead_count);
-
-			unsigned int num_paths;
-			if (lookahead == 0) {
-				num_paths = randrange(1, 3);
+			if (max_lookahead == -1) {
+				unsigned int num_vertices = randrange(3, (max_input_size - 5) / 3);
+				if (!generate_example(g, start, end, paths, num_vertices, 4, (max_input_size - 5) / 3, true, -1, 0)) {
+					for (node& n : g) core::free(n);
+					for (array<node*>& a : paths) core::free(a);
+					g.length = 0; paths.length = 0;
+					continue;
+				}
 			} else {
-				unsigned int max_num_paths = (max_edges - 1) / lookahead;
-				num_paths = randrange(2, max_num_paths + 1);
-			}
+				potential_lookahead_count = 0;
+				for (unsigned int i = 0; i < (unsigned) max_lookahead + 1; i++)
+					if (num_generated == 0 || lookahead_step_histogram[i] / num_generated < MAX_FREQS_PER_BUCKET[i])
+						potential_lookaheads[potential_lookahead_count++] = i;
+				unsigned int lookahead = choice(potential_lookaheads, potential_lookahead_count);
 
-			unsigned int num_vertices = std::min(std::min(lookahead * num_paths + 1 + randrange(0, 6), (max_input_size-5) / 3), max_edges + 1);
-			if (!generate_example(g, start, end, paths, num_vertices, 4, (max_input_size - 5) / 3, true, lookahead, num_paths)) {
-				for (node& n : g) core::free(n);
-				for (array<node*>& a : paths) core::free(a);
-				g.length = 0; paths.length = 0;
-				continue;
+				unsigned int num_paths;
+				if (lookahead == 0) {
+					num_paths = randrange(1, 3);
+				} else {
+					unsigned int max_num_paths = (max_edges - 1) / lookahead;
+					num_paths = randrange(2, max_num_paths + 1);
+				}
+
+				unsigned int num_vertices = std::min(std::min(lookahead * num_paths + 1 + randrange(0, 6), (max_input_size-5) / 3), max_edges + 1);
+				if (!generate_example(g, start, end, paths, num_vertices, 4, (max_input_size - 5) / 3, true, lookahead, num_paths)) {
+					for (node& n : g) core::free(n);
+					for (array<node*>& a : paths) core::free(a);
+					g.length = 0; paths.length = 0;
+					continue;
+				}
 			}
 			unsigned int shortest_path_length = paths[0].length;
 			for (unsigned int i = 1; i < paths.length; i++)
@@ -1044,20 +1121,15 @@ py::tuple generate_dfs_training_set(const unsigned int max_input_size, const uin
 			}
 		}
 
-		if (requested_backtrack != -1 && (unsigned int) requested_backtrack != backtrack_distance) {
-			for (node& n : g) core::free(n);
-			g.length = 0; path.length = 0;
-			continue;
-		}
-
 		if (random_padding) {
 			/* sample padding randomly until the path is the correct length */
 			unsigned int* padding_lengths = (unsigned int*) calloc(path.length + 1, sizeof(unsigned int));
-			unsigned int total_padding = 0;
-			while (prefix.length + path.length + total_padding < max_input_size) {
-				padding_lengths[randrange(path.length + 1)]++;
-				total_padding++;
+			unsigned int available_padding = longest_path_length - path.length;
+			for (unsigned int j = path.length; j > 0; j--) {
+				padding_lengths[j] = randrange(available_padding + 1);
+				available_padding -= padding_lengths[j];
 			}
+			padding_lengths[0] = available_padding;
 
 			for (unsigned int j = 0; j < path.length; j++) {
 				for (unsigned int k = 0; k < padding_lengths[j]; k++)
@@ -1066,12 +1138,25 @@ py::tuple generate_dfs_training_set(const unsigned int max_input_size, const uin
 			}
 			for (unsigned int k = 0; k < padding_lengths[path.length]; k++)
 				prefix[prefix.length++] = PATH_PREFIX_TOKEN;
+			unsigned int effective_backtrack = backtrack_distance;
+			for (unsigned int j = path.length; j > 0; j--) {
+				effective_backtrack += padding_lengths[j];
+				if (path.length - j == backtrack_distance)
+					break;
+			}
+			backtrack_distance = effective_backtrack;
 			free(padding_lengths);
 		} else {
-			while (prefix.length < max_input_size - path.length)
+			for (unsigned int j = path.length; j < longest_path_length; j++)
 				prefix[prefix.length++] = PATH_PREFIX_TOKEN;
 			for (unsigned int j = 0; j < path.length; j++)
 				prefix[prefix.length++] = path[j]->id;
+		}
+
+		if (requested_backtrack != -1 && (unsigned int) requested_backtrack != backtrack_distance) {
+			for (node& n : g) core::free(n);
+			g.length = 0; path.length = 0;
+			continue;
 		}
 
 		/* check if this input is reserved */
@@ -1103,14 +1188,14 @@ py::tuple generate_dfs_training_set(const unsigned int max_input_size, const uin
 			printf("%d examples generated.\n", num_generated);
 			fflush(stdout);
 
-			printf("Backtrack distance histogram:\n");
+			printf("Backtrack distance histogram: (log frequencies)\n");
 			printf("[");
 			bool first = true;
 			for (unsigned int i = 0; i < max_input_size; i++) {
 				if (backtrack_distance_histogram[i] == 0)
 					continue;
 				if (!first) printf(", ");
-				printf("%d:%.2f", i, (float) backtrack_distance_histogram[i] / num_generated + 1e-9);
+				printf("%d:%.2f", i, log(backtrack_distance_histogram[i]) - log(num_generated));
 				first = false;
 			}
 			printf("]\n");

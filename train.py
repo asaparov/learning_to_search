@@ -624,7 +624,7 @@ def generate_training_set(max_input_size, dataset_size, max_lookahead, reserved_
 
 	return inputs, outputs, valid_outputs, num_collisions
 
-def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidden_dim, bidirectional, absolute_pos_emb, learnable_token_emb, toeplitz_attn, toeplitz_reg, toeplitz_pos_only, add_padding, ablate, pre_ln, curriculum_mode, looped, dfs):
+def train(max_input_size, dataset_size, distribution, max_lookahead, seed_value, nlayers, hidden_dim, bidirectional, absolute_pos_emb, learnable_token_emb, toeplitz_attn, toeplitz_reg, toeplitz_pos_only, add_padding, ablate, pre_ln, curriculum_mode, looped, dfs):
 	generator.set_seed(seed_value)
 	seed(seed_value)
 	torch.manual_seed(seed_value)
@@ -638,6 +638,20 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 		print('ERROR: Curriculum learning is only supported with streaming training (i.e. dataset_size = -1).')
 		stdout.flush()
 		return
+	if dfs and distribution != "simple":
+		print('ERROR: DFS training is currently only supported with the simple training distribution.')
+		stdout.flush()
+		return
+	if distribution == "crafted" and max_lookahead == None:
+		print('ERROR: Crafted training distribution is selected but `max_lookhead` argument is missing.')
+		stdout.flush()
+		return
+	if distribution == "simple" and max_lookahead != None:
+		print('ERROR: `max_lookahead` is not supported with the simple training distribution.')
+		stdout.flush()
+		return
+	if max_lookahead == None:
+		max_lookahead = -1
 
 	# first reserve some data for OOD testing
 	random_state = getstate()
@@ -711,6 +725,8 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 
 	# compute the checkpoint filenames and try to resume from the last one
 	filename = prefix + 'checkpoints_v3_{}layer_inputsize{}_maxlookahead{}_seed{}_train{}'.format(nlayers, max_input_size, max_lookahead, seed_value, dataset_size if dataset_size != -1 else 'streaming')
+    if hidden_dim != 16:
+        filename += '_hiddendim{}'.format(hidden_dim)
 	if bidirectional:
 		filename += '_nomask'
 	if not absolute_pos_emb:
@@ -1083,7 +1099,7 @@ if __name__ == "__main__":
 	parser = argparse.ArgumentParser()
 	parser.add_argument("--max-input-size", type=int)
 	parser.add_argument("--dataset-size", type=int)
-	parser.add_argument("--max-lookahead", type=int)
+	parser.add_argument("--max-lookahead", type=int, required=False)
 	parser.add_argument("--nlayers", type=int)
 	parser.add_argument("--hidden-dim", type=int)
 	parser.add_argument("--seed", type=int, default=1)
@@ -1099,11 +1115,13 @@ if __name__ == "__main__":
 	parser.add_argument("--curriculum", type=str, required=True, choices=["y", "n", "layerbylayer", "layerbylayer2"])
 	parser.add_argument("--looped", type=parse_bool_arg, default=False)
 	parser.add_argument("--dfs", type=parse_bool_arg, default=False)
+	parser.add_argument("--distribution", type=str, default="crafted", choices=["simple", "crafted"])
 	args = parser.parse_args()
 
 	train(
 		max_input_size=args.max_input_size,
 		dataset_size=args.dataset_size,
+		distribution=args.distribution,
 		max_lookahead=args.max_lookahead,
 		seed_value=args.seed,
 		nlayers=args.nlayers,
