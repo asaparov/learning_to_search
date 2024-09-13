@@ -1,0 +1,72 @@
+/ext3/miniconda3/lib/python3.11/site-packages/numpy/core/getlimits.py:549: UserWarning: The value of the smallest subnormal for <class 'numpy.float64'> type is zero.
+  setattr(self, word, getattr(machar, word).flat[0])
+/ext3/miniconda3/lib/python3.11/site-packages/numpy/core/getlimits.py:89: UserWarning: The value of the smallest subnormal for <class 'numpy.float64'> type is zero.
+  return self._float_to_str(self.smallest_subnormal)
+wandb: Currently logged in as: sxp8182 (sxp). Use `wandb login --relogin` to force relogin
+wandb: wandb version 0.17.9 is available!  To upgrade, please run:
+wandb:  $ pip install wandb --upgrade
+wandb: Tracking run with wandb version 0.17.4
+wandb: Run data is saved locally in /scratch/sxp8182/work_with_abu/learning_to_search/cirriculum_learning/learning_to_search/wandb/run-20240908_042339-checkpoints_v3_8layer_inputsize98_maxlookahead15_seed4_trainstreaming
+wandb: Run `wandb offline` to turn off syncing.
+wandb: Syncing run checkpoints_v3_8layer_inputsize98_maxlookahead15_seed4_trainstreaming
+wandb: ⭐️ View project at https://wandb.ai/sxp/inference
+wandb: 🚀 View run at https://wandb.ai/sxp/inference/runs/checkpoints_v3_8layer_inputsize98_maxlookahead15_seed4_trainstreaming
+slurmstepd: error: *** JOB 50775133 ON ga022 CANCELLED AT 2024-09-09T16:22:44 DUE TO TIME LIMIT ***
+/ext3/miniconda3/lib/python3.11/site-packages/numpy/core/getlimits.py:549: UserWarning: The value of the smallest subnormal for <class 'numpy.float64'> type is zero.
+  setattr(self, word, getattr(machar, word).flat[0])
+/ext3/miniconda3/lib/python3.11/site-packages/numpy/core/getlimits.py:89: UserWarning: The value of the smallest subnormal for <class 'numpy.float64'> type is zero.
+  return self._float_to_str(self.smallest_subnormal)
+wandb: Currently logged in as: sxp8182 (sxp). Use `wandb login --relogin` to force relogin
+wandb: - Waiting for wandb.init()...Thread WriterThread:
+Traceback (most recent call last):
+  File "/home/sxp8182/.local/lib/python3.11/site-packages/wandb/sdk/internal/internal_util.py", line 48, in run
+    self._run()
+  File "/home/sxp8182/.local/lib/python3.11/site-packages/wandb/sdk/internal/internal_util.py", line 99, in _run
+    self._process(record)
+  File "/home/sxp8182/.local/lib/python3.11/site-packages/wandb/sdk/internal/internal.py", line 379, in _process
+    self._wm.write(record)
+  File "/home/sxp8182/.local/lib/python3.11/site-packages/wandb/sdk/internal/writer.py", line 154, in write
+    write_handler(record)
+  File "/home/sxp8182/.local/lib/python3.11/site-packages/wandb/sdk/internal/writer.py", line 131, in _write
+    self.open()
+  File "/home/sxp8182/.local/lib/python3.11/site-packages/wandb/sdk/internal/writer.py", line 71, in open
+    self._ds.open_for_write(self._settings.sync_file)
+  File "/home/sxp8182/.local/lib/python3.11/site-packages/wandb/sdk/internal/datastore.py", line 89, in open_for_write
+    self._fp = open(fname, open_flags)
+               ^^^^^^^^^^^^^^^^^^^^^^^
+FileExistsError: [Errno 17] File exists: '/scratch/sxp8182/work_with_abu/learning_to_search/cirriculum_learning/learning_to_search/wandb/run-20240910_033413-checkpoints_v3_8layer_inputsize98_maxlookahead15_seed4_trainstreaming/run-checkpoints_v3_8layer_inputsize98_maxlookahead15_seed4_trainstreaming.wandb'
+wandb: ERROR Internal wandb error: file data was not synced
+wandb: \ Waiting for wandb.init()...wandb: | Waiting for wandb.init()...wandb: / Waiting for wandb.init()...wandb: - Waiting for wandb.init()...wandb: \ Waiting for wandb.init()...wandb: | Waiting for wandb.init()...wandb: / Waiting for wandb.init()...wandb: - Waiting for wandb.init()...wandb: \ Waiting for wandb.init()...wandb: ERROR transport failed
+Traceback (most recent call last):
+  File "/scratch/sxp8182/work_with_abu/learning_to_search/cirriculum_learning/learning_to_search/train.py", line 1026, in <module>
+    train(
+  File "/scratch/sxp8182/work_with_abu/learning_to_search/cirriculum_learning/learning_to_search/train.py", line 622, in train
+    wandb.init(
+  File "/home/sxp8182/.local/lib/python3.11/site-packages/wandb/sdk/wandb_init.py", line 1195, in init
+    wandb._sentry.reraise(e)
+  File "/home/sxp8182/.local/lib/python3.11/site-packages/wandb/analytics/sentry.py", line 155, in reraise
+    raise exc.with_traceback(sys.exc_info()[2])
+  File "/home/sxp8182/.local/lib/python3.11/site-packages/wandb/sdk/wandb_init.py", line 1181, in init
+    return wi.init()
+           ^^^^^^^^^
+  File "/home/sxp8182/.local/lib/python3.11/site-packages/wandb/sdk/wandb_init.py", line 756, in init
+    result = run_init_handle.wait(
+             ^^^^^^^^^^^^^^^^^^^^^
+  File "/home/sxp8182/.local/lib/python3.11/site-packages/wandb/sdk/lib/mailbox.py", line 281, in wait
+    raise MailboxError("transport failed")
+wandb.sdk.lib.mailbox.MailboxError: transport failed
+wandb: Encountered an error while tearing down the service manager: [Errno 32] Broken pipe
+/ext3/miniconda3/lib/python3.11/site-packages/numpy/core/getlimits.py:549: UserWarning: The value of the smallest subnormal for <class 'numpy.float64'> type is zero.
+  setattr(self, word, getattr(machar, word).flat[0])
+/ext3/miniconda3/lib/python3.11/site-packages/numpy/core/getlimits.py:89: UserWarning: The value of the smallest subnormal for <class 'numpy.float64'> type is zero.
+  return self._float_to_str(self.smallest_subnormal)
+wandb: Currently logged in as: sxp8182 (sxp). Use `wandb login --relogin` to force relogin
+wandb: wandb version 0.17.9 is available!  To upgrade, please run:
+wandb:  $ pip install wandb --upgrade
+wandb: Tracking run with wandb version 0.17.4
+wandb: Run data is saved locally in /scratch/sxp8182/work_with_abu/learning_to_search/cirriculum_learning/learning_to_search/wandb/run-20240911_020417-checkpoints_v3_8layer_inputsize98_maxlookahead15_seed4_trainstreaming
+wandb: Run `wandb offline` to turn off syncing.
+wandb: Syncing run checkpoints_v3_8layer_inputsize98_maxlookahead15_seed4_trainstreaming
+wandb: ⭐️ View project at https://wandb.ai/sxp/inference
+wandb: 🚀 View run at https://wandb.ai/sxp/inference/runs/checkpoints_v3_8layer_inputsize98_maxlookahead15_seed4_trainstreaming
+slurmstepd: error: *** JOB 50835331 ON ga036 CANCELLED AT 2024-09-12T14:03:04 DUE TO TIME LIMIT ***
