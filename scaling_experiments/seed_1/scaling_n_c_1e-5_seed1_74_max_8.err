@@ -1,0 +1,14 @@
+/ext3/miniconda3/lib/python3.11/site-packages/numpy/core/getlimits.py:549: UserWarning: The value of the smallest subnormal for <class 'numpy.float64'> type is zero.
+  setattr(self, word, getattr(machar, word).flat[0])
+/ext3/miniconda3/lib/python3.11/site-packages/numpy/core/getlimits.py:89: UserWarning: The value of the smallest subnormal for <class 'numpy.float64'> type is zero.
+  return self._float_to_str(self.smallest_subnormal)
+wandb: Currently logged in as: sxp8182 (sxp). Use `wandb login --relogin` to force relogin
+wandb: wandb version 0.17.5 is available!  To upgrade, please run:
+wandb:  $ pip install wandb --upgrade
+wandb: Tracking run with wandb version 0.17.4
+wandb: Run data is saved locally in /scratch/sxp8182/work_with_abu/learning_to_search/cirriculum_learning/learning_to_search/wandb/run-20240722_004912-checkpoints_v3_8layer_inputsize74_maxlookahead11_seed1_trainstreaming
+wandb: Run `wandb offline` to turn off syncing.
+wandb: Syncing run checkpoints_v3_8layer_inputsize74_maxlookahead11_seed1_trainstreaming
+wandb: ⭐️ View project at https://wandb.ai/sxp/inference
+wandb: 🚀 View run at https://wandb.ai/sxp/inference/runs/checkpoints_v3_8layer_inputsize74_maxlookahead11_seed1_trainstreaming
+slurmstepd: error: *** JOB 48786149 ON gv002 CANCELLED AT 2024-07-23T12:48:41 DUE TO TIME LIMIT ***
