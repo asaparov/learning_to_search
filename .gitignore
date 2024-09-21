@@ -2,3 +2,9 @@
 *.sbatch
 *.out
 __pycache__
+
+
+useful_path_results*
+.ext3
+.so 
+*.pt
