@@ -1,0 +1,46 @@
+/ext3/miniconda3/lib/python3.11/site-packages/numpy/core/getlimits.py:549: UserWarning: The value of the smallest subnormal for <class 'numpy.float64'> type is zero.
+  setattr(self, word, getattr(machar, word).flat[0])
+/ext3/miniconda3/lib/python3.11/site-packages/numpy/core/getlimits.py:89: UserWarning: The value of the smallest subnormal for <class 'numpy.float64'> type is zero.
+  return self._float_to_str(self.smallest_subnormal)
+wandb: Currently logged in as: sxp8182 (sxp). Use `wandb login --relogin` to force relogin
+wandb: wandb version 0.17.9 is available!  To upgrade, please run:
+wandb:  $ pip install wandb --upgrade
+wandb: Tracking run with wandb version 0.17.4
+wandb: Run data is saved locally in /scratch/sxp8182/work_with_abu/learning_to_search/cirriculum_learning/learning_to_search/wandb/run-20240906_233539-checkpoints_v3_16layer_inputsize98_maxlookahead15_seed3_trainstreaming
+wandb: Run `wandb offline` to turn off syncing.
+wandb: Syncing run checkpoints_v3_16layer_inputsize98_maxlookahead15_seed3_trainstreaming
+wandb: ⭐️ View project at https://wandb.ai/sxp/inference
+wandb: 🚀 View run at https://wandb.ai/sxp/inference/runs/checkpoints_v3_16layer_inputsize98_maxlookahead15_seed3_trainstreaming
+Traceback (most recent call last):
+  File "/scratch/sxp8182/work_with_abu/learning_to_search/cirriculum_learning/learning_to_search/train.py", line 1026, in <module>
+    train(
+  File "/scratch/sxp8182/work_with_abu/learning_to_search/cirriculum_learning/learning_to_search/train.py", line 967, in train
+    torch.save((model,getstate(),np.random.get_state(),torch.get_rng_state()), ckpt_filename)
+  File "/ext3/miniconda3/lib/python3.11/site-packages/torch/serialization.py", line 627, in save
+    with _open_zipfile_writer(f) as opened_zipfile:
+         ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/ext3/miniconda3/lib/python3.11/site-packages/torch/serialization.py", line 501, in _open_zipfile_writer
+    return container(name_or_buffer)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/ext3/miniconda3/lib/python3.11/site-packages/torch/serialization.py", line 472, in __init__
+    super().__init__(torch._C.PyTorchFileWriter(self.name))
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+RuntimeError: File useful_path_results_1e-5_scaling_law_updated/checkpoints_v3_16layer_inputsize98_maxlookahead15_seed3_trainstreaming_nomask_unablated_padded/epoch797.pt cannot be opened.
+wandb: - 0.015 MB of 0.015 MB uploadedwandb: \ 0.015 MB of 0.015 MB uploadedwandb: | 0.015 MB of 0.015 MB uploadedwandb: / 0.015 MB of 0.015 MB uploadedwandb: - 0.015 MB of 0.015 MB uploadedwandb: \ 0.015 MB of 0.023 MB uploadedwandb: | 0.015 MB of 0.023 MB uploadedwandb: / 0.469 MB of 0.469 MB uploadedwandb: 
+wandb: Run history:
+wandb:     test accuracy ▁▁▄▅▆▆▇▇██▇█████████████████████████████
+wandb:         test loss ██▄▃▃▃▂▂▁▂▂▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁
+wandb: training accuracy ▁▁▃▄▄███████████████████████████████████
+wandb:     training loss ██▄▃▃▂▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁
+wandb: 
+wandb: Run summary:
+wandb:     test accuracy 0.98047
+wandb:         test loss 0.06735
+wandb: training accuracy 1.0
+wandb:     training loss 105.51604
+wandb: 
+wandb: 🚀 View run checkpoints_v3_16layer_inputsize98_maxlookahead15_seed3_trainstreaming at: https://wandb.ai/sxp/inference/runs/checkpoints_v3_16layer_inputsize98_maxlookahead15_seed3_trainstreaming
+wandb: ⭐️ View project at: https://wandb.ai/sxp/inference
+wandb: Synced 6 W&B file(s), 0 media file(s), 0 artifact file(s) and 0 other file(s)
+wandb: Find logs at: ./wandb/run-20240906_233539-checkpoints_v3_16layer_inputsize98_maxlookahead15_seed3_trainstreaming/logs
+wandb: WARNING The new W&B backend becomes opt-out in version 0.18.0; try it out with `wandb.require("core")`! See https://wandb.me/wandb-core for more information.

@@ -1,0 +1,102 @@
+/ext3/miniconda3/lib/python3.11/site-packages/numpy/core/getlimits.py:549: UserWarning: The value of the smallest subnormal for <class 'numpy.float64'> type is zero.
+  setattr(self, word, getattr(machar, word).flat[0])
+/ext3/miniconda3/lib/python3.11/site-packages/numpy/core/getlimits.py:89: UserWarning: The value of the smallest subnormal for <class 'numpy.float64'> type is zero.
+  return self._float_to_str(self.smallest_subnormal)
+wandb: Currently logged in as: sxp8182 (sxp). Use `wandb login --relogin` to force relogin
+wandb: wandb version 0.17.9 is available!  To upgrade, please run:
+wandb:  $ pip install wandb --upgrade
+wandb: Tracking run with wandb version 0.17.4
+wandb: Run data is saved locally in /scratch/sxp8182/work_with_abu/learning_to_search/cirriculum_learning/learning_to_search/wandb/run-20240908_045756-checkpoints_v3_8layer_inputsize98_maxlookahead15_seed2_trainstreaming
+wandb: Run `wandb offline` to turn off syncing.
+wandb: Syncing run checkpoints_v3_8layer_inputsize98_maxlookahead15_seed2_trainstreaming
+wandb: ⭐️ View project at https://wandb.ai/sxp/inference
+wandb: 🚀 View run at https://wandb.ai/sxp/inference/runs/checkpoints_v3_8layer_inputsize98_maxlookahead15_seed2_trainstreaming
+Exception in thread Thread-3 (_pin_memory_loop):
+Traceback (most recent call last):
+  File "/ext3/miniconda3/lib/python3.11/threading.py", line 1038, in _bootstrap_inner
+    self.run()
+  File "/ext3/miniconda3/lib/python3.11/threading.py", line 975, in run
+    self._target(*self._args, **self._kwargs)
+  File "/ext3/miniconda3/lib/python3.11/site-packages/torch/utils/data/_utils/pin_memory.py", line 54, in _pin_memory_loop
+    do_one_step()
+  File "/ext3/miniconda3/lib/python3.11/site-packages/torch/utils/data/_utils/pin_memory.py", line 31, in do_one_step
+    r = in_queue.get(timeout=MP_STATUS_CHECK_INTERVAL)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/ext3/miniconda3/lib/python3.11/multiprocessing/queues.py", line 122, in get
+    return _ForkingPickler.loads(res)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/ext3/miniconda3/lib/python3.11/site-packages/torch/multiprocessing/reductions.py", line 495, in rebuild_storage_fd
+    fd = df.detach()
+         ^^^^^^^^^^^
+  File "/ext3/miniconda3/lib/python3.11/multiprocessing/resource_sharer.py", line 57, in detach
+    with _resource_sharer.get_connection(self._id) as conn:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/ext3/miniconda3/lib/python3.11/multiprocessing/resource_sharer.py", line 86, in get_connection
+    c = Client(address, authkey=process.current_process().authkey)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/ext3/miniconda3/lib/python3.11/multiprocessing/connection.py", line 501, in Client
+    c = SocketClient(address)
+        ^^^^^^^^^^^^^^^^^^^^^
+  File "/ext3/miniconda3/lib/python3.11/multiprocessing/connection.py", line 629, in SocketClient
+    s.connect(address)
+FileNotFoundError: [Errno 2] No such file or directory
+Traceback (most recent call last):
+  File "/scratch/sxp8182/work_with_abu/learning_to_search/cirriculum_learning/learning_to_search/train.py", line 1026, in <module>
+    train(
+  File "/scratch/sxp8182/work_with_abu/learning_to_search/cirriculum_learning/learning_to_search/train.py", line 827, in train
+    for batch in (train_loader if dataset_size == -1 else cycle(train_loader)):
+  File "/ext3/miniconda3/lib/python3.11/site-packages/torch/utils/data/dataloader.py", line 631, in __next__
+    data = self._next_data()
+           ^^^^^^^^^^^^^^^^^
+  File "/ext3/miniconda3/lib/python3.11/site-packages/torch/utils/data/dataloader.py", line 1329, in _next_data
+    idx, data = self._get_data()
+                ^^^^^^^^^^^^^^^^
+  File "/ext3/miniconda3/lib/python3.11/site-packages/torch/utils/data/dataloader.py", line 1290, in _get_data
+    raise RuntimeError('Pin memory thread exited unexpectedly')
+RuntimeError: Pin memory thread exited unexpectedly
+Thread SenderThread:
+Traceback (most recent call last):
+  File "/home/sxp8182/.local/lib/python3.11/site-packages/wandb/sdk/internal/internal_util.py", line 48, in run
+    self._run()
+  File "/home/sxp8182/.local/lib/python3.11/site-packages/wandb/sdk/internal/internal_util.py", line 99, in _run
+    self._process(record)
+  File "/home/sxp8182/.local/lib/python3.11/site-packages/wandb/sdk/internal/internal.py", line 327, in _process
+    self._sm.send(record)
+  File "/home/sxp8182/.local/lib/python3.11/site-packages/wandb/sdk/internal/sender.py", line 386, in send
+    send_handler(record)
+  File "/home/sxp8182/.local/lib/python3.11/site-packages/wandb/sdk/internal/sender.py", line 408, in send_request
+    send_handler(record)
+  File "/home/sxp8182/.local/lib/python3.11/site-packages/wandb/sdk/internal/sender.py", line 642, in send_request_defer
+    self._flush_job()
+  File "/home/sxp8182/.local/lib/python3.11/site-packages/wandb/sdk/internal/sender.py", line 1683, in _flush_job
+    artifact = self._job_builder.build(api=self._api)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/sxp8182/.local/lib/python3.11/site-packages/wandb/sdk/internal/job_builder.py", line 546, in build
+    with artifact.new_file("wandb-job.json") as f:
+  File "/ext3/miniconda3/lib/python3.11/contextlib.py", line 137, in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+  File "/home/sxp8182/.local/lib/python3.11/site-packages/wandb/sdk/artifacts/artifact.py", line 1136, in new_file
+    self._tmp_dir = tempfile.TemporaryDirectory()
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/ext3/miniconda3/lib/python3.11/tempfile.py", line 854, in __init__
+    self.name = mkdtemp(suffix, prefix, dir)
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/ext3/miniconda3/lib/python3.11/tempfile.py", line 368, in mkdtemp
+    _os.mkdir(file, 0o700)
+FileNotFoundError: [Errno 2] No such file or directory: '/state/partition1/job-50775139/tmpeytnqkag'
+wandb: ERROR Internal wandb error: file data was not synced
+/ext3/miniconda3/lib/python3.11/site-packages/numpy/core/getlimits.py:549: UserWarning: The value of the smallest subnormal for <class 'numpy.float64'> type is zero.
+  setattr(self, word, getattr(machar, word).flat[0])
+/ext3/miniconda3/lib/python3.11/site-packages/numpy/core/getlimits.py:89: UserWarning: The value of the smallest subnormal for <class 'numpy.float64'> type is zero.
+  return self._float_to_str(self.smallest_subnormal)
+wandb: Currently logged in as: sxp8182 (sxp). Use `wandb login --relogin` to force relogin
+wandb: wandb version 0.17.9 is available!  To upgrade, please run:
+wandb:  $ pip install wandb --upgrade
+wandb: Tracking run with wandb version 0.17.4
+wandb: Run data is saved locally in /scratch/sxp8182/work_with_abu/learning_to_search/cirriculum_learning/learning_to_search/wandb/run-20240910_025254-checkpoints_v3_8layer_inputsize98_maxlookahead15_seed2_trainstreaming
+wandb: Run `wandb offline` to turn off syncing.
+wandb: Syncing run checkpoints_v3_8layer_inputsize98_maxlookahead15_seed2_trainstreaming
+wandb: ⭐️ View project at https://wandb.ai/sxp/inference
+wandb: 🚀 View run at https://wandb.ai/sxp/inference/runs/checkpoints_v3_8layer_inputsize98_maxlookahead15_seed2_trainstreaming
+slurmstepd: error: *** JOB 50813723 ON ga004 CANCELLED AT 2024-09-11T14:51:43 DUE TO TIME LIMIT ***

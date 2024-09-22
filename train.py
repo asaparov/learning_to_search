@@ -650,7 +650,7 @@ def generate_training_set(max_input_size, dataset_size, max_lookahead, reserved_
 
 	return inputs, outputs, valid_outputs, num_collisions
 
-def train(batch_size, max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidden_dim, bidirectional, absolute_pos_emb, learnable_token_emb, toeplitz_attn, toeplitz_reg, toeplitz_pos_only, add_padding, ablate, pre_ln, curriculum_mode, looped, dfs, nl, nl2):
+def train(batch_size, max_input_size, dataset_size, distribution, max_lookahead, seed_value, nlayers, hidden_dim, bidirectional, absolute_pos_emb, learnable_token_emb, toeplitz_attn, toeplitz_reg, toeplitz_pos_only, add_padding, ablate, pre_ln, curriculum_mode, looped, dfs, nl, nl2):
 	generator.set_seed(seed_value)
 	seed(seed_value)
 	torch.manual_seed(seed_value)
@@ -677,6 +677,20 @@ def train(batch_size, max_input_size, dataset_size, max_lookahead, seed_value, n
 		print('ERROR: Curriculum learning is only supported with streaming training (i.e. dataset_size = -1).')
 		stdout.flush()
 		return
+	if dfs and distribution != "simple":
+		print('ERROR: DFS training is currently only supported with the simple training distribution.')
+		stdout.flush()
+		return
+	if distribution == "crafted" and max_lookahead == None:
+		print('ERROR: Crafted training distribution is selected but `max_lookhead` argument is missing.')
+		stdout.flush()
+		return
+	if distribution == "simple" and max_lookahead != None:
+		print('ERROR: `max_lookahead` is not supported with the simple training distribution.')
+		stdout.flush()
+		return
+	if max_lookahead == None:
+		max_lookahead = -1
 
 	# first reserve some data for OOD testing
 	random_state = getstate()
@@ -777,7 +791,9 @@ def train(batch_size, max_input_size, dataset_size, max_lookahead, seed_value, n
 		train_loader = DataLoader(train_data, batch_size=BATCH_SIZE, shuffle=True)
 
 	# compute the checkpoint filenames and try to resume from the last one
-	filename = prefix + 'checkpoints_v3_{}_{}layer_inputsize{}_maxlookahead{}_seed{}_train{}'.format(nl, nlayers, max_input_size, max_lookahead, seed_value, dataset_size if dataset_size != -1 else 'streaming')
+	filename = prefix + 'checkpoints_v3_{}_{}layer_inputsize{}_maxlookahead{}_seed{}_train{}'.format(nl2, nlayers, max_input_size, max_lookahead, seed_value, dataset_size if dataset_size != -1 else 'streaming')
+	if hidden_dim != 16:
+		filename += '_hiddendim{}'.format(hidden_dim)
 	if bidirectional:
 		filename += '_nomask'
 	if not absolute_pos_emb:
@@ -939,7 +955,7 @@ def train(batch_size, max_input_size, dataset_size, max_lookahead, seed_value, n
 
 					generate_start_time = time.perf_counter()
 					if dfs:
-						inputs, outputs, labels, num_collisions = generator.generate_dfs_training_set(max_input_size, BATCH_SIZE, reserved_inputs, -1, True)
+						inputs, outputs, labels, num_collisions = generator.generate_dfs_training_set(max_input_size, BATCH_SIZE, reserved_inputs, -1, add_padding, True)
 					else:
 						inputs, outputs, labels, num_collisions = generator.generate_training_set(max_input_size, BATCH_SIZE, self.lookahead, self.max_edges, reserved_inputs, dist_from_start, nl, True)
 
@@ -951,7 +967,6 @@ def train(batch_size, max_input_size, dataset_size, max_lookahead, seed_value, n
 					if num_collisions != 0:
 						with self.collisions_lock:
 							self.total_collisions.value += num_collisions
-						print('Total number of training examples generated that are in the test set: {}'.format(self.total_collisions.value))
 						stdout.flush()
 
 					worker_end_time = time.perf_counter()
@@ -1058,6 +1073,7 @@ def train(batch_size, max_input_size, dataset_size, max_lookahead, seed_value, n
 						print("throughput = {} examples/s, GPU utilization = {}".format(effective_dataset_size / elapsed_time, utilization))
 					else:
 						print("throughput = {} examples/s".format(effective_dataset_size / elapsed_time))
+					print('Total number of training examples generated that are in the test set: {}'.format(iterable_dataset.total_collisions.value))
 					print("[PROFILE] Total batch time: {}s".format(elapsed_time))
 					print("[PROFILE] Time to transfer data to GPU: {}s".format(transfer_time))
 					print("[PROFILE] Time to train: {}s".format(train_time))
@@ -1183,7 +1199,7 @@ if __name__ == "__main__":
 	parser.add_argument("--max-input-size", type=int)
 	parser.add_argument("--batch-size", type=int)
 	parser.add_argument("--dataset-size", type=int)
-	parser.add_argument("--max-lookahead", type=int)
+	parser.add_argument("--max-lookahead", type=int, required=False)
 	parser.add_argument("--nlayers", type=int)
 	parser.add_argument("--hidden-dim", type=int)
 	parser.add_argument("--seed", type=int, default=1)
@@ -1201,12 +1217,14 @@ if __name__ == "__main__":
 	parser.add_argument("--dfs", type=parse_bool_arg, default=False)
 	parser.add_argument('--nl',type=parse_bool_arg, default=False )
 	parser.add_argument('--nl2',type=parse_bool_arg, default=False )
+	parser.add_argument("--distribution", type=str, default="crafted", choices=["simple", "crafted"])
 	args = parser.parse_args()
 
 	train(
 		
 		max_input_size=args.max_input_size,
 		dataset_size=args.dataset_size,
+		distribution=args.distribution,
 		max_lookahead=args.max_lookahead,
 		seed_value=args.seed,
 		nlayers=args.nlayers,

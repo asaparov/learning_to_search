@@ -1,0 +1,67 @@
+/ext3/miniconda3/lib/python3.11/site-packages/numpy/core/getlimits.py:549: UserWarning: The value of the smallest subnormal for <class 'numpy.float64'> type is zero.
+  setattr(self, word, getattr(machar, word).flat[0])
+/ext3/miniconda3/lib/python3.11/site-packages/numpy/core/getlimits.py:89: UserWarning: The value of the smallest subnormal for <class 'numpy.float64'> type is zero.
+  return self._float_to_str(self.smallest_subnormal)
+wandb: Currently logged in as: sxp8182 (sxp). Use `wandb login --relogin` to force relogin
+wandb: wandb version 0.17.7 is available!  To upgrade, please run:
+wandb:  $ pip install wandb --upgrade
+wandb: Tracking run with wandb version 0.17.4
+wandb: Run data is saved locally in /scratch/sxp8182/work_with_abu/learning_to_search/cirriculum_learning/learning_to_search/wandb/run-20240817_055359-checkpoints_v3_8layer_inputsize50_maxlookahead7_seed11_trainstreaming
+wandb: Run `wandb offline` to turn off syncing.
+wandb: Syncing run checkpoints_v3_8layer_inputsize50_maxlookahead7_seed11_trainstreaming
+wandb: ⭐️ View project at https://wandb.ai/sxp/inference
+wandb: 🚀 View run at https://wandb.ai/sxp/inference/runs/checkpoints_v3_8layer_inputsize50_maxlookahead7_seed11_trainstreaming
+wandb: 429 encountered (Filestream rate limit exceeded, retrying in 2.3 seconds.), retrying request
+wandb: 429 encountered (Filestream rate limit exceeded, retrying in 4.2 seconds.), retrying request
+wandb: 429 encountered (Filestream rate limit exceeded, retrying in 8.9 seconds.), retrying request
+wandb: 429 encountered (Filestream rate limit exceeded, retrying in 16.9 seconds.), retrying request
+wandb: 429 encountered (Filestream rate limit exceeded, retrying in 33.7 seconds.), retrying request
+wandb: 429 encountered (Filestream rate limit exceeded, retrying in 72.1 seconds.), retrying request
+wandb: 429 encountered (Filestream rate limit exceeded, retrying in 129.8 seconds.), retrying request
+wandb: 429 encountered (Filestream rate limit exceeded, retrying in 294.4 seconds.), retrying request
+wandb: 429 encountered (Filestream rate limit exceeded, retrying in 371.5 seconds.), retrying request
+wandb: 429 encountered (Filestream rate limit exceeded, retrying in 349.2 seconds.), retrying request
+wandb: 429 encountered (Filestream rate limit exceeded, retrying in 302.5 seconds.), retrying request
+wandb: 429 encountered (Filestream rate limit exceeded, retrying in 322.3 seconds.), retrying request
+wandb: 429 encountered (Filestream rate limit exceeded, retrying in 302.6 seconds.), retrying request
+wandb: 429 encountered (Filestream rate limit exceeded, retrying in 304.0 seconds.), retrying request
+wandb: 429 encountered (Filestream rate limit exceeded, retrying in 333.6 seconds.), retrying request
+wandb: 429 encountered (Filestream rate limit exceeded, retrying in 313.4 seconds.), retrying request
+wandb: 429 encountered (Filestream rate limit exceeded, retrying in 301.7 seconds.), retrying request
+wandb: 429 encountered (Filestream rate limit exceeded, retrying in 340.3 seconds.), retrying request
+wandb: 429 encountered (Filestream rate limit exceeded, retrying in 360.0 seconds.), retrying request
+wandb: 429 encountered (Filestream rate limit exceeded, retrying in 350.1 seconds.), retrying request
+wandb: 429 encountered (Filestream rate limit exceeded, retrying in 316.3 seconds.), retrying request
+wandb: 429 encountered (Filestream rate limit exceeded, retrying in 314.4 seconds.), retrying request
+wandb: 429 encountered (Filestream rate limit exceeded, retrying in 374.0 seconds.), retrying request
+wandb: 429 encountered (Filestream rate limit exceeded, retrying in 344.1 seconds.), retrying request
+wandb: 429 encountered (Filestream rate limit exceeded, retrying in 370.2 seconds.), retrying request
+wandb: 429 encountered (Filestream rate limit exceeded, retrying in 310.8 seconds.), retrying request
+wandb: 429 encountered (Filestream rate limit exceeded, retrying in 369.2 seconds.), retrying request
+wandb: 429 encountered (Filestream rate limit exceeded, retrying in 323.2 seconds.), retrying request
+wandb: 429 encountered (Filestream rate limit exceeded, retrying in 304.5 seconds.), retrying request
+wandb: 429 encountered (Filestream rate limit exceeded, retrying in 312.2 seconds.), retrying request
+wandb: ERROR Dropped streaming file chunk (see wandb/debug-internal.log)
+wandb: 429 encountered (Filestream rate limit exceeded, retrying in 2.4 seconds.), retrying request
+wandb: 429 encountered (Filestream rate limit exceeded, retrying in 4.1 seconds.), retrying request
+wandb: 429 encountered (Filestream rate limit exceeded, retrying in 8.3 seconds.), retrying request
+wandb: 429 encountered (Filestream rate limit exceeded, retrying in 19.3 seconds.), retrying request
+wandb: 429 encountered (Filestream rate limit exceeded, retrying in 33.3 seconds.), retrying request
+wandb: 429 encountered (Filestream rate limit exceeded, retrying in 77.8 seconds.), retrying request
+wandb: 429 encountered (Filestream rate limit exceeded, retrying in 159.2 seconds.), retrying request
+wandb: 429 encountered (Filestream rate limit exceeded, retrying in 299.3 seconds.), retrying request
+wandb: 429 encountered (Filestream rate limit exceeded, retrying in 307.7 seconds.), retrying request
+wandb: 429 encountered (Filestream rate limit exceeded, retrying in 346.9 seconds.), retrying request
+wandb: 429 encountered (Filestream rate limit exceeded, retrying in 334.3 seconds.), retrying request
+wandb: 429 encountered (Filestream rate limit exceeded, retrying in 360.3 seconds.), retrying request
+wandb: 429 encountered (Filestream rate limit exceeded, retrying in 327.8 seconds.), retrying request
+wandb: 429 encountered (Filestream rate limit exceeded, retrying in 337.3 seconds.), retrying request
+wandb: 429 encountered (Filestream rate limit exceeded, retrying in 319.3 seconds.), retrying request
+wandb: 429 encountered (Filestream rate limit exceeded, retrying in 348.8 seconds.), retrying request
+wandb: 429 encountered (Filestream rate limit exceeded, retrying in 351.8 seconds.), retrying request
+wandb: 429 encountered (Filestream rate limit exceeded, retrying in 320.8 seconds.), retrying request
+wandb: 429 encountered (Filestream rate limit exceeded, retrying in 328.6 seconds.), retrying request
+wandb: 429 encountered (Filestream rate limit exceeded, retrying in 315.8 seconds.), retrying request
+wandb: 429 encountered (Filestream rate limit exceeded, retrying in 372.4 seconds.), retrying request
+wandb: 429 encountered (Filestream rate limit exceeded, retrying in 308.6 seconds.), retrying request
+slurmstepd: error: *** JOB 49778788 ON gv004 CANCELLED AT 2024-08-18T17:53:31 DUE TO TIME LIMIT ***

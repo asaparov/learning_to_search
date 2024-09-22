@@ -301,89 +301,98 @@ def print_graph(input):
 	print('Start: ' + str(input[-1].item()) + ', Goal: ' + str(goal))
 
 
+def do_evaluate_model(filepath, star_distribution=False, max_backtrack_distance=None):
+	model, _, _, _ = torch.load(filepath, map_location=device)
+
+	from os.path import sep
+	dirname = filepath.split(sep)[-2]
+	suffix = dirname[dirname.index('inputsize')+len('inputsize'):]
+	max_input_size = int(suffix[:suffix.index('_')])
+
+	suffix = dirname[dirname.index('seed')+len('seed'):]
+	training_seed = int(suffix[:suffix.index('_')])
+
+	suffix = dirname[dirname.index('maxlookahead')+len('maxlookahead'):]
+	training_max_lookahead = int(suffix[:suffix.index('_')])
+	max_lookahead = ((max_input_size - 5) // 3 - 1) // 2
+
+	is_dfs = 'dfs' in dirname
+	if max_backtrack_distance == None:
+		# TODO: i think we could theoretically generate examples with `backtrack_distance = (max_input_size - 4) // 4 - 1`, but the rejection rate in the current rejection sampling method is too high to feasibly generate such samples
+		max_backtrack_distance = (max_input_size - 4) // 4 - 2
+
+	if not hasattr(model, 'looped'):
+		model.looped = False
+	for transformer in model.transformers:
+		if not hasattr(transformer, 'pre_ln'):
+			transformer.pre_ln = True
+
+	seed_generator = Random(training_seed)
+	seed_values = []
+
+	def get_seed(index):
+		if index < len(seed_values):
+			return seed_values[index]
+		while index >= len(seed_values):
+			seed_values.append(seed_generator.randrange(2 ** 32))
+		return seed_values[index]
+
+	NUM_TEST_SAMPLES = 1000
+	reserved_inputs = set()
+	test_accuracies = []
+	if is_dfs:
+		for backtrack_distance in [-1] + list(range(0, max_backtrack_distance + 1)):
+			generator.set_seed(get_seed(1))
+			inputs,outputs,_,_ = generator.generate_dfs_training_set(max_input_size, NUM_TEST_SAMPLES, reserved_inputs, backtrack_distance, False, True)
+			test_acc,test_loss,predictions = evaluate_model(model, inputs, outputs)
+			confidence_int = binomial_confidence_int(test_acc, NUM_TEST_SAMPLES)
+			print("Test accuracy = %.2f±%.2f, test loss = %f" % (test_acc, confidence_int, test_loss))
+			test_accuracies.append((test_acc, confidence_int, test_loss))
+	elif star_distribution:
+		for spoke_length in range(1, max_lookahead + 1):
+			max_spoke_count = ((max_input_size - 5) // 3 - 1) // spoke_length
+			spoke_accuracies = []
+			for num_spokes in range(1, max_spoke_count + 1):
+				print('spoke_length: {}, num_spokes: {}'.format(spoke_length, num_spokes))
+				inputs,outputs = generate_star_graph_data(max_input_size, num_spokes, spoke_length, num_samples=NUM_TEST_SAMPLES)
+				test_acc,test_loss,predictions = evaluate_model(model, inputs, outputs)
+				confidence_int = binomial_confidence_int(test_acc, NUM_TEST_SAMPLES)
+				print("Test accuracy = %.2f±%.2f, test loss = %f" % (test_acc, confidence_int, test_loss))
+				spoke_accuracies.append((test_acc, confidence_int, test_loss))
+			test_accuracies.append(spoke_accuracies)
+	else:
+		for lookahead in [None] + list(range(1, max_lookahead + 1)):
+			seed(training_seed)
+			torch.manual_seed(training_seed)
+			np.random.seed(training_seed)
+
+			inputs,outputs = generate_eval_data(max_input_size, min_path_length=2, distance_from_start=1, distance_from_end=-1, lookahead_steps=lookahead, num_paths_at_fork=None, num_samples=NUM_TEST_SAMPLES)
+
+			print("Evaluating model...")
+			test_acc,test_loss,predictions = evaluate_model(model, inputs, outputs)
+			'''print("Mistaken inputs:")
+			predictions = np.array(predictions.cpu())
+			incorrect_indices = np.nonzero(predictions != outputs)[0]
+			np.set_printoptions(threshold=10_000)
+			for incorrect_index in incorrect_indices:
+				print_graph(inputs[incorrect_index, :])
+				print("Expected answer: {}, predicted answer: {}\n".format(outputs[incorrect_index], predictions[incorrect_index]))
+			import pdb; pdb.set_trace()'''
+			confidence_int = binomial_confidence_int(test_acc, NUM_TEST_SAMPLES)
+			print("Test accuracy = %.2f±%.2f, test loss = %f" % (test_acc, confidence_int, test_loss))
+			test_accuracies.append((test_acc, confidence_int, test_loss))
+
+	return test_accuracies
+
+
 if __name__ == "__main__":
 	from sys import argv
 	import os
 	filepath = argv[1]
 	if os.path.isfile(filepath):
-		model, _, _, _ = torch.load(filepath, map_location=device)
-
-		dirname = filepath.split(os.path.sep)[-2]
-		suffix = dirname[dirname.index('inputsize')+len('inputsize'):]
-		max_input_size = int(suffix[:suffix.index('_')])
-
-		suffix = dirname[dirname.index('seed')+len('seed'):]
-		training_seed = int(suffix[:suffix.index('_')])
-
-		suffix = dirname[dirname.index('maxlookahead')+len('maxlookahead'):]
-		training_max_lookahead = int(suffix[:suffix.index('_')])
-		max_lookahead = ((max_input_size - 5) // 3 - 1) // 2
-
-		is_dfs = 'dfs' in dirname
-		# TODO: i think we could theoretically generate examples with `backtrack_distance = (max_input_size - 4) // 4 - 1`, but the rejection rate in the current rejection sampling method is too high to feasibly generate such samples
-		max_backtrack_distance = (max_input_size - 4) // 4 - 2
-
-		if not hasattr(model, 'looped'):
-			model.looped = False
-		for transformer in model.transformers:
-			if not hasattr(transformer, 'pre_ln'):
-				transformer.pre_ln = True
-
-		#model = ideal_model(max_input_size=max_input_size, num_layers=6, hidden_dim=16, bidirectional=True, absolute_pos_emb=True, learnable_token_emb=False)
-
-		#run_model(model, [22, 21,  5, 19, 21, 11,  5, 21, 10,  3, 21,  4, 10, 21,  9,  4, 21,  9, 11, 23,  9,  3, 20,  9], max_input_size=24)
-		#run_model(model, [22, 22, 22, 22, 22, 22, 22, 21, 1,  2, 21,  1,  4, 21,  2,  3, 21, 4,  5, 23,  1,  3, 20, 1], max_input_size=24)
-		#run_model(model, [46, 45,  3, 19, 45, 18, 39, 45, 36, 15, 45, 24, 42, 45, 37,  3, 45, 37, 36, 45, 23, 32, 45,  8, 24, 45, 19, 30, 45, 15, 23, 45, 39, 40, 45, 40, 34, 45, 30, 18, 45, 32,  8, 47, 37, 34, 44, 37], max_input_size=48)
-		#run_model(model, [31, 31, 31, 31, 31, 31, 31, 30,  7, 23, 30,  9, 22, 30,  6,  4, 30, 6, 10, 30, 25, 19, 30, 17,  9, 30, 17, 16, 30,  1, 14, 30, 11, 21, 30, 26,  1, 30, 12, 11, 30, 14,  6, 30, 15, 25, 30, 24, 28, 30,  4, 17, 30, 19,  8, 30, 27, 26, 30, 27, 12, 30, 27,  5, 30, 22, 24, 30, 8,  3, 30, 18, 15, 30,  3,  7, 30,  3, 10, 30,  3,  2, 30, 21, 18, 32, 27, 28, 29, 27], fix_index=None, max_input_size=max_input_size, num_perturbations=1000)
-
-		seed_generator = Random(training_seed)
-		seed_values = []
-
-		def get_seed(index):
-			if index < len(seed_values):
-				return seed_values[index]
-			while index >= len(seed_values):
-				seed_values.append(seed_generator.randrange(2 ** 32))
-			return seed_values[index]
-
-		NUM_TEST_SAMPLES = 1000
-		reserved_inputs = set()
-		test_accuracies = []
-		print("Generating eval data...")
-		#for lookahead in [None] + list(range(1, max_lookahead + 1)):
-		#for spoke_length in range(1, max_lookahead + 1):
-		for backtrack_distance in range(1, max_backtrack_distance + 1):
-			if True:
-			#max_spoke_count = ((max_input_size - 5) // 3 - 1) // spoke_length
-			#for num_spokes in range(1, max_spoke_count + 1):
-				seed(training_seed)
-				torch.manual_seed(training_seed)
-				np.random.seed(training_seed)
-
-				#inputs,outputs = generate_eval_data(max_input_size, min_path_length=2, distance_from_start=1, distance_from_end=-1, lookahead_steps=lookahead, num_paths_at_fork=None, num_samples=NUM_TEST_SAMPLES)
-
-				#print('spoke_length: {}, num_spokes: {}'.format(spoke_length, num_spokes))
-				#inputs,outputs = generate_star_graph_data(max_input_size, num_spokes, spoke_length, num_samples=NUM_TEST_SAMPLES)
-
-				generator.set_seed(get_seed(1))
-				inputs,outputs,_,_ = generator.generate_dfs_training_set(max_input_size, NUM_TEST_SAMPLES, reserved_inputs, backtrack_distance, True)
-
-				#generator.set_seed(get_seed(1))
-				#inputs, outputs, _, _ = generator.generate_training_set(max_input_size, NUM_TEST_SAMPLES, training_max_lookahead, reserved_inputs, 1, False)
-				print("Evaluating model...")
-				test_acc,test_loss,predictions = evaluate_model(model, inputs, outputs)
-				print("Mistaken inputs:")
-				'''predictions = np.array(predictions.cpu())
-				incorrect_indices = np.nonzero(predictions != outputs)[0]
-				np.set_printoptions(threshold=10_000)
-				for incorrect_index in incorrect_indices:
-					print_graph(inputs[incorrect_index, :])
-					print("Expected answer: {}, predicted answer: {}\n".format(outputs[incorrect_index], predictions[incorrect_index]))
-				import pdb; pdb.set_trace()'''
-				print("Test accuracy = %.2f±%.2f, test loss = %f" % (test_acc, binomial_confidence_int(test_acc, 1000), test_loss))
-				test_accuracies.append(test_acc)
+		test_accuracies = do_evaluate_model(filepath)
 		print("\nTest accuracies:")
-		print(["%.2f" % acc for acc in test_accuracies])
+		print(["%.2f±%.2f" % (acc,conf_int) for acc,conf_int,_ in test_accuracies])
 
 	elif os.path.isdir(argv[1]):
 		import matplotlib

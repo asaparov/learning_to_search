@@ -215,8 +215,6 @@ def perturb_attn_ops(model, i, j, dst, src, layer_input, mask, A_matrices, attn_
 		frozen_ops[j] = (new_attn_matrices[start:end,], None)
 		#_, perturb_attn_inputs, _, _, _, _, _, _, _, _, _ = forward(model, layer_input.repeat(end-start,1,1).detach(), mask, j, False, i, None, frozen_ops)
 		perturb_layer_inputs, perturb_attn_inputs, perturb_attn_pre_softmax, perturb_attn_matrices, perturb_v_outputs, perturb_attn_linear_inputs, perturb_attn_outputs, perturb_A_matrices, perturb_ff_inputs, perturb_ff_parameters, perturb_prediction = forward(model, layer_input.repeat(end-start,1,1).detach(), mask, j, False, i, None, frozen_ops)
-		if j == 0 and i == 5 and 97*n+98 >= start and 97*n+98 < end:
-			import pdb; pdb.set_trace()
 
 		# try computing the attention dot product but with perturbed dst embeddings
 		zero_src_products[start:end] = torch.matmul(torch.matmul(attn_inputs[i], A), perturb_attn_inputs[i].transpose(-2,-1))[:,dst,src]
@@ -327,13 +325,13 @@ def explain_attn_op(model, input, mask, A_matrices, attn_matrices, attn_inputs, 
 		print('WARNING: Found an attention operation that is both positive and negative.')
 	is_negative_copy = (sign == -1) #(attn_matrices[i][dst,src] < torch.median(attn_matrices[i][dst,edge_indices]))
 	if is_negative_copy:
-		src_dependencies = torch.nonzero(new_src_products > old_product + math.sqrt(d) / 6)
-		dst_dependencies = torch.nonzero(new_dst_products > old_product + math.sqrt(d) / 6)
+		src_dependencies = torch.nonzero(new_src_products > old_product + math.sqrt(d) / 10)
+		dst_dependencies = torch.nonzero(new_dst_products > old_product + math.sqrt(d) / 10)
 		src_dependencies = src_dependencies[torch.sort(new_src_products[src_dependencies],dim=0,descending=True).indices]
 		dst_dependencies = dst_dependencies[torch.sort(new_dst_products[dst_dependencies],dim=0,descending=True).indices]
 	else:
-		src_dependencies = torch.nonzero(new_src_products < old_product - math.sqrt(d) / 6)
-		dst_dependencies = torch.nonzero(new_dst_products < old_product - math.sqrt(d) / 6)
+		src_dependencies = torch.nonzero(new_src_products < old_product - math.sqrt(d) / 10)
+		dst_dependencies = torch.nonzero(new_dst_products < old_product - math.sqrt(d) / 10)
 		src_dependencies = src_dependencies[torch.sort(new_src_products[src_dependencies],dim=0,descending=False).indices]
 		dst_dependencies = dst_dependencies[torch.sort(new_dst_products[dst_dependencies],dim=0,descending=False).indices]
 
@@ -536,12 +534,14 @@ class ComputationNode:
 		self.reachable = []
 		self.op_explanations = []
 		self.copy_directions = []
+		self.weights = []
 
-	def add_predecessor(self, predecessor):
+	def add_predecessor(self, predecessor, weight):
 		self.predecessors.append(predecessor)
 		predecessor.successors.append(self)
 		predecessor.op_explanations.append(None)
 		predecessor.copy_directions.append(None)
+		predecessor.weights.append(weight)
 
 	def __str__(self):
 		return '{{layer:{},id:{}}}'.format(self.layer, self.row_id)
@@ -646,7 +646,11 @@ class TransformerTracer:
 			zero_output_logit_list.append(zero_output_logits)
 			max_output_logit_list.append(max_output_logits)
 
-		major_last_copies = torch.nonzero(zero_output_logit_list[len(self.model.transformers)-1] < layer_inputs[-1][-1,prediction] - math.sqrt(d) / 6)
+		#major_copy_threshold = torch.min(zero_output_logit_list[len(self.model.transformers)-1]) * (1 - 1/6) + layer_inputs[-1][-1,prediction] * 1/6
+		#major_last_copies = torch.nonzero(zero_output_logit_list[len(self.model.transformers)-1] < major_copy_threshold)
+		major_last_copies = torch.nonzero(zero_output_logit_list[len(self.model.transformers)-1] < layer_inputs[-1][-1,prediction] - 0.4)
+		if len(major_last_copies) == 0:
+			major_last_copies = torch.nonzero(zero_output_logit_list[len(self.model.transformers)-1] < torch.min(zero_output_logit_list[len(self.model.transformers)-1]) + 1e-6)
 		last_copy_srcs = major_last_copies[:,1]
 
 		zero_src_product_list = []
@@ -683,8 +687,8 @@ class TransformerTracer:
 		for j in range(len(self.model.transformers)):
 			new_important_positive_ops = []
 			new_important_negative_ops = []
-			positive_copies = torch.nonzero(zero_output_logit_list[j] < layer_inputs[-1][-1,prediction] - math.sqrt(d) / 6)
-			negative_copies = torch.nonzero(max_output_logit_list[j] < layer_inputs[-1][-1,prediction] - math.sqrt(d) / 6)
+			positive_copies = torch.nonzero(zero_output_logit_list[j] < layer_inputs[-1][-1,prediction] - 0.4)
+			negative_copies = torch.nonzero(max_output_logit_list[j] < layer_inputs[-1][-1,prediction] - 0.4)
 			if not quiet:
 				print("Layer {}:".format(j))
 				print("  Positive copies from output logit perturbations: {}".format(positive_copies.tolist()))
@@ -695,8 +699,8 @@ class TransformerTracer:
 				new_important_positive_ops += [op.tolist() for op in positive_copies]
 
 			for k in range(len(zero_dst_product_list)):
-				positive_copies = torch.nonzero(zero_src_product_list[k][j] < old_products[k] - math.sqrt(d) / 6)
-				negative_copies = torch.nonzero(max_src_product_list[k][j] < old_products[k] - math.sqrt(d) / 6)
+				positive_copies = torch.nonzero(zero_src_product_list[k][j] < old_products[k] - math.sqrt(d) / 20)
+				negative_copies = torch.nonzero(max_src_product_list[k][j] < old_products[k] - math.sqrt(d) / 20)
 				if not quiet:
 					print("  Positive copies from src dot product perturbations[{}]: {}".format(k, positive_copies.tolist()))
 					print("  Negative copies from src dot product perturbations[{}]: {}".format(k, negative_copies.tolist()))
@@ -705,8 +709,8 @@ class TransformerTracer:
 				else:
 					new_important_positive_ops += [c.tolist() for c in positive_copies if c.tolist() not in new_important_positive_ops]
 
-				positive_copies = torch.nonzero(zero_dst_product_list[k][j] < old_products[k] - math.sqrt(d) / 6)
-				negative_copies = torch.nonzero(max_dst_product_list[k][j] < old_products[k] - math.sqrt(d) / 6)
+				positive_copies = torch.nonzero(zero_dst_product_list[k][j] < old_products[k] - math.sqrt(d) / 20)
+				negative_copies = torch.nonzero(max_dst_product_list[k][j] < old_products[k] - math.sqrt(d) / 20)
 				if not quiet:
 					print("  Positive copies from dst dot product perturbations[{}]: {}".format(k, positive_copies.tolist()))
 					print("  Negative copies from dst dot product perturbations[{}]: {}".format(k, negative_copies.tolist()))
@@ -732,6 +736,9 @@ class TransformerTracer:
 			new_important_ops += [(op,-1) for op in important_negative_ops[j] if op not in important_positive_ops[j]]
 			new_important_ops += [(op,0) for op in important_positive_ops[j] if op in important_negative_ops[j]]
 			important_ops.append(new_important_ops)
+		for last_copy_src in last_copy_srcs:
+			if ([n-1, last_copy_src], 1) not in important_ops[-1]:
+				important_ops[-1].append(([n-1, last_copy_src], 1))
 
 		forward_edges = []
 		start_index = torch.sum(input == PADDING_TOKEN)
@@ -764,7 +771,7 @@ class TransformerTracer:
 			new_nodes = []
 			for node in nodes:
 				new_node = ComputationNode(j, node.row_id)
-				node.add_predecessor(new_node)
+				node.add_predecessor(new_node, None)
 				new_nodes.append(new_node)
 			for op,sign in important_ops[j]:
 				for node in nodes:
@@ -774,11 +781,21 @@ class TransformerTracer:
 						except StopIteration:
 							predecessor = ComputationNode(j, int(op[1]))
 							new_nodes.append(predecessor)
-						node.add_predecessor(predecessor)
+
+						if sign == 1:
+							weight = layer_inputs[-1][-1,prediction] - zero_output_logit_list[j][op[0],op[1]]
+							for k in range(len(zero_dst_product_list)):
+								weight = max(weight, (old_products[k] - zero_src_product_list[k][j][op[0],op[1]]) / math.sqrt(d))
+								weight = max(weight, (old_products[k] - zero_dst_product_list[k][j][op[0],op[1]]) / math.sqrt(d))
+						else:
+							weight = layer_inputs[-1][-1,prediction] - max_output_logit_list[j][op[0],op[1]]
+							for k in range(len(zero_dst_product_list)):
+								weight = max(weight, -(old_products[k] - max_src_product_list[k][j][op[0],op[1]]) / math.sqrt(d))
+								weight = max(weight, -(old_products[k] - max_dst_product_list[k][j][op[0],op[1]]) / math.sqrt(d))
+
+						node.add_predecessor(predecessor, weight)
 
 						# explain the copy from `predecessor` to `node`
-						if j == 0 and predecessor.row_id == 98 and node.row_id == 97:
-							import pdb; pdb.set_trace()
 						src_dependencies, dst_dependencies = explain_attn_op(self.model, input, mask, A_matrices, attn_matrices, attn_inputs, ff_inputs, predecessor.layer, node.row_id, predecessor.row_id, sign)
 						op_causes = []
 						for src_dep in src_dependencies:
@@ -2169,7 +2186,8 @@ if __name__ == "__main__":
 	#input = [62, 62, 62, 62, 62, 61, 15,  8, 61, 11, 18, 61,  9,  5, 61, 19, 14, 61, 19, 17, 61,  1, 11, 61,  6,  7, 61, 10,  3, 61,  2,  1, 61, 13, 10, 61, 12,  4, 61, 17, 16, 61,  7, 12, 61, 14,  2, 61,  3,  9, 61, 16, 15, 61, 18,  6, 61,  8, 13, 63, 19,  4, 60, 19]
 	#input = [44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 43, 21, 40, 43, 21, 22, 43, 22, 34, 43, 13,  3, 43, 31,  2, 43, 24, 13, 43,  4, 41, 43, 30, 31, 43, 17, 15, 43, 34, 38, 43,  3, 28, 43, 18, 17, 43, 14, 24, 43,  2,  4, 43, 32, 30, 43, 40, 18, 43, 15, 14, 43, 38, 32, 45, 21, 28, 42, 21]
 	#input = [31, 31, 31, 31, 31, 31, 31, 30,  7, 23, 30,  9, 22, 30,  6,  4, 30, 6, 10, 30, 25, 19, 30, 17,  9, 30, 17, 16, 30,  1, 14, 30, 11, 21, 30, 26,  1, 30, 12, 11, 30, 14,  6, 30, 15, 25, 30,  4, 17, 30, 24, 28, 30, 19,  8, 30, 27, 26, 30, 27, 12, 30, 27,  5, 30, 22, 24, 30, 8,  3, 30, 18, 15, 30,  3,  7, 30,  3, 10, 30,  3,  2, 30, 21, 18, 32, 27, 28, 29, 27]
-	input = [44, 44, 44, 44, 44, 44, 43, 29, 36, 43, 25, 23, 43, 15,  4, 43, 16, 14, 43, 21, 29, 43, 27, 40, 43,  4,  9, 43,  8, 19, 43, 31,  8, 43, 31, 10, 43, 31,  2, 43,  9, 21, 43, 17, 28, 43,  2, 15, 43,  2, 12, 43, 33, 10, 43, 22, 37, 43, 34, 26, 43, 18,  7, 43, 19, 39, 43, 28, 27, 43, 37, 20, 43, 14, 11, 43, 20, 30, 43, 10,  3, 43, 26,  8, 43, 39, 38, 43, 30, 35, 43, 23, 17, 43,  7, 25, 43, 11, 32, 43, 35, 33, 43,  5, 16, 43, 12, 22, 43, 32, 34, 43, 36,  5, 43,  1,  2, 43,  1, 31, 43,  3, 18, 45,  2, 40, 42,  2]
+	#input = [44, 44, 44, 44, 44, 44, 43, 29, 36, 43, 25, 23, 43, 15,  4, 43, 16, 14, 43, 21, 29, 43, 27, 40, 43,  4,  9, 43,  8, 19, 43, 31,  8, 43, 31, 10, 43, 31,  2, 43,  9, 21, 43, 17, 28, 43,  2, 15, 43,  2, 12, 43, 33, 10, 43, 22, 37, 43, 34, 26, 43, 18,  7, 43, 19, 39, 43, 28, 27, 43, 37, 20, 43, 14, 11, 43, 20, 30, 43, 10,  3, 43, 26,  8, 43, 39, 38, 43, 30, 35, 43, 23, 17, 43,  7, 25, 43, 11, 32, 43, 35, 33, 43,  5, 16, 43, 12, 22, 43, 32, 34, 43, 36,  5, 43,  1,  2, 43,  1, 31, 43,  3, 18, 45,  2, 40, 42,  2]
+	input = [37, 37, 37, 37, 37, 37, 37, 37, 37, 37, 37, 37, 37, 37, 37, 37, 37, 37, 37, 37, 37, 37, 37, 37, 37, 37, 37, 37, 36,  9, 26, 36, 19, 32, 36, 26, 13, 36, 29,  2, 36, 18,  6, 36, 16, 22, 36,  5,  8, 36, 10, 28, 36,  3, 16, 36, 30, 33, 36, 13, 14, 36, 12, 31, 36, 34,  9, 36, 28,  3, 36, 14, 30, 36, 14, 11, 36, 17, 29, 36, 31, 24, 36, 11, 19, 36, 33,  1, 36, 32, 17, 36,  8, 12, 36,  1, 10, 36,  2,  5, 36, 22, 18, 38, 14,  6, 35, 14]
 	input = torch.LongTensor(input).to(device)
 	other_input = input.clone().detach()
 	other_input[-3] = 7
@@ -2245,7 +2263,7 @@ if __name__ == "__main__":
 				path_merge_explainable.remove(root)
 		return path_merge_explainable
 
-	def print_computation_graph(root, input):
+	def print_computation_graph(root, input, path_merge_explainable=None):
 		queue = [root]
 		visited = []
 		while len(queue) != 0:
@@ -2254,22 +2272,38 @@ if __name__ == "__main__":
 			for predecessor in node.predecessors:
 				queue.insert(0, predecessor)
 		printed = []
+		smallest_weight = float('inf')
+		smallest_weight_edge = None
 		for node in reversed(visited):
+			if path_merge_explainable != None and node not in path_merge_explainable:
+				continue
 			for predecessor in node.predecessors:
 				if predecessor in printed:
 					continue
+				if path_merge_explainable != None and predecessor not in path_merge_explainable:
+					continue
 				printed.append(predecessor)
-				print('Layer {}: copy from {} ({}) into {} ({}); explanations: {}, direction: {}, src reachability: {}'.format(predecessor.layer, predecessor.row_id, input[predecessor.row_id], node.row_id, input[node.row_id], predecessor.op_explanations[predecessor.successors.index(node)], predecessor.copy_directions[predecessor.successors.index(node)], sorted(predecessor.reachable)))
+				idx = predecessor.successors.index(node)
+				print('Layer {}: copy from {} ({}) into {} ({}); explanations: {}, weight: {}, direction: {}, src reachability: {}'.format(predecessor.layer, predecessor.row_id, input[predecessor.row_id], node.row_id, input[node.row_id], predecessor.op_explanations[idx], predecessor.weights[idx], predecessor.copy_directions[idx], sorted(predecessor.reachable)))
+				if predecessor.weights[idx] != None and predecessor.weights[idx] < smallest_weight:
+					smallest_weight = predecessor.weights[idx]
+					smallest_weight_edge = (predecessor.layer, predecessor.row_id, node.row_id)
 
-		from analyze import print_graph
-		print_graph(input.cpu().detach().numpy())
+		if smallest_weight_edge != None:
+			print('Attention operation with smallest weight is: layer {}, from {} to {} (weight: {})'.format(smallest_weight_edge[0], smallest_weight_edge[1], smallest_weight_edge[2], smallest_weight))
 
-	#debug_input = input
-	#root, forward_edges, important_ops, path_merge_explainable, prediction = tracer.trace2(debug_input, quiet=False)
-	#print_computation_graph(root, debug_input)
-	#print('### path_merge_explainable: ' + str(path_merge_explainable))
-	#print('### after filtering: ' + str(filter_irrelevant_nodes(path_merge_explainable, debug_input, root)))
-	#import pdb; pdb.set_trace()
+		if path_merge_explainable == None:
+			from analyze import print_graph
+			print_graph(input.cpu().detach().numpy())
+
+	'''debug_input = inputs[6]
+	root, forward_edges, important_ops, path_merge_explainable, prediction = tracer.trace2(debug_input, quiet=False)
+	print_computation_graph(root, debug_input)
+	print('### path_merge_explainable: ' + str(path_merge_explainable))
+	path_merge_explainable = filter_irrelevant_nodes(path_merge_explainable, debug_input, root)
+	print('### after filtering: ' + str(path_merge_explainable))
+	print_computation_graph(root, debug_input, path_merge_explainable)
+	import pdb; pdb.set_trace()'''
 
 	total = 0
 	num_correct_vs_explainable = torch.zeros((2,2))
