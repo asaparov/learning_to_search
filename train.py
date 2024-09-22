@@ -650,12 +650,13 @@ def generate_training_set(max_input_size, dataset_size, max_lookahead, reserved_
 
 	return inputs, outputs, valid_outputs, num_collisions
 
-def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidden_dim, bidirectional, absolute_pos_emb, learnable_token_emb, toeplitz_attn, toeplitz_reg, toeplitz_pos_only, add_padding, ablate, pre_ln, curriculum_mode, looped, dfs, nl, nl2):
+def train(batch_size, max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidden_dim, bidirectional, absolute_pos_emb, learnable_token_emb, toeplitz_attn, toeplitz_reg, toeplitz_pos_only, add_padding, ablate, pre_ln, curriculum_mode, looped, dfs, nl, nl2):
 	generator.set_seed(seed_value)
 	seed(seed_value)
 	torch.manual_seed(seed_value)
 	np.random.seed(seed_value)
 
+	BATCH_SIZE = batch_size
 	
 	if nl or nl2:
 		TRANSFORMER_LENGTH = (max_input_size * 5)
@@ -669,7 +670,6 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 		ntoken = (max_input_size-5) // 3 + 5
 	
 	
-	BATCH_SIZE = 256
 	print('Number of available CPUs: {}'.format(len(sched_getaffinity(0))))
 	stdout.flush()
 
@@ -1181,6 +1181,7 @@ if __name__ == "__main__":
 
 	parser = argparse.ArgumentParser()
 	parser.add_argument("--max-input-size", type=int)
+	parser.add_argument("--batch-size", type=int)
 	parser.add_argument("--dataset-size", type=int)
 	parser.add_argument("--max-lookahead", type=int)
 	parser.add_argument("--nlayers", type=int)
@@ -1203,6 +1204,7 @@ if __name__ == "__main__":
 	args = parser.parse_args()
 
 	train(
+		
 		max_input_size=args.max_input_size,
 		dataset_size=args.dataset_size,
 		max_lookahead=args.max_lookahead,
