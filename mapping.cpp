@@ -165,7 +165,8 @@ map_tokens_to_natural_language(const std::vector<int>& tokens, int output, int m
 
     std::vector<int> atoms = token_to_atom[output];
     atoms.push_back(VOCAB_DICT["."]);
-    
+
+
     std::vector<std::vector<int>> examples = {out_tokens};
     for (size_t i = 0; i < atoms.size() - 1; ++i) {
         out_tokens.push_back(atoms[i]);
@@ -175,7 +176,7 @@ map_tokens_to_natural_language(const std::vector<int>& tokens, int output, int m
     return {examples, atoms};
 }
 
-std::tuple<py::array_t<int>, py::array_t<float>, py::array_t<long>> 
+std::tuple<py::array_t<int>, py::array_t<float>, py::array_t<long>, py::array_t<int>> 
 map_tokens_to_natural_language_batched(
     const std::vector<std::vector<int>>& data,
     const std::vector<int>& output_tokens,
@@ -183,9 +184,10 @@ map_tokens_to_natural_language_batched(
     int TRANSFORMER_LENGTH,
     bool verbose = false
 ) {
+
     std::vector<std::vector<int>> all_tok;
     std::vector<int> all_out;
-
+    std::vector<int> lengths;
     auto start_time = std::chrono::high_resolution_clock::now();
     for (size_t i = 0; i < data.size(); ++i) {
         const auto& tokens = data[i];
@@ -195,8 +197,10 @@ map_tokens_to_natural_language_batched(
         std::vector<int> labels;
         std::tie(examples, labels) = map_tokens_to_natural_language(tokens, output, input_size, TRANSFORMER_LENGTH, verbose);
 
+
         all_tok.insert(all_tok.end(), examples.begin(), examples.end());
         all_out.insert(all_out.end(), labels.begin(), labels.end());
+        lengths.push_back(examples.size());
     }
     auto end_time = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> diff = end_time - start_time;
@@ -222,6 +226,7 @@ map_tokens_to_natural_language_batched(
     diff = end_time - start_time;
 
     py::array_t<long> all_out_array = py::cast(all_out);
+    py::array_t<int> lengths_array = py::cast(lengths);
 
     py::array_t<float> all_out_vec({static_cast<py::ssize_t>(all_out.size()), static_cast<py::ssize_t>(VOCAB.size())});
     auto all_out_vec_unchecked = all_out_vec.mutable_unchecked<2>();
@@ -231,7 +236,7 @@ map_tokens_to_natural_language_batched(
         }
     }
 
-    return std::make_tuple(padded_array, all_out_vec, all_out_array);
+    return std::make_tuple(padded_array, all_out_vec, all_out_array, lengths_array);
 }
 
 PYBIND11_MODULE(mapping, m) {

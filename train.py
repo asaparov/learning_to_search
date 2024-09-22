@@ -52,9 +52,9 @@ def map_tokens_to_natural_language_batched_and_tokenize(inputs, labels, max_inpu
 	# all_out = tokenizer.batch_encode_plus(all_out, return_tensors='pt')['input_ids'].squeeze()
 
 	# all_out_vec = torch.nn.functional.one_hot(all_out, num_classes=len(tokenizer.vocab)).float()
-	all_tok, all_out_vec, all_out = mapping.map_tokens_to_natural_language_batched(inputs, labels, max_input_size, TRANSFORMER_LENGTH)
+	all_tok, all_out_vec, all_out, lengths = mapping.map_tokens_to_natural_language_batched(inputs, labels, max_input_size, TRANSFORMER_LENGTH)
 
-	return all_tok, all_out_vec, all_out
+	return all_tok, all_out_vec, all_out, lengths
 
 
 # computes the number of lookahead steps to find the answer
@@ -471,7 +471,7 @@ def generate_eval_data(max_input_size, min_path_length=2, distance_from_start=-1
 
 	return inputs, outputs
 
-def evaluate_model(model, inputs, labels, outputs, nl, PADDING_TOKEN):
+def evaluate_model(model, inputs, labels, outputs, lengths, nl, PADDING_TOKEN):
 	device = next(model.parameters()).device
 	inputs = torch.tensor(inputs)
 	outputs = torch.tensor(outputs)
@@ -502,10 +502,24 @@ def evaluate_model(model, inputs, labels, outputs, nl, PADDING_TOKEN):
 		loss = loss_func(logits[:, -1, :], outputs).item()
 
 		predictions = torch.argmax(logits[:, -1, :], 1)
-		if outputs.dim() == 2:
-			acc = torch.sum(torch.gather(outputs, 1, torch.argmax(logits[:,-1,:],dim=1).unsqueeze(1))).item() / outputs.size(0)
-		else:
-			acc = sum(predictions == outputs).item() / len(predictions)
+
+		acc_sum = torch.gather(outputs, 1, torch.argmax(logits[:,-1,:],dim=1).unsqueeze(1)).squeeze(1)
+
+		idx = 0
+		total_acc = 0
+		total_count = 0
+		for i in range(len(lengths)):
+			if idx + lengths[i] > acc_sum.shape[0]:
+				break
+			total_acc += acc_sum[idx:idx+lengths[i]].min().item()
+			idx += lengths[i]
+			total_count += 1
+		total_acc /= total_count
+		acc = total_acc
+		# if outputs.dim() == 2:
+		# 	acc = torch.sum(torch.gather(outputs, 1, torch.argmax(logits[:,-1,:],dim=1).unsqueeze(1))).item() / outputs.size(0)
+		# else:
+		# 	acc = sum(predictions == outputs).item() / len(predictions)
 		return acc, loss, predictions
 
 class DummyDataset(Dataset):
@@ -718,9 +732,7 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 
 				eval_inputs, eval_outputs, eval_labels, eval_num_collisions = inputs, outputs, labels, num_collisions
 				if nl or nl2:
-					eval_inputs, eval_outputs, eval_labels = map_tokens_to_natural_language_batched_and_tokenize(eval_inputs, eval_labels, max_input_size, TRANSFORMER_LENGTH)
-
-				
+					eval_inputs, eval_outputs, eval_labels, eval_lengths = map_tokens_to_natural_language_batched_and_tokenize(eval_inputs, eval_labels, max_input_size, TRANSFORMER_LENGTH)
 
 		if BATCH_SIZE < eval_inputs.shape[0]:
 			eval_inputs = eval_inputs[:BATCH_SIZE]
@@ -932,7 +944,9 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 						inputs, outputs, labels, num_collisions = generator.generate_training_set(max_input_size, BATCH_SIZE, self.lookahead, self.max_edges, reserved_inputs, dist_from_start, nl, True)
 
 						if nl or nl2:
-							inputs, outputs, labels = map_tokens_to_natural_language_batched_and_tokenize(inputs, labels, max_input_size, TRANSFORMER_LENGTH)
+							inputs, outputs, labels, lengths = map_tokens_to_natural_language_batched_and_tokenize(inputs, labels, max_input_size, TRANSFORMER_LENGTH)
+						else:
+							lengths = torch.ones(BATCH_SIZE, dtype=torch.int64)
 					
 					if num_collisions != 0:
 						with self.collisions_lock:
@@ -946,7 +960,7 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 					#stdout.flush()
 					end_time = time.perf_counter()
 					# print(f"Time taken for natural language mapping: {end_time - start_time:.4f} seconds")
-					yield inputs, outputs, labels
+					yield inputs, outputs, labels, lengths
 					current += NUM_DATA_WORKERS
 
 			def __iter__(self):
@@ -956,6 +970,12 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 
 		iterable_dataset = StreamingDataset(epoch * STREAMING_BLOCK_SIZE // BATCH_SIZE, model.lookahead, model.max_edges)
 		train_loader = DataLoader(iterable_dataset, batch_size=None, num_workers=NUM_DATA_WORKERS, pin_memory=True, prefetch_factor=8)
+
+
+
+	test_acc,test_loss,_ = evaluate_model(model, eval_inputs, eval_labels, eval_outputs, eval_lengths, nl, PADDING_TOKEN)
+	print("test accuracy = %.2f±%.2f, test loss = %f" % (test_acc, binomial_confidence_int(test_acc, 1000), test_loss))
+	stdout.flush()
 
 	while True:
 		start_time = time.perf_counter()
@@ -975,7 +995,7 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 			model.train()
 			optimizer.zero_grad()
 
-			input, output, label = batch
+			input, output, label, lengths = batch
 			
 			train_start_time = time.perf_counter()
 			transfer_time += train_start_time - batch_start_time
@@ -1064,7 +1084,7 @@ def train(max_input_size, dataset_size, max_lookahead, seed_value, nlayers, hidd
 					del input, output
 					stdout.flush()
 
-					test_acc,test_loss,_ = evaluate_model(model, eval_inputs, eval_labels, eval_outputs, nl, PADDING_TOKEN)
+					test_acc,test_loss,_ = evaluate_model(model, eval_inputs, eval_labels, eval_outputs, eval_lengths, nl, PADDING_TOKEN)
 					print("test accuracy = %.2f±%.2f, test loss = %f" % (test_acc, binomial_confidence_int(test_acc, 1000), test_loss))
 					stdout.flush()
 					#time6 = time.perf_counter()
