@@ -7,6 +7,42 @@ from enum import Enum
 Past = Tuple[torch.Tensor, torch.Tensor]
 
 
+def sparse_str(row):
+    mode = torch.mode(row).values.item()
+    current = 0
+    intervals = []
+    while current < len(row):
+        if row[current] == mode:
+            current += 1
+            continue
+        # check if this is the beginning of an interval
+        start = current
+        current += 1
+        while current < len(row) and row[current] == row[start]:
+            current += 1
+        end = current
+        if start == end - 1:
+            # the interval only contains one value
+            intervals.append('{}:{:.2f}'.format(start, row[start]))
+        else:
+            intervals.append('{}:{}:{:.2f}'.format(start, end, row[start]))
+    if len(intervals) == 0:
+        return '{:.2f} everywhere'.format(mode)
+    return ', '.join(intervals) + ', {:.2f} everywhere else'.format(mode)
+
+def print_products(dst_index):
+    src_indices = torch.nonzero(x[0,0,dst_index,:] > torch.max(x[0,0,dst_index,:]) - 10.0).T[0]
+    print('token at {} is attending to: {}'.format(dst_index, src_indices))
+    print('q[{}] looks like: {}'.format(dst_index, sparse_str(q[0,0,dst_index,:])))
+    for src_index in src_indices:
+        print('k[{}] looks like: {}'.format(src_index, sparse_str(k[0,0,src_index,:])))
+    for src_index in src_indices:
+        print('q[{}]*k[{}] looks like: {}'.format(dst_index, src_index, sparse_str(q[0,0,dst_index,:] * k[0,0,src_index,:])))
+        print('  = {}'.format(torch.sum(q[0,0,dst_index,:] * k[0,0,src_index,:])))
+    a = x.softmax(-1)
+    for src_index in src_indices:
+        print('a[{},{}] = {}'.format(dst_index, src_index, a[0,0,dst_index,src_index]))
+
 class BaseAttention(nn.Module):
     """
     Tensor          Type            Shape
@@ -28,44 +64,12 @@ class BaseAttention(nn.Module):
                 k: torch.Tensor,
                 v: torch.Tensor,
                 mask: Optional[torch.Tensor] = None) -> torch.Tensor:
+        import sys
+        sys.exit(0)
         x = torch.matmul(q, k.transpose(-2, -1)) / math.sqrt(k.size(-1))
 
         if mask is not None:
             x += mask.type_as(x) * x.new_tensor(-1e9)
-        def sparse_str(row):
-            mode = torch.mode(row).values.item()
-            current = 0
-            intervals = []
-            while current < len(row):
-                if row[current] == mode:
-                    current += 1
-                    continue
-                # check if this is the beginning of an interval
-                start = current
-                current += 1
-                while current < len(row) and row[current] == row[start]:
-                    current += 1
-                end = current
-                if start == end - 1:
-                    # the interval only contains one value
-                    intervals.append('{}:{:.2f}'.format(start, row[start]))
-                else:
-                    intervals.append('{}:{}:{:.2f}'.format(start, end, row[start]))
-            if len(intervals) == 0:
-                return '{:.2f} everywhere'.format(mode)
-            return ', '.join(intervals) + ', {:.2f} everywhere else'.format(mode)
-        def print_products(dst_index):
-            src_indices = torch.nonzero(x[0,0,dst_index,:] > torch.max(x[0,0,dst_index,:]) - 10.0).T[0]
-            print('token at {} is attending to: {}'.format(dst_index, src_indices))
-            print('q[{}] looks like: {}'.format(dst_index, sparse_str(q[0,0,dst_index,:])))
-            for src_index in src_indices:
-                print('k[{}] looks like: {}'.format(src_index, sparse_str(k[0,0,src_index,:])))
-            for src_index in src_indices:
-                print('q[{}]*k[{}] looks like: {}'.format(dst_index, src_index, sparse_str(q[0,0,dst_index,:] * k[0,0,src_index,:])))
-                print('  = {}'.format(torch.sum(q[0,0,dst_index,:] * k[0,0,src_index,:])))
-            a = x.softmax(-1)
-            for src_index in src_indices:
-                print('a[{},{}] = {}'.format(dst_index, src_index, a[0,0,dst_index,src_index]))
         #print_products(-1)
         #import pdb; pdb.set_trace()
         x = self.dropout(x.softmax(-1))
