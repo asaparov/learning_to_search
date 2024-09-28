@@ -64,8 +64,6 @@ class BaseAttention(nn.Module):
                 k: torch.Tensor,
                 v: torch.Tensor,
                 mask: Optional[torch.Tensor] = None) -> torch.Tensor:
-        import sys
-        sys.exit(0)
         x = torch.matmul(q, k.transpose(-2, -1)) / math.sqrt(k.size(-1))
 
         if mask is not None:
