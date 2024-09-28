@@ -520,6 +520,11 @@ class AlgorithmStep:
 						self.position_operations[diff].append(y)
 					self.position_operation_inputs[diff].extend(case.inputs)
 
+def list_to_tuple(l):
+	if isinstance(l, list):
+		return tuple(list_to_tuple(element) for element in l)
+	return l
+
 
 class ComputationNode:
 	def __init__(self, layer, row_id):
@@ -537,13 +542,47 @@ class ComputationNode:
 		predecessor.successors.append(self)
 		predecessor.op_explanations.append(None)
 		predecessor.copy_directions.append(None)
-		predecessor.weights.append(weight)
+		predecessor.weights.append(weight.item() if isinstance(weight, torch.Tensor) else weight)
 
 	def __str__(self):
 		return '{{layer:{},id:{}}}'.format(self.layer, self.row_id)
 
 	def __repr__(self):
 		return '{{layer:{},id:{}}}'.format(self.layer, self.row_id)
+
+	def all_reachable_nodes(self):
+		visited = []
+		queue = [self]
+		while len(queue) != 0:
+			node = queue.pop()
+			if node in visited:
+				continue
+			visited.append(node)
+			queue.extend([s for s in node.successors if s not in queue and s not in visited])
+			queue.extend([s for s in node.predecessors if s not in queue and s not in visited])
+		return visited
+
+	def to_map(self, node_list):
+		return {
+			'layer' : self.layer,
+			'row_id' : self.row_id,
+			'predecessors' : [node_list.index(n) for n in self.predecessors],
+			'successors' : [node_list.index(n) for n in self.successors],
+			'reachable' : self.reachable,
+			'op_explanations' : self.op_explanations,
+			'copy_directions' : self.copy_directions,
+			'weights' : self.weights
+		}
+
+	def from_map(self, m, node_list):
+		self.layer = m['layer']
+		self.row_id = m['row_id']
+		self.predecessors = [node_list[i] for i in m['predecessors']]
+		self.successors = [node_list[i] for i in m['successors']]
+		self.reachable = m['reachable']
+		self.op_explanations = [list_to_tuple(e) for e in m['op_explanations']]
+		self.copy_directions = m['copy_directions']
+		self.weights = m['weights']
 
 class TransformerTracer:
 	def __init__(self, tfm_model):
@@ -613,6 +652,11 @@ class TransformerTracer:
 	def trace2(self, x: torch.Tensor, quiet: bool = True):
 		n = x.shape[0]
 		max_vertex_id = (n - 5) // 3
+
+		# first check if the input has any unused vertex IDs
+		if all([t in x for t in range(1, max_vertex_id + 5)]):
+			raise NoUnusedVertexIDs()
+
 		QUERY_PREFIX_TOKEN = (n - 5) // 3 + 4
 		PADDING_TOKEN = (n - 5) // 3 + 3
 		EDGE_PREFIX_TOKEN = (n - 5) // 3 + 2
@@ -638,6 +682,7 @@ class TransformerTracer:
 		zero_output_logit_list = []
 		max_output_logit_list = []
 		for j in range(len(self.model.transformers)):
+			print('[PROFILE] Calling `activation_patch_output_logit` for layer', j, flush=True)
 			zero_output_logits, max_output_logits = activation_patch_output_logit(self.model, j, layer_inputs[j], mask, prediction, attn_matrices)
 			zero_output_logit_list.append(zero_output_logits)
 			max_output_logit_list.append(max_output_logits)
@@ -646,8 +691,12 @@ class TransformerTracer:
 		#major_last_copies = torch.nonzero(zero_output_logit_list[len(self.model.transformers)-1] < major_copy_threshold)
 		major_last_copies = torch.nonzero(zero_output_logit_list[len(self.model.transformers)-1] < layer_inputs[-1][-1,prediction] - 0.4)
 		if len(major_last_copies) == 0:
+			print('[PROFILE] `major_last_copies` is empty, using fallback to compute major copies.', flush=True)
 			major_last_copies = torch.nonzero(zero_output_logit_list[len(self.model.transformers)-1] < torch.min(zero_output_logit_list[len(self.model.transformers)-1]) + 1e-6)
+		# only consider attention operations that copy into the last token
+		major_last_copies = major_last_copies[major_last_copies[:,0] == n-1,:]
 		last_copy_srcs = major_last_copies[:,1]
+		print('[PROFILE] Size of `major_last_copies`:', major_last_copies.size(0), flush=True)
 
 		zero_src_product_list = []
 		zero_dst_product_list = []
@@ -663,6 +712,7 @@ class TransformerTracer:
 			res_src_product_list.append([])
 			res_dst_product_list.append([])
 			for j in range(len(self.model.transformers)):
+				print('[PROFILE] Calling `perturb_attn_ops` for layer {}, copy index {}'.format(j, k), flush=True)
 				zero_src_products, zero_dst_products, max_src_products, max_dst_products = perturb_attn_ops(self.model, len(self.model.transformers)-1, j, n-1, last_copy_srcs[k], layer_inputs[j], mask, A_matrices, attn_matrices, attn_inputs)
 				zero_src_product_list[k].append(zero_src_products)
 				zero_dst_product_list[k].append(zero_dst_products)
@@ -681,6 +731,7 @@ class TransformerTracer:
 		important_positive_ops = []
 		important_negative_ops = []
 		for j in range(len(self.model.transformers)):
+			print('[PROFILE] Identifying important attention operations in layer', j, flush=True)
 			new_important_positive_ops = []
 			new_important_negative_ops = []
 			positive_copies = torch.nonzero(zero_output_logit_list[j] < layer_inputs[-1][-1,prediction] - 0.4)
@@ -734,7 +785,7 @@ class TransformerTracer:
 			important_ops.append(new_important_ops)
 		for last_copy_src in last_copy_srcs:
 			if ([n-1, last_copy_src], 1) not in important_ops[-1]:
-				important_ops[-1].append(([n-1, last_copy_src], 1))
+				important_ops[-1].append(([n-1, last_copy_src.item()], 1))
 
 		forward_edges = []
 		start_index = torch.sum(input == PADDING_TOKEN)
@@ -759,6 +810,7 @@ class TransformerTracer:
 			return best_distance
 
 		# reconstruct the circuit pathway for this input
+		print('[PROFILE] Reconstructing circuit.', flush=True)
 		root = ComputationNode(len(self.model.transformers), n-1)
 		nodes = [root]
 		all_nodes = [root]
@@ -972,7 +1024,6 @@ class TransformerTracer:
 			attn_input_prime = torch.cat((attn_input, torch.ones((n,1))), 1)
 			other_attn_input_prime = torch.cat((other_attn_input, torch.ones((n,1))), 1)
 			right_products = torch.matmul(attn_input_prime[dst,:], A_matrices[i]) * (attn_input_prime[src,:] - other_attn_input_prime[other_src,:])
-			import pdb; pdb.set_trace()
 			for right_index in torch.nonzero(right_products[:-1] > torch.max(right_products[:-1]) - 2.0).tolist():
 				right_index = right_index[0]
 				if not quiet:
@@ -2171,6 +2222,7 @@ if __name__ == "__main__":
 	for transformer in tfm_model.transformers:
 		if not hasattr(transformer, 'pre_ln'):
 			transformer.pre_ln = True
+	tfm_model = torch.compile(tfm_model)
 	tracer = TransformerTracer(tfm_model)
 
 	#input = [22, 21,  5, 19, 21, 11,  5, 21, 10,  3, 21,  4, 10, 21,  9,  4, 21,  9, 11, 23,  9,  3, 20,  9]
@@ -2202,9 +2254,14 @@ if __name__ == "__main__":
 	max_input_size = int(suffix[:suffix.index('_')])
 	max_vertex_id = (max_input_size - 5) // 3
 
+	state_filepath = filepath
+	if state_filepath.endswith('.pt'):
+		state_filepath = state_filepath[:-len('.pt')]
+	state_filepath += '.trace_lookahead{}.jsonl'.format(argv[2])
+
 	NUM_SAMPLES = int(argv[3])
-	inputs,outputs = generate_eval_data(max_input_size, min_path_length=1, distance_from_start=1, distance_from_end=-1, lookahead_steps=int(argv[2]), num_paths_at_fork=None, num_samples=NUM_SAMPLES)
-	inputs = torch.LongTensor(inputs).to(device)
+	#inputs,outputs = generate_eval_data(max_input_size, min_path_length=1, distance_from_start=1, distance_from_end=-1, lookahead_steps=int(argv[2]), num_paths_at_fork=None, num_samples=NUM_SAMPLES)
+	#inputs = torch.LongTensor(inputs).to(device)
 
 	def filter_irrelevant_nodes(path_merge_explainable, input, root):
 		# filter out nodes that are not along the path from the input to the root
@@ -2282,13 +2339,14 @@ if __name__ == "__main__":
 	print_computation_graph(root, debug_input, path_merge_explainable)
 	import pdb; pdb.set_trace()'''
 
-	total = 0
 	num_correct_vs_explainable = torch.zeros((2,2))
 	num_correct_vs_explainable_recall = torch.zeros((2,2))
 	aggregated_copy_directions = []
 	aggregated_example_copy_directions = []
 	aggregated_dist_copy_directions = []
 	aggregated_op_explanations = []
+	total_path_merge_ops = 0
+	total_suboptimal_path_merge_ops = 0
 	for i in range(len(tfm_model.transformers)):
 		aggregated_copy_directions.append({})
 		aggregated_example_copy_directions.append({})
@@ -2404,16 +2462,65 @@ if __name__ == "__main__":
 			for merge_pattern in sorted(aggregated_path_merge_lengths[i].keys()):
 				print('  {}: {}'.format(merge_pattern, aggregated_path_merge_lengths[i][merge_pattern]))
 
+	# see if we can resume the tracing by loading the state from `state_filepath`
+	import json
+	from os.path import isfile
+	num_samples = 0
+	sample_id = 0
+	sample_id_map = {}
+	if isfile(state_filepath):
+		with open(state_filepath, 'r') as f:
+			while True:
+				pos = f.tell()
+				line = f.readline()
+				if line == '':
+					break
+				state = json.loads(line.strip())
+				if 'sample_id' in state:
+					sample_id_map[state['sample_id']] = pos
+
 	from sys import stdout
-	for i in range(NUM_SAMPLES):
-		try:
-			root, forward_edges, important_ops, path_merge_explainable, prediction = tracer.trace2(inputs[i,:])
-		except NoUnusedVertexIDs:
-			print('Input has no unused vertex IDs. Skipping...')
-			continue
+	lookahead = int(argv[2])
+	if lookahead == -1:
+		lookahead = None
+	while num_samples < NUM_SAMPLES:
+		inputs,outputs = generate_eval_data(max_input_size, min_path_length=1, distance_from_start=1, distance_from_end=-1, lookahead_steps=lookahead, num_paths_at_fork=None, num_samples=1)
+		inputs = torch.LongTensor(inputs).to(device)
+		sample_id += 1
+
+		if sample_id-1 in sample_id_map:
+			# this sample ID exists from a previous run; so load it from the JSONL file
+			with open(state_filepath, 'r') as f:
+				f.seek(sample_id_map[sample_id-1])
+				state = json.loads(f.readline().strip())
+				if 'computation_nodes' not in state:
+					print('Input has no unused vertex IDs. Skipping...')
+					continue
+				nodes = [ComputationNode(-1,-1) for _ in state['computation_nodes'].keys()]
+				for k,v in state['computation_nodes'].items():
+					nodes[int(k)].from_map(v, nodes)
+				root = nodes[state['root']]
+				forward_edges = state['forward_edges']
+				important_ops = state['important_ops']
+				path_merge_explainable = [nodes[i] for i in state['path_merge_explainable']]
+				prediction = state['prediction']
+		else:
+			try:
+				root, forward_edges, important_ops, path_merge_explainable, prediction = tracer.trace2(inputs[0,:])
+				with open(state_filepath, 'a') as f:
+					reachable = root.all_reachable_nodes()
+					node_map = {i:reachable[i].to_map(reachable) for i in range(len(reachable))}
+					f.write(json.dumps({'sample_id':sample_id-1, 'computation_nodes':node_map, 'root':reachable.index(root), 'forward_edges':forward_edges, 'important_ops':important_ops, 'path_merge_explainable':[reachable.index(n) for n in path_merge_explainable], 'prediction':prediction}))
+					f.write('\n')
+			except NoUnusedVertexIDs:
+				print('Input has no unused vertex IDs. Skipping...')
+				with open(state_filepath, 'a') as f:
+					f.write(json.dumps({'sample_id':sample_id-1}))
+					f.write('\n')
+				continue
 
 		if path_merge_explainable != None:
-			path_merge_explainable = filter_irrelevant_nodes(path_merge_explainable, inputs[i], root)
+			path_merge_explainable = filter_irrelevant_nodes(path_merge_explainable, inputs[0], root)
 
 		if path_merge_explainable != None and root in path_merge_explainable:
 			def shortest_distances(input, start, subgraph=None):
@@ -2441,8 +2548,8 @@ if __name__ == "__main__":
 
 			path_merge_lengths = [{} for i in range(len(tfm_model.transformers))]
 			def record_path_length(node, successor):
-				src_path_length = reachable_path_length(inputs[i,:], node.reachable)
-				dst_path_length = reachable_path_length(inputs[i,:], successor.reachable) - src_path_length
+				src_path_length = reachable_path_length(inputs[0,:], node.reachable)
+				dst_path_length = reachable_path_length(inputs[0,:], successor.reachable) - src_path_length
 				if (src_path_length,dst_path_length) not in path_merge_lengths[node.layer]:
 					path_merge_lengths[node.layer][(src_path_length,dst_path_length)] = 0
 				path_merge_lengths[node.layer][(src_path_length,dst_path_length)] += 1
@@ -2455,15 +2562,15 @@ if __name__ == "__main__":
 						continue
 					record_path_length(node, successor)
 					if node.copy_directions[k] != None:
-						distances_from_start = shortest_distances(inputs[i,:], max_input_size-4)
-						if int(inputs[i,node.row_id]) == int(inputs[i,max_input_size-4]):
+						distances_from_start = shortest_distances(inputs[0,:], max_input_size-4)
+						if int(inputs[0,node.row_id]) == int(inputs[0,max_input_size-4]):
 							distance = 0
-						elif int(inputs[i,node.row_id]) in distances_from_start:
-							distance = distances_from_start[int(inputs[i,node.row_id])]
+						elif int(inputs[0,node.row_id]) in distances_from_start:
+							distance = distances_from_start[int(inputs[0,node.row_id])]
 						else:
-							distances_to_start = shortest_distances(inputs[i,:], node.row_id)
-							if int(inputs[i,max_input_size-4]) in distances_to_start:
-								distance = -distances_to_start[int(inputs[i,max_input_size-4])]
+							distances_to_start = shortest_distances(inputs[0,:], node.row_id)
+							if int(inputs[0,max_input_size-4]) in distances_to_start:
+								distance = -distances_to_start[int(inputs[0,max_input_size-4])]
 							else:
 								distance = None
 						for direction in node.copy_directions[k]:
@@ -2502,6 +2609,51 @@ if __name__ == "__main__":
 						aggregated_path_merge_lengths[l][k] = 0
 					aggregated_path_merge_lengths[l][k] += v
 
+		if path_merge_explainable != None:
+			suboptimal_nodes = []
+			optimal_nodes = []
+			for layer in range(1, len(tfm_model.transformers)):
+				for node in [n for n in path_merge_explainable if n.layer == layer]:
+					# starting from the leaves of the computation graph (the first layer), count the number of suboptimal path-merge operations
+					try:
+						dst = next(p for p in node.predecessors if p.row_id == node.row_id)
+					except StopIteration:
+						continue
+					dst_reachable_length = reachable_path_length(inputs[0,:], dst.reachable)
+					if inputs[0,-3] in node.reachable or inputs[0,-4] in node.reachable:
+						# the start or goal vertex is in the reachable set in `node`, so the operation may still be optimal even if the reachable path length isn't doubled
+						continue
+					if node in suboptimal_nodes or any([p in suboptimal_nodes for p in node.predecessors]):
+						# suboptimality is inherited by all descendants (later we only count the suboptimal roots, to ensure that we don't double-count suboptimal operations: a child op can be suboptimal only by virtue of the fact that it's parent is suboptimal)
+						suboptimal_nodes.append(node)
+						continue
+					is_optimal = False
+					for predecessor in node.predecessors:
+						# check if `node` has any optimal path-merge operations from any predecessors
+						if predecessor.row_id == node.row_id:
+							continue
+						if inputs[0,-3] in predecessor.reachable or inputs[0,-4] in predecessor.reachable:
+							# the start or goal vertex is in the reachable set in `predecessor`, so the operation may still be optimal even if the reachable path length isn't doubled
+							continue
+						src_reachable_length = reachable_path_length(inputs[0,:], predecessor.reachable)
+						if dst_reachable_length == src_reachable_length:
+							# this is an optimal path-merge operation
+							is_optimal = True
+					if not is_optimal:
+						# this node has no optimal path-merge operations
+						suboptimal_nodes.append(node)
+					else:
+						optimal_nodes.append(node)
+
+			# count the suboptimal "roots"
+			suboptimal_roots = []
+			for node in suboptimal_nodes:
+				if all([p not in suboptimal_nodes for p in node.predecessors]):
+					suboptimal_roots.append(node)
+
+			total_path_merge_ops += len(suboptimal_nodes) + len(optimal_nodes)
+			total_suboptimal_path_merge_ops += len(suboptimal_roots)
+
 		num_explainable_edges = 0
 		if path_merge_explainable != None:
 			# compute the number of edges in `important_ops` that are in `path_merge_explainable`
@@ -2515,26 +2667,29 @@ if __name__ == "__main__":
 			num_important_edges = 0
 
 		is_explainable = (root != None and root in path_merge_explainable)
-		is_correct = (prediction == outputs[i])
+		is_correct = (prediction == outputs[0])
 		num_correct_vs_explainable[int(is_correct),int(is_explainable)] += 1
 		if important_ops != None:
 			if num_explainable_edges > num_important_edges:
 				import pdb; pdb.set_trace()
 			num_correct_vs_explainable_recall[int(is_correct),int(is_explainable)] += num_explainable_edges / num_important_edges
-		total += 1
-		print('[iteration {}]'.format(i))
-		print('  Accuracy: {}'.format(torch.sum(num_correct_vs_explainable[1,:]) / total))
-		print('  Fraction of inputs explainable by path-merging algorithm: {}'.format(torch.sum(num_correct_vs_explainable[:,1]) / total))
-		print('  Fraction of inputs that are correct and explainable: {}'.format(torch.sum(num_correct_vs_explainable[1,1]) / total))
-		print('  Fraction of inputs that are incorrect and explainable: {}'.format(torch.sum(num_correct_vs_explainable[0,1]) / total))
-		print('  Fraction of inputs that are correct and unexplainable: {}'.format(torch.sum(num_correct_vs_explainable[1,0]) / total))
-		print('  Fraction of inputs that are incorrect and unexplainable: {}'.format(torch.sum(num_correct_vs_explainable[0,0]) / total))
+		print('[iteration {}] (num_samples: {})'.format(sample_id - 1, num_samples))
+		print('  Accuracy: {}'.format(torch.sum(num_correct_vs_explainable[1,:]) / (num_samples + 1)))
+		print('  Fraction of inputs explainable by path-merging algorithm: {}'.format(torch.sum(num_correct_vs_explainable[:,1]) / (num_samples + 1)))
+		print('  Fraction of inputs that are correct and explainable: {}'.format(torch.sum(num_correct_vs_explainable[1,1]) / (num_samples + 1)))
+		print('  Fraction of inputs that are incorrect and explainable: {}'.format(torch.sum(num_correct_vs_explainable[0,1]) / (num_samples + 1)))
+		print('  Fraction of inputs that are correct and unexplainable: {}'.format(torch.sum(num_correct_vs_explainable[1,0]) / (num_samples + 1)))
+		print('  Fraction of inputs that are incorrect and unexplainable: {}'.format(torch.sum(num_correct_vs_explainable[0,0]) / (num_samples + 1)))
+		print('  Average number of identified path-merge operations per example: {}'.format(total_path_merge_ops / (num_samples + 1)))
+		if total_path_merge_ops != 0:
+			print('  Fraction of path-merge operations that are suboptimal: {}'.format(total_suboptimal_path_merge_ops / total_path_merge_ops))
 		#print('  "Recall" of inputs that are correct and explainable: {}'.format(torch.sum(num_correct_vs_explainable_recall[1,1]) / num_correct_vs_explainable[1,1]))
 		#print('  "Recall" of inputs that are incorrect and explainable: {}'.format(torch.sum(num_correct_vs_explainable_recall[0,1]) / num_correct_vs_explainable[0,1]))
 		#print('  "Recall" of inputs that are correct and unexplainable: {}'.format(torch.sum(num_correct_vs_explainable_recall[1,0]) / num_correct_vs_explainable[1,0]))
 		#print('  "Recall" of inputs that are incorrect and unexplainable: {}'.format(torch.sum(num_correct_vs_explainable_recall[0,0]) / num_correct_vs_explainable[0,0]))
-		if (i + 1) % 10 == 0:
+		if (num_samples + 1) % 10 == 0:
 			print_summary()
 		stdout.flush()
+		num_samples += 1
 
 	print_summary()
