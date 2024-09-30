@@ -2199,6 +2199,10 @@ class TransformerTracer:
 
 
 if __name__ == "__main__":
+	import signal
+	import pdb
+	signal.signal(signal.SIGINT, lambda sig,frame: pdb.Pdb().set_trace(frame))
+
 	seed(1)
 	torch.manual_seed(1)
 	np.random.seed(1)
@@ -2522,30 +2526,30 @@ if __name__ == "__main__":
 		if path_merge_explainable != None:
 			path_merge_explainable = filter_irrelevant_nodes(path_merge_explainable, inputs[0], root)
 
+		def shortest_distances(input, start, subgraph=None):
+			if input[start] > max_vertex_id:
+				return {input[start]:0}
+			queue = [(input[start],0)]
+			distances = {}
+			while len(queue) != 0:
+				current, distance = queue.pop()
+				if current in distances and distance >= distances[current]:
+					continue
+				distances[current] = distance
+				for child in forward_edges[current]:
+					if subgraph == None or child in subgraph:
+						queue.append((child,distance+1))
+			return distances
+
+		def reachable_path_length(input, reachable):
+			vertices = [i-(max_vertex_id+5) for i in reachable if i >= max_vertex_id+5]
+			subgraph = [int(input[v]) for v in vertices]
+			longest_distance = 0
+			for start in vertices:
+				longest_distance = max(longest_distance, max(shortest_distances(input, start, subgraph).values()))
+			return longest_distance
+
 		if path_merge_explainable != None and root in path_merge_explainable:
-			def shortest_distances(input, start, subgraph=None):
-				if input[start] > max_vertex_id:
-					return {input[start]:0}
-				queue = [(input[start],0)]
-				distances = {}
-				while len(queue) != 0:
-					current, distance = queue.pop()
-					if current in distances and distance >= distances[current]:
-						continue
-					distances[current] = distance
-					for child in forward_edges[current]:
-						if subgraph == None or child in subgraph:
-							queue.append((child,distance+1))
-				return distances
-
-			def reachable_path_length(input, reachable):
-				vertices = [i-(max_vertex_id+5) for i in reachable if i >= max_vertex_id+5]
-				subgraph = [int(input[v]) for v in vertices]
-				longest_distance = 0
-				for start in vertices:
-					longest_distance = max(longest_distance, max(shortest_distances(input, start, subgraph).values()))
-				return longest_distance
-
 			path_merge_lengths = [{} for i in range(len(tfm_model.transformers))]
 			def record_path_length(node, successor):
 				src_path_length = reachable_path_length(inputs[0,:], node.reachable)
@@ -2669,9 +2673,7 @@ if __name__ == "__main__":
 		is_explainable = (root != None and root in path_merge_explainable)
 		is_correct = (prediction == outputs[0])
 		num_correct_vs_explainable[int(is_correct),int(is_explainable)] += 1
-		if important_ops != None:
-			if num_explainable_edges > num_important_edges:
-				import pdb; pdb.set_trace()
+		if important_ops != None and num_important_edges != 0:
 			num_correct_vs_explainable_recall[int(is_correct),int(is_explainable)] += num_explainable_edges / num_important_edges
 		print('[iteration {}] (num_samples: {})'.format(sample_id - 1, num_samples))
 		print('  Accuracy: {}'.format(torch.sum(num_correct_vs_explainable[1,:]) / (num_samples + 1)))
