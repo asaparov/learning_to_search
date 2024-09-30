@@ -976,7 +976,7 @@ def train(max_input_size, dataset_size, distribution, max_lookahead, seed_value,
 
 				if epoch % log_interval == 0:
 					elapsed_time = time.perf_counter() - start_time
-					print("epoch = {}, training loss = {}".format(epoch, epoch_loss))
+					print("epoch = {}, training loss = {}".format(epoch, epoch_loss / num_batches))
 					if device.type == 'cuda':
 						utilization = popen('nvidia-smi --query-gpu=utilization.gpu --format=csv').read().split('\n')[1]
 						print("throughput = {} examples/s, GPU utilization = {}".format(effective_dataset_size / elapsed_time, utilization))

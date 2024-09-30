@@ -35,31 +35,37 @@ def draw_brace(ax, xspan, yy, text):
 
 	text_y = yy
 	if xmax > xmin:
-		text_y += 0.2*yspan
+		text_y += 0.08*yspan
 	else:
-		text_y += -0.2*yspan
+		text_y += -0.08*yspan
 	ax.text((xmax+xmin)/2., text_y, text, ha='center', va='bottom', color='#555')
 
 def make_sensitivity_figures(max_epoch=100000):
 	greedy_ckpt_dir  = 'useful_path_results/checkpoints_v3_6layer_inputsize128_maxlookahead-1_seed3_trainstreaming_nomask_unablated_padded' # available seeds: 1-8
 	crafted_ckpt_dir = 'useful_path_results/checkpoints_v3_6layer_inputsize128_maxlookahead20_seed1_trainstreaming_nomask_unablated_padded' # available seeds: 1-8
+	crafted_OOD_ckpt_dir = 'useful_path_results/checkpoints_v3_6layer_inputsize128_maxlookahead12_seed2_trainstreaming_nomask_unablated_padded' # available seeds: 1-8
 	greedy_ckpt = find_ckpt(greedy_ckpt_dir, max_epoch)
 	crafted_ckpt = find_ckpt(crafted_ckpt_dir, max_epoch)
+	crafted_OOD_ckpt = find_ckpt(crafted_OOD_ckpt_dir, max_epoch)
 	greedy_accuracies = do_evaluate_model(greedy_ckpt)
 	crafted_accuracies = do_evaluate_model(crafted_ckpt)
+	crafted_OOD_accuracies = do_evaluate_model(crafted_OOD_ckpt)
 	#greedy_star_accuracies = do_evaluate_model(greedy_ckpt, star_distribution=True)
 	#crafted_star_accuracies = do_evaluate_model(crafted_ckpt, star_distribution=True)
+	#crafted_OOD_star_accuracies = do_evaluate_model(crafted_OOD_ckpt, star_distribution=True)
 
-	data = np.empty((2, 21))
+	data = np.empty((3, 21))
 	data[0,:21] = [acc for acc,_,_ in greedy_accuracies]
 	data[1,:21] = [acc for acc,_,_ in crafted_accuracies]
+	data[2,:21] = [acc for acc,_,_ in crafted_OOD_accuracies]
 
 	fig = plt.gcf()
-	fig.set_size_inches(10.0, 2.1, forward=True)
+	fig.set_size_inches(8.0, 1.85, forward=True)
 	r_cmap = plt.get_cmap('plasma').reversed()
 	plt.imshow(data, cmap=r_cmap, vmin=0.0, vmax=1.0)
-	plt.xticks([-0.2] + [i for i in range(1,21)], labels=(['Tested on\nsimple distr.'] + [i+1 for i in range(20)]), rotation=45, ha="right", rotation_mode="anchor")
-	plt.yticks(np.arange(2), labels=['Trained on\nsimple distr.', 'Trained on\ncrafted distr.'])
+	plt.xticks([-0.2] + [i for i in range(1,21)], labels=(['Tested on\nnaïve distr.'] + [i+1 for i in range(20)]), rotation=45, ha="right", rotation_mode="anchor")
+	plt.yticks(np.arange(3), labels=['Naïve distr.', 'Balanced distr.', 'Balanced distr.\n(lookahead $\\le 12$)', ])
+	plt.text(-4.5, 2.3, '\\textbf{Trained on:}', color='#555', rotation='vertical')
 	plt.tick_params(axis='both', which='both', length=0)
 	plt.grid(False)
 	for i in range(data.shape[0]):
@@ -68,12 +74,12 @@ def make_sensitivity_figures(max_epoch=100000):
 			plt.text(j, i, '%.2f' % data[i,j], ha="center", va="center", color=c, fontsize=9)
 
 	plt.xticks(np.arange(-.5, 21, 1), minor=True)
-	plt.yticks(np.arange(-.5, 2, 1), minor=True)
+	plt.yticks(np.arange(-.5, 3, 1), minor=True)
 	plt.grid(which='minor', color='w', linestyle='-', linewidth=1)
 	plt.tick_params(which='minor', bottom=False, left=False)
 
 	ax = plt.gca()
-	draw_brace(ax, (20.3, 0.7), 2.7, 'Tested on crafted distribution with lookahead')
+	draw_brace(ax, (20.4, 0.6), 4.0, 'Tested on balanced distribution with lookahead')
 
 	plt.tight_layout()
 	fig.savefig('figures/sensitivity.pdf', dpi=128)
@@ -81,11 +87,11 @@ def make_sensitivity_figures(max_epoch=100000):
 
 def make_dfs_figures(max_epoch=100000):
 	unpadded_ckpt_dirs = {
-		48 : 'dfs_results/checkpoints_v3_7layer_inputsize48_maxlookahead-1_seed1_trainstreaming_nomask_unablated_dfs',
-		64 : 'dfs_results/checkpoints_v3_7layer_inputsize64_maxlookahead-1_seed1_trainstreaming_nomask_unablated_dfs',
-		80 : 'dfs_results/checkpoints_v3_7layer_inputsize80_maxlookahead-1_seed1_trainstreaming_nomask_unablated_dfs',
-		96 : 'dfs_results/checkpoints_v3_7layer_inputsize96_maxlookahead-1_seed1_trainstreaming_nomask_unablated_dfs',
-		112 : 'dfs_results/checkpoints_v3_7layer_inputsize112_maxlookahead-1_seed1_trainstreaming_nomask_unablated_dfs',
+		#48 : 'dfs_results/checkpoints_v3_7layer_inputsize48_maxlookahead-1_seed1_trainstreaming_nomask_unablated_dfs',
+		#64 : 'dfs_results/checkpoints_v3_7layer_inputsize64_maxlookahead-1_seed1_trainstreaming_nomask_unablated_dfs',
+		#80 : 'dfs_results/checkpoints_v3_7layer_inputsize80_maxlookahead-1_seed1_trainstreaming_nomask_unablated_dfs',
+		#96 : 'dfs_results/checkpoints_v3_7layer_inputsize96_maxlookahead-1_seed1_trainstreaming_nomask_unablated_dfs',
+		#112 : 'dfs_results/checkpoints_v3_7layer_inputsize112_maxlookahead-1_seed1_trainstreaming_nomask_unablated_dfs',
 		#112 : 'dfs_results/checkpoints_v3_7layer_inputsize112_maxlookahead-1_seed2_trainstreaming_nomask_unablated_dfs',
 		#128 : 'dfs_results/checkpoints_v3_7layer_inputsize128_maxlookahead-1_seed1_trainstreaming_nomask_unablated_dfs',
 		128 : 'dfs_results/checkpoints_v3_7layer_inputsize128_maxlookahead-1_seed2_trainstreaming_nomask_unablated_dfs',
@@ -95,11 +101,11 @@ def make_dfs_figures(max_epoch=100000):
 		#128 : 'dfs_results/checkpoints_v3_7layer_inputsize128_maxlookahead-1_seed6_trainstreaming_nomask_unablated_dfs'
 	}
 	padded_ckpt_dirs = {
-		48 : 'dfs_results/checkpoints_v3_7layer_inputsize48_maxlookahead-1_seed1_trainstreaming_nomask_unablated_padded_dfs',
-		64 : 'dfs_results/checkpoints_v3_7layer_inputsize64_maxlookahead-1_seed1_trainstreaming_nomask_unablated_padded_dfs',
-		80 : 'dfs_results/checkpoints_v3_7layer_inputsize80_maxlookahead-1_seed1_trainstreaming_nomask_unablated_padded_dfs',
-		96 : 'dfs_results/checkpoints_v3_7layer_inputsize96_maxlookahead-1_seed1_trainstreaming_nomask_unablated_padded_dfs',
-		112 : 'dfs_results/checkpoints_v3_7layer_inputsize112_maxlookahead-1_seed1_trainstreaming_nomask_unablated_padded_dfs',
+		#48 : 'dfs_results/checkpoints_v3_7layer_inputsize48_maxlookahead-1_seed1_trainstreaming_nomask_unablated_padded_dfs',
+		#64 : 'dfs_results/checkpoints_v3_7layer_inputsize64_maxlookahead-1_seed1_trainstreaming_nomask_unablated_padded_dfs',
+		#80 : 'dfs_results/checkpoints_v3_7layer_inputsize80_maxlookahead-1_seed1_trainstreaming_nomask_unablated_padded_dfs',
+		#96 : 'dfs_results/checkpoints_v3_7layer_inputsize96_maxlookahead-1_seed1_trainstreaming_nomask_unablated_padded_dfs',
+		#112 : 'dfs_results/checkpoints_v3_7layer_inputsize112_maxlookahead-1_seed1_trainstreaming_nomask_unablated_padded_dfs',
 		#128 : 'dfs_results/checkpoints_v3_7layer_inputsize128_maxlookahead-1_seed1_trainstreaming_nomask_unablated_padded_dfs',
 		#128 : 'dfs_results/checkpoints_v3_7layer_inputsize128_maxlookahead-1_seed2_trainstreaming_nomask_unablated_padded_dfs',
 		#128 : 'dfs_results/checkpoints_v3_7layer_inputsize128_maxlookahead-1_seed3_trainstreaming_nomask_unablated_padded_dfs',
@@ -121,7 +127,7 @@ def make_dfs_figures(max_epoch=100000):
 	data[1,:16] = [acc for acc,_,_ in padded_accuracies[1:]]
 
 	fig = plt.gcf()
-	fig.set_size_inches(10.0, 2.1, forward=True)
+	fig.set_size_inches(8.0, 1.6, forward=True)
 	r_cmap = plt.get_cmap('plasma').reversed()
 	plt.imshow(data, cmap=r_cmap, vmin=0.0, vmax=1.0)
 	plt.xticks([i for i in range(16)], labels=([i for i in range(16)]), rotation=45, ha="right", rotation_mode="anchor")
@@ -161,7 +167,13 @@ def make_scaling_figures(epoch=1500, variable='input_sizes'):
 	test_losses = {}
 	has_converged = {}
 	first_seed = True
-	for seed in seeds:
+	incomplete_seeds = []
+	TRAIN_LOSS_WINDOW = 0
+	TEST_LOSS_WINDOW = 40
+	IGNORE_HIDS = [2048,4096]
+	IGNORE_LAYERS = [256,1024,2048]
+	IGNORE_NL_INPUTSIZES = [96,112,128]
+	for seed in sorted(seeds):
 		if variable == 'input_sizes':
 			var_name = 'Input size'
 			prefix = '1e-5_seed' + str(seed) + '_'
@@ -171,10 +183,23 @@ def make_scaling_figures(epoch=1500, variable='input_sizes'):
 		elif variable == 'hidden_dim':
 			var_name = 'Hidden dim'
 			prefix = 'hid_'
+		elif variable in ('NL_16hid_8layer', 'NL_32hid_16layer'):
+			var_name = 'Input size'
+			prefix = ''
 		inputs = [f for f in listdir('scaling_experiments/csvs/scaling_' + variable + '/seed_' + str(seed)) if f.startswith(prefix) and f.endswith('.csv')]
 		for f in inputs:
 			inputsize = int(f[len(prefix):-len('.csv')])
+			if variable == 'hidden_dim' and inputsize in IGNORE_HIDS:
+				continue
+			elif variable == 'layers' and inputsize in IGNORE_LAYERS:
+				continue
+			elif variable in ('NL_16hid_8layer', 'NL_32hid_16layer') and inputsize in IGNORE_NL_INPUTSIZES:
+				continue
 			csv = read_csv('scaling_experiments/csvs/scaling_{}/seed_{}/{}'.format(variable, seed, f))
+			csv[0] = [s.replace(' ','_').lower() for s in csv[0]]
+			if 'epoch' not in csv[0]:
+				print('WARNING: {} {}, seed {}, has no results.'.format(var_name, inputsize, seed))
+				continue
 			epoch_idx = csv[0].index('epoch')
 			train_loss_idx = csv[0].index('training_loss')
 			test_loss_idx = csv[0].index('test_loss')
@@ -185,9 +210,24 @@ def make_scaling_figures(epoch=1500, variable='input_sizes'):
 				print('WARNING: {} {}, seed {}, is missing epoch {}.'.format(var_name, inputsize, seed, epoch))
 				continue
 			row = csv[row_idx]
-			train_loss = float(row[train_loss_idx])
-			test_loss = float(row[test_loss_idx])
-			has_seed_converged = any([r[train_acc_idx] == '1.0' for r in csv[1:(row_idx+1)]])
+			train_loss_column = np.array([float(csv[i][train_loss_idx]) for i in range(1,row_idx+TRAIN_LOSS_WINDOW+2)])
+			train_loss_column = np.concatenate((np.ones(TRAIN_LOSS_WINDOW)*float(csv[1][train_loss_idx]), train_loss_column))
+			# TODO: this is due to an earlier bug in the `train.py` code where the loss wasn't being correctly scaled by the batch size; this line should be removed if this script is being used on data produced from a more recent version of `train.py` where the bug is fixed
+			if variable == 'layers' and inputsize >= 64:
+				train_loss_column /= 2**12
+			else:
+				train_loss_column /= 2**10
+			train_loss = np.convolve(train_loss_column, np.ones(TRAIN_LOSS_WINDOW*2 + 1)/(TRAIN_LOSS_WINDOW*2 + 1), mode='valid')
+
+			test_loss_column = np.array([float(csv[i][test_loss_idx]) if i < len(csv) else float(csv[-1][test_loss_idx]) for i in range(1,row_idx+TEST_LOSS_WINDOW+2)])
+			test_loss_column = np.concatenate((np.ones(TEST_LOSS_WINDOW)*float(csv[1][test_loss_idx]), test_loss_column))
+			test_loss = np.convolve(test_loss_column, np.ones(TEST_LOSS_WINDOW*2 + 1)/(TEST_LOSS_WINDOW*2 + 1), mode='valid')
+			def to_acc(s):
+				if '±' in s:
+					return float(s[:s.index('±')])
+				else:
+					return float(s)
+			has_seed_converged = any([to_acc(r[train_acc_idx]) >= 0.995 for r in csv[1:(row_idx+1)]])
 
 			if inputsize not in test_losses:
 				if not first_seed:
@@ -200,16 +240,52 @@ def make_scaling_figures(epoch=1500, variable='input_sizes'):
 			has_converged[inputsize][seed] = has_seed_converged
 		first_seed = False
 
+	# check if there are any seeds with missing inputsizes
+	for seed in seeds:
+		if seed in incomplete_seeds:
+			continue
+		if any([seed not in losses for losses in train_losses.values()]):
+			incomplete_seeds.append(seed)
+
+	# remove incomplete seeds from results
+	if len(incomplete_seeds) != 0:
+		print('WARNING: The following seeds have incomplete results {}; they will not be included in the plots.'.format(incomplete_seeds))
+	for inputsize,losses in list(train_losses.items()):
+		for seed in incomplete_seeds:
+			if seed in losses:
+				del losses[seed]
+		if len(losses) == 0:
+			del train_losses[inputsize]
+	for inputsize,losses in list(test_losses.items()):
+		for seed in incomplete_seeds:
+			if seed in losses:
+				del losses[seed]
+		if len(losses) == 0:
+			del test_losses[inputsize]
+	for inputsize,losses in list(has_converged.items()):
+		for seed in incomplete_seeds:
+			if seed in losses:
+				del losses[seed]
+		if len(losses) == 0:
+			del has_converged[inputsize]
+
 	if variable == 'input_sizes':
 		xaxis = 'Maximum input graph size'
+		legend_title = 'Maximum input graph size'
 		xmin, xmax = 8, 52
 	elif variable == 'layers':
 		xaxis = 'Number of transformer layers'
+		legend_title = 'Number of\ntransformer layers'
 		xmin, xmax = 4, 45
 	elif variable == 'hidden_dim':
 		xaxis = 'Non-embedding parameters'
-		nlayers = 8 # TODO: double-check the number of layers in the hiddendim experiments
+		legend_title = 'Non-embedding\nparameters'
+		nlayers = 8
 		xmin, xmax = 100000, 1000000000
+	elif variable in ('NL_16hid_8layer', 'NL_32hid_16layer'):
+		xaxis = 'Maximum input graph size'
+		legend_title = 'Maximum input graph size'
+		xmin, xmax = 8, 34
 
 	inputsizes = np.empty(len(test_losses), dtype=np.uint64)
 	counter = 0
@@ -219,20 +295,23 @@ def make_scaling_figures(epoch=1500, variable='input_sizes'):
 	sorted_idx = inputsizes.argsort()
 	inputsizes = inputsizes[sorted_idx]
 
-	if variable == 'input_sizes':
-		x = (inputsize - 5) // 3
+	if variable in ('input_sizes', 'NL_16hid_8layer', 'NL_32hid_16layer'):
+		x = (inputsizes - 5) // 3
 	elif variable == 'layers':
-		x = inputsize
+		x = inputsizes
 	elif variable == 'hidden_dim':
-		fixed_max_input_size = 96 # TODO: double-check the max input size in the hiddendim experiments
+		fixed_max_input_size = 98
 		ntoken = (fixed_max_input_size-5) // 3 + 5
-		dmodel = np.max(ntoken, inputsize) + fixed_max_input_size
+		dmodel = np.maximum(ntoken, inputsizes) + fixed_max_input_size
 		x = 6*dmodel*dmodel*nlayers
 
 	converged = np.empty(len(has_converged))
 	counter = 0
 	for _,converged_list in has_converged.items():
-		converged[counter] = sum(converged_list.values()) / len(converged_list)
+		if len(converged_list) == 0:
+			converged[counter] = 0.0
+		else:
+			converged[counter] = sum(converged_list.values()) / len(converged_list)
 		counter += 1
 	converged = converged[sorted_idx]
 
@@ -243,10 +322,11 @@ def make_scaling_figures(epoch=1500, variable='input_sizes'):
 	plt.xlim(xmin, xmax)
 	plt.ylim(-0.05, 1.05)
 	ax.set_xscale("log", base=10)
-	ax.xaxis.set_major_formatter(mticker.FormatStrFormatter('%d'))
-	ax.xaxis.set_minor_formatter(mticker.FormatStrFormatter('%d'))
+	if variable != 'hidden_dim':
+		ax.xaxis.set_major_formatter(mticker.FormatStrFormatter('%d'))
+		ax.xaxis.set_minor_formatter(mticker.FormatStrFormatter('%d'))
 	plt.xlabel(xaxis)
-	plt.ylabel('Convergence frequency')
+	plt.ylabel('Fraction of converged seeds')
 	plt.grid(True, axis='x', which='both')
 	plt.tight_layout()
 	fig.savefig('figures/scaling_' + variable + '_convergence.pdf', dpi=256)
@@ -255,26 +335,31 @@ def make_scaling_figures(epoch=1500, variable='input_sizes'):
 	mintestlosses = np.empty(len(test_losses))
 	counter = 0
 	for inputsize,loss_list in test_losses.items():
-		mintestlosses[counter] = np.mean([v for k,v in loss_list.items() if converged[inputsize][k]]) #min(loss_list.values())
+		losses = [v[-1] for k,v in loss_list.items() if has_converged[inputsize][k]]
+		if len(losses) == 0:
+			mintestlosses[counter] = float('inf')
+		else:
+			mintestlosses[counter] = np.min(losses) #min(loss_list.values())
 		counter += 1
 	mintestlosses = mintestlosses[sorted_idx]
 
 	if variable == 'input_sizes':
-		a,b = np.polyfit(x[converged > 0], np.log(mintestlosses[converged > 0] - 0.0003), 1, w=np.sqrt(mintestlosses[converged > 0]))
+		a,b = np.polyfit(x[converged > 0], np.log(mintestlosses[converged > 0] - np.min(mintestlosses) + 1.0e-9), 1, w=np.sqrt(mintestlosses[converged > 0]))
 
 	fig = plt.gcf()
 	ax = plt.gca()
 	fig.set_size_inches(4, 2.5, forward=True)
-	x = np.arange(xmin,xmax,(xmax-xmin)/10000)
 	if variable == 'input_sizes':
-		ax.plot(x, np.exp(a*x + b) + 0.0003, '--', color='k', linewidth=0.5)
+		x_fit = np.arange(xmin,xmax,(xmax-xmin)/10000)
+		ax.plot(x_fit, mintestlosses[0]-1.0e-9+np.exp(b+a*x_fit), '--', color='k', linewidth=0.5)
 	ax.plot(x[converged > 0], mintestlosses[converged > 0], '.')
 	plt.xlim(xmin, xmax)
 	#plt.ylim(0.0001, 10.0)
 	ax.set_xscale("log", base=10)
 	ax.set_yscale("log", base=10)
-	ax.xaxis.set_major_formatter(mticker.FormatStrFormatter('%d'))
-	ax.xaxis.set_minor_formatter(mticker.FormatStrFormatter('%d'))
+	if variable != 'hidden_dim':
+		ax.xaxis.set_major_formatter(mticker.FormatStrFormatter('%d'))
+		ax.xaxis.set_minor_formatter(mticker.FormatStrFormatter('%d'))
 	plt.xlabel(xaxis)
 	plt.ylabel('Minimum test loss')
 	plt.grid(True, axis='x', which='both')
@@ -285,35 +370,172 @@ def make_scaling_figures(epoch=1500, variable='input_sizes'):
 	mintrainlosses = np.empty(len(test_losses))
 	counter = 0
 	for _,loss_list in train_losses.items():
-		mintrainlosses[counter] = min(loss_list.values())
+		losses = [v[-1] for k,v in loss_list.items()]
+		mintrainlosses[counter] = np.mean(losses)
 		counter += 1
 	mintrainlosses = mintrainlosses[sorted_idx]
 
 	if variable == 'input_sizes':
-		m,b = np.polyfit(x[converged > 0], mintrainlosses[converged > 0], 1)
+		m,b = np.polyfit(x, mintrainlosses, 1)
 
 	fig = plt.gcf()
 	ax = plt.gca()
 	fig.set_size_inches(4, 2.5, forward=True)
-	x = np.arange(xmin,xmax,(xmax-xmin)/10000)
-	if variable == 'input_sizes':
-		ax.plot(x, m*x + b, '--', color='k', linewidth=0.5)
-	ax.plot(x[converged > 0], mintrainlosses[converged > 0], '.')
+	#if variable == 'input_sizes':
+	#	x_fit = np.arange(xmin,xmax,(xmax-xmin)/10000)
+	#	ax.plot(x_fit, m*x_fit + b, '--', color='k', linewidth=0.5)
+	ax.plot(x, mintrainlosses, '.')
 	plt.xlim(xmin, xmax)
 	#plt.ylim(0.0001, 10.0)
 	ax.set_xscale("log", base=10)
 	ax.set_yscale("log", base=10)
-	ax.xaxis.set_major_formatter(mticker.FormatStrFormatter('%d'))
-	ax.xaxis.set_minor_formatter(mticker.FormatStrFormatter('%d'))
+	if variable != 'hidden_dim':
+		ax.xaxis.set_major_formatter(mticker.FormatStrFormatter('%d'))
+		ax.xaxis.set_minor_formatter(mticker.FormatStrFormatter('%d'))
 	plt.xlabel(xaxis)
-	plt.ylabel('Minimum training loss')
+	plt.ylabel('Average training loss')
 	plt.grid(True, axis='x', which='both')
 	plt.tight_layout()
 	fig.savefig('figures/scaling_' + variable + '_train.pdf', dpi=256)
 	plt.clf()
 
+	cmap = plt.get_cmap('viridis')
+	start_color_point = 0.0
+	end_color_point = 0.85
+	colors = {}
+	counter = 0
+	for inputsize in inputsizes:
+		t = counter/(len(inputsizes) - 1)
+		colors[inputsize] = cmap(t*start_color_point + (1-t)*end_color_point)
+		counter += 1
+
+	fig = plt.gcf()
+	ax = plt.gca()
+	fig.set_size_inches(4, 2.5, forward=True)
+	max_x = 0.0
+	handles = {}
+	for i in range(len(inputsizes)):
+		inputsize = inputsizes[i]
+		for _,loss_vals in test_losses[inputsize].items():
+			examples_seen = np.arange(0,len(loss_vals)) * (2**18)
+			line, = ax.plot(examples_seen, loss_vals, c=colors[inputsize], alpha=0.8)
+			max_x = max(examples_seen[-1], max_x)
+			if inputsize not in handles:
+				handles[inputsize] = (line, x[i])
+	if variable == 'hidden_dim':
+		labels = ['{0:.1f}M'.format(l/1000000) for _,(_,l) in handles.items()]
+	else:
+		labels = [str(l) for _,(_,l) in handles.items()]
+	plt.legend([h for _,(h,_) in handles.items()], labels, title=legend_title, fontsize=6.0, title_fontsize=7.5, ncols=np.ceil(len(labels)/6), handlelength=1.0)
+	plt.xlim(1000000, max_x)
+	#plt.ylim(0.0001, 10.0)
+	ax.set_xscale("log", base=10)
+	ax.set_yscale("log", base=10)
+	plt.xlabel('Training examples')
+	plt.ylabel('Test loss')
+	plt.grid(True, axis='x', which='both')
+	plt.tight_layout()
+	fig.savefig('figures/scaling_' + variable + '_test_loss.pdf', dpi=256)
+	plt.clf()
+
+	fig = plt.gcf()
+	ax = plt.gca()
+	fig.set_size_inches(4, 2.5, forward=True)
+	max_x = 0.0
+	handles = {}
+	for i in range(len(inputsizes)):
+		inputsize = inputsizes[i]
+		for _,loss_vals in train_losses[inputsize].items():
+			examples_seen = np.arange(0,len(loss_vals)) * (2**18)
+			line, = ax.plot(examples_seen, loss_vals, c=colors[inputsize], alpha=0.8)
+			max_x = max(examples_seen[-1], max_x)
+			if inputsize not in handles:
+				handles[inputsize] = (line, x[i])
+	if variable == 'hidden_dim':
+		labels = ['{0:.1f}M'.format(l/1000000) for _,(_,l) in handles.items()]
+	else:
+		labels = [str(l) for _,(_,l) in handles.items()]
+	plt.legend([h for _,(h,_) in handles.items()], labels, title=legend_title, fontsize=6.0, title_fontsize=7.5, ncols=np.ceil(len(labels)/6), handlelength=1.0)
+	plt.xlim(100000, max_x)
+	#plt.ylim(0.0001, 10.0)
+	ax.set_xscale("log", base=10)
+	ax.set_yscale("log", base=10)
+	plt.xlabel('Training examples')
+	plt.ylabel('Training loss')
+	plt.grid(True, axis='x', which='both')
+	plt.tight_layout()
+	fig.savefig('figures/scaling_' + variable + '_train_loss.pdf', dpi=256)
+	plt.clf()
+
+	fig = plt.gcf()
+	ax = plt.gca()
+	fig.set_size_inches(4, 2.5, forward=True)
+	max_x = 0.0
+	handles = {}
+	for i in range(len(inputsizes)):
+		inputsize = inputsizes[i]
+		min_loss_len = min([len(loss_vals) for loss_vals in test_losses[inputsize].values()])
+		all_losses = np.empty((len(test_losses[inputsize]), min_loss_len))
+		counter = 0
+		for _,loss_vals in test_losses[inputsize].items():
+			all_losses[counter,:] = loss_vals[:min_loss_len]
+			counter += 1
+		examples_seen = np.arange(0,min_loss_len) * (2**18)
+		line, = ax.plot(examples_seen, np.min(all_losses, axis=0), c=colors[inputsize], alpha=0.8)
+		max_x = max(examples_seen[-1], max_x)
+		handles[inputsize] = (line, x[i])
+	if variable == 'hidden_dim':
+		labels = ['{0:.1f}M'.format(l/1000000) for _,(_,l) in handles.items()]
+	else:
+		labels = [str(l) for _,(_,l) in handles.items()]
+	plt.legend([h for _,(h,_) in handles.items()], labels, title=legend_title, fontsize=6.0, title_fontsize=7.5, ncols=np.ceil(len(labels)/6), handlelength=1.0)
+	plt.xlim(1000000, max_x)
+	#plt.ylim(0.0001, 10.0)
+	ax.set_xscale("log", base=10)
+	ax.set_yscale("log", base=10)
+	plt.xlabel('Training examples')
+	plt.ylabel('Minimum test loss')
+	plt.grid(True, axis='x', which='both')
+	plt.tight_layout()
+	fig.savefig('figures/scaling_' + variable + '_test_minloss.pdf', dpi=256)
+	plt.clf()
+
+	fig = plt.gcf()
+	ax = plt.gca()
+	fig.set_size_inches(4, 2.5, forward=True)
+	max_x = 0.0
+	handles = {}
+	for i in range(len(inputsizes)):
+		inputsize = inputsizes[i]
+		min_loss_len = min([len(loss_vals) for loss_vals in train_losses[inputsize].values()])
+		all_losses = np.empty((len(train_losses[inputsize]), min_loss_len))
+		counter = 0
+		for _,loss_vals in train_losses[inputsize].items():
+			all_losses[counter,:] = loss_vals[:min_loss_len]
+			counter += 1
+		examples_seen = np.arange(0,min_loss_len) * (2**18)
+		line, = ax.plot(examples_seen, np.min(all_losses, axis=0), c=colors[inputsize], alpha=0.8)
+		max_x = max(examples_seen[-1], max_x)
+		handles[inputsize] = (line, x[i])
+	if variable == 'hidden_dim':
+		labels = ['{0:.1f}M'.format(l/1000000) for _,(_,l) in handles.items()]
+	else:
+		labels = [str(l) for _,(_,l) in handles.items()]
+	plt.legend([h for _,(h,_) in handles.items()], labels, title=legend_title, fontsize=6.0, title_fontsize=7.5, ncols=np.ceil(len(labels)/6), handlelength=1.0)
+	plt.xlim(100000, max_x)
+	#plt.ylim(0.0001, 10.0)
+	ax.set_xscale("log", base=10)
+	ax.set_yscale("log", base=10)
+	plt.xlabel('Training examples')
+	plt.ylabel('Minimum training loss')
+	plt.grid(True, axis='x', which='both')
+	plt.tight_layout()
+	fig.savefig('figures/scaling_' + variable + '_train_minloss.pdf', dpi=256)
+	plt.clf()
+
+
 from sys import argv
-all = (len(argv) == 1 or '--all' in argv)
+do_all = (len(argv) == 1 or '--all' in argv)
 
 plt.style.use('ggplot')
 makedirs('figures', exist_ok=True)
@@ -323,13 +545,15 @@ plt.rcParams.update({
 	"font.family": "serif"
 })
 
-if all or '--sensitivity' in argv:
-	make_sensitivity_figures()
-if all or '--dfs' in argv:
-	make_dfs_figures()
-if all or '--scaling-inputsize' in argv:
-	make_scaling_figures(epoch=1500, variable='input_sizes')
-if all or '--scaling-layers' in argv:
-	make_scaling_figures(epoch=450, variable='layers')
-if all or '--scaling-hiddendim' in argv:
-	make_scaling_figures(epoch=120, variable='hidden_dim')
+if do_all or '--sensitivity' in argv:
+	make_sensitivity_figures(max_epoch=3370)
+if do_all or '--dfs' in argv:
+	make_dfs_figures(max_epoch=2845)
+if do_all or '--scaling-inputsize' in argv:
+	make_scaling_figures(epoch=900, variable='input_sizes')
+if do_all or '--scaling-layers' in argv:
+	make_scaling_figures(epoch=280, variable='layers')
+if do_all or '--scaling-hiddendim' in argv:
+	make_scaling_figures(epoch=900, variable='hidden_dim')
+if do_all or '--scaling-NL' in argv:
+	make_scaling_figures(epoch=350, variable='NL_32hid_16layer')
