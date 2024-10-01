@@ -2198,73 +2198,28 @@ class TransformerTracer:
 		return prediction
 
 
-if __name__ == "__main__":
-	import signal
-	import pdb
-	signal.signal(signal.SIGINT, lambda sig,frame: pdb.Pdb().set_trace(frame))
+class MissingSampleError(Exception):
+	def __init__(self, message):
+		super().__init__(message)
 
+def do_analysis(ckpt_filepath, tracer, lookahead, total_samples, quiet=False):
 	seed(1)
 	torch.manual_seed(1)
 	np.random.seed(1)
 
-	torch.set_printoptions(sci_mode=False)
-	from sys import argv, exit
-	if len(argv) != 4:
-		print("Usage: trace_circuit [checkpoint_filepath] [lookahead] [num_samples]")
-		exit(1)
-
-	if not torch.cuda.is_available():
-		print("ERROR: CUDA device is not available.")
-		#from sys import exit
-		#exit(-1)
-		device = torch.device('cpu')
-	else:
-		device = torch.device('cuda')
-
-	filepath = argv[1]
-	tfm_model, _, _, _ = torch.load(filepath, map_location=device)
-	for transformer in tfm_model.transformers:
-		if not hasattr(transformer, 'pre_ln'):
-			transformer.pre_ln = True
-	tfm_model = torch.compile(tfm_model)
-	tracer = TransformerTracer(tfm_model)
-
-	#input = [22, 21,  5, 19, 21, 11,  5, 21, 10,  3, 21,  4, 10, 21,  9,  4, 21,  9, 11, 23,  9,  3, 20,  9]
-	#input = [22, 22, 22, 21, 14,  3, 21, 14,  6, 21, 18, 14, 21,  3,  1, 21,  6, 16, 23, 18,  1, 20, 18, 14]
-	#input = [46, 45,  3, 19, 45, 18, 39, 45, 36, 15, 45, 24, 42, 45, 37,  3, 45, 37, 36, 45, 23, 32, 45,  8, 24, 45, 19, 30, 45, 15, 23, 45, 39, 40, 45, 40, 34, 45, 30, 18, 45, 32,  8, 47, 37, 34, 44, 37]
-	#input = [46, 46, 46, 46, 46, 46, 46, 45, 31, 39, 45, 42,  4, 45, 21,  7, 45, 19, 20, 45, 13, 22, 45,  7, 42, 45, 20, 21, 45, 17, 19, 45, 17, 31, 45, 10, 14, 45, 39, 10, 45, 14, 13, 47, 17,  4, 44, 17]
-	#input = [62, 62, 62, 62, 62, 61, 15,  8, 61, 11, 18, 61,  9,  5, 61, 19, 14, 61, 19, 17, 61,  1, 11, 61,  6,  7, 61, 10,  3, 61,  2,  1, 61, 13, 10, 61, 12,  4, 61, 17, 16, 61,  7, 12, 61, 14,  2, 61,  3,  9, 61, 16, 15, 61, 18,  6, 61,  8, 13, 63, 19,  4, 60, 19]
-	#input = [44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 43, 21, 40, 43, 21, 22, 43, 22, 34, 43, 13,  3, 43, 31,  2, 43, 24, 13, 43,  4, 41, 43, 30, 31, 43, 17, 15, 43, 34, 38, 43,  3, 28, 43, 18, 17, 43, 14, 24, 43,  2,  4, 43, 32, 30, 43, 40, 18, 43, 15, 14, 43, 38, 32, 45, 21, 28, 42, 21]
-	#input = [31, 31, 31, 31, 31, 31, 31, 30,  7, 23, 30,  9, 22, 30,  6,  4, 30, 6, 10, 30, 25, 19, 30, 17,  9, 30, 17, 16, 30,  1, 14, 30, 11, 21, 30, 26,  1, 30, 12, 11, 30, 14,  6, 30, 15, 25, 30,  4, 17, 30, 24, 28, 30, 19,  8, 30, 27, 26, 30, 27, 12, 30, 27,  5, 30, 22, 24, 30, 8,  3, 30, 18, 15, 30,  3,  7, 30,  3, 10, 30,  3,  2, 30, 21, 18, 32, 27, 28, 29, 27]
-	#input = [44, 44, 44, 44, 44, 44, 43, 29, 36, 43, 25, 23, 43, 15,  4, 43, 16, 14, 43, 21, 29, 43, 27, 40, 43,  4,  9, 43,  8, 19, 43, 31,  8, 43, 31, 10, 43, 31,  2, 43,  9, 21, 43, 17, 28, 43,  2, 15, 43,  2, 12, 43, 33, 10, 43, 22, 37, 43, 34, 26, 43, 18,  7, 43, 19, 39, 43, 28, 27, 43, 37, 20, 43, 14, 11, 43, 20, 30, 43, 10,  3, 43, 26,  8, 43, 39, 38, 43, 30, 35, 43, 23, 17, 43,  7, 25, 43, 11, 32, 43, 35, 33, 43,  5, 16, 43, 12, 22, 43, 32, 34, 43, 36,  5, 43,  1,  2, 43,  1, 31, 43,  3, 18, 45,  2, 40, 42,  2]
-	input = [37, 37, 37, 37, 37, 37, 37, 37, 37, 37, 37, 37, 37, 37, 37, 37, 37, 37, 37, 37, 37, 37, 37, 37, 37, 37, 37, 37, 36,  9, 26, 36, 19, 32, 36, 26, 13, 36, 29,  2, 36, 18,  6, 36, 16, 22, 36,  5,  8, 36, 10, 28, 36,  3, 16, 36, 30, 33, 36, 13, 14, 36, 12, 31, 36, 34,  9, 36, 28,  3, 36, 14, 30, 36, 14, 11, 36, 17, 29, 36, 31, 24, 36, 11, 19, 36, 33,  1, 36, 32, 17, 36,  8, 12, 36,  1, 10, 36,  2,  5, 36, 22, 18, 38, 14,  6, 35, 14]
-	input = torch.LongTensor(input).to(device)
-	other_input = input.clone().detach()
-	other_input[-3] = 7
-	#other_input[next(i for i in range(len(input)) if input[i] ==  1 and input[i+1] == 14) + 1] = 21
-	#other_input[next(i for i in range(len(input)) if input[i] == 11 and input[i+1] == 21) + 1] = 14
-	#other_input[next(i for i in range(len(input)) if input[i] ==  6 and input[i+1] ==  4) + 0] = 18
-	#other_input[next(i for i in range(len(input)) if input[i] ==  6 and input[i+1] ==  4) + 1] = 15
-	#other_input[next(i for i in range(len(input)) if input[i] == 18 and input[i+1] == 15) + 0] =  6
-	#other_input[next(i for i in range(len(input)) if input[i] == 18 and input[i+1] == 15) + 1] =  4
-	#other_input[next(i for i in range(len(input)) if input[i] == 17 and input[i+1] ==  9) + 0] = 25
-	#other_input[next(i for i in range(len(input)) if input[i] == 17 and input[i+1] ==  9) + 1] = 19
-	#other_input[next(i for i in range(len(input)) if input[i] == 25 and input[i+1] == 19) + 0] = 17
-	#other_input[next(i for i in range(len(input)) if input[i] == 25 and input[i+1] == 19) + 1] =  9
-	#tracer.trace2(input)
-	#prediction = tracer.trace(input, other_input, quiet=False)
-
-	suffix = filepath[filepath.index('inputsize')+len('inputsize'):]
+	suffix = ckpt_filepath[ckpt_filepath.index('inputsize')+len('inputsize'):]
 	max_input_size = int(suffix[:suffix.index('_')])
 	max_vertex_id = (max_input_size - 5) // 3
 
-	state_filepath = filepath
+	prefix = ckpt_filepath[:ckpt_filepath.index('layer')]
+	num_layers = int(prefix[prefix.rindex('_')+1:])
+
+	state_filepath = ckpt_filepath
 	if state_filepath.endswith('.pt'):
 		state_filepath = state_filepath[:-len('.pt')]
-	state_filepath += '.trace_lookahead{}.jsonl'.format(argv[2])
+	state_filepath += '.trace_lookahead{}.jsonl'.format(lookahead)
 
-	NUM_SAMPLES = int(argv[3])
-	#inputs,outputs = generate_eval_data(max_input_size, min_path_length=1, distance_from_start=1, distance_from_end=-1, lookahead_steps=int(argv[2]), num_paths_at_fork=None, num_samples=NUM_SAMPLES)
+	#inputs,outputs = generate_eval_data(max_input_size, min_path_length=1, distance_from_start=1, distance_from_end=-1, lookahead_steps=int(argv[2]), num_paths_at_fork=None, num_samples=total_samples)
 	#inputs = torch.LongTensor(inputs).to(device)
 
 	def filter_irrelevant_nodes(path_merge_explainable, input, root):
@@ -2351,12 +2306,12 @@ if __name__ == "__main__":
 	aggregated_op_explanations = []
 	total_path_merge_ops = 0
 	total_suboptimal_path_merge_ops = 0
-	for i in range(len(tfm_model.transformers)):
+	for i in range(num_layers):
 		aggregated_copy_directions.append({})
 		aggregated_example_copy_directions.append({})
 		aggregated_dist_copy_directions.append({})
 		aggregated_op_explanations.append({})
-	aggregated_path_merge_lengths = [{} for i in range(len(tfm_model.transformers))]
+	aggregated_path_merge_lengths = [{} for i in range(num_layers)]
 
 	from functools import cmp_to_key
 	def compare(x, y):
@@ -2444,6 +2399,8 @@ if __name__ == "__main__":
 			raise Exception('Invalid explanation type.')
 
 	def print_summary():
+		if quiet:
+			return
 		print('\nAggregated results:')
 		for i in range(len(aggregated_copy_directions)):
 			total_copy_directions = sum(aggregated_copy_directions[i].values())
@@ -2484,12 +2441,10 @@ if __name__ == "__main__":
 					sample_id_map[state['sample_id']] = pos
 
 	from sys import stdout
-	lookahead = int(argv[2])
 	if lookahead == -1:
 		lookahead = None
-	while num_samples < NUM_SAMPLES:
+	while num_samples < total_samples:
 		inputs,outputs = generate_eval_data(max_input_size, min_path_length=1, distance_from_start=1, distance_from_end=-1, lookahead_steps=lookahead, num_paths_at_fork=None, num_samples=1)
-		inputs = torch.LongTensor(inputs).to(device)
 		sample_id += 1
 
 		if sample_id-1 in sample_id_map:
@@ -2498,7 +2453,8 @@ if __name__ == "__main__":
 				f.seek(sample_id_map[sample_id-1])
 				state = json.loads(f.readline().strip())
 				if 'computation_nodes' not in state:
-					print('Input has no unused vertex IDs. Skipping...')
+					if not quiet:
+						print('Input has no unused vertex IDs. Skipping...')
 					continue
 				nodes = [ComputationNode(-1,-1) for _ in state['computation_nodes'].keys()]
 				for k,v in state['computation_nodes'].items():
@@ -2508,8 +2464,13 @@ if __name__ == "__main__":
 				important_ops = state['important_ops']
 				path_merge_explainable = [nodes[i] for i in state['path_merge_explainable']]
 				prediction = state['prediction']
+		elif tracer == None:
+			if not quiet:
+				print('ERROR: Missing sample ID {} in `{}`.'.format(sample_id-1, state_filepath))
+			raise MissingSampleError('Missing sample ID {} in `{}`.'.format(sample_id-1, state_filepath))
 		else:
 			try:
+				inputs = torch.LongTensor(inputs).to(device)
 				root, forward_edges, important_ops, path_merge_explainable, prediction = tracer.trace2(inputs[0,:])
 				with open(state_filepath, 'a') as f:
 					reachable = root.all_reachable_nodes()
@@ -2517,7 +2478,8 @@ if __name__ == "__main__":
 					f.write(json.dumps({'sample_id':sample_id-1, 'computation_nodes':node_map, 'root':reachable.index(root), 'forward_edges':forward_edges, 'important_ops':important_ops, 'path_merge_explainable':[reachable.index(n) for n in path_merge_explainable], 'prediction':prediction}))
 					f.write('\n')
 			except NoUnusedVertexIDs:
-				print('Input has no unused vertex IDs. Skipping...')
+				if not quiet:
+					print('Input has no unused vertex IDs. Skipping...')
 				with open(state_filepath, 'a') as f:
 					f.write(json.dumps({'sample_id':sample_id-1}))
 					f.write('\n')
@@ -2550,7 +2512,7 @@ if __name__ == "__main__":
 			return longest_distance
 
 		if path_merge_explainable != None and root in path_merge_explainable:
-			path_merge_lengths = [{} for i in range(len(tfm_model.transformers))]
+			path_merge_lengths = [{} for i in range(num_layers)]
 			def record_path_length(node, successor):
 				src_path_length = reachable_path_length(inputs[0,:], node.reachable)
 				dst_path_length = reachable_path_length(inputs[0,:], successor.reachable) - src_path_length
@@ -2558,7 +2520,7 @@ if __name__ == "__main__":
 					path_merge_lengths[node.layer][(src_path_length,dst_path_length)] = 0
 				path_merge_lengths[node.layer][(src_path_length,dst_path_length)] += 1
 
-			example_copy_directions = [{} for i in range(len(tfm_model.transformers))]
+			example_copy_directions = [{} for i in range(num_layers)]
 			for node in path_merge_explainable:
 				for k in range(len(node.successors)):
 					successor = node.successors[k]
@@ -2616,7 +2578,7 @@ if __name__ == "__main__":
 		if path_merge_explainable != None:
 			suboptimal_nodes = []
 			optimal_nodes = []
-			for layer in range(1, len(tfm_model.transformers)):
+			for layer in range(1, num_layers):
 				for node in [n for n in path_merge_explainable if n.layer == layer]:
 					# starting from the leaves of the computation graph (the first layer), count the number of suboptimal path-merge operations
 					try:
@@ -2675,16 +2637,17 @@ if __name__ == "__main__":
 		num_correct_vs_explainable[int(is_correct),int(is_explainable)] += 1
 		if important_ops != None and num_important_edges != 0:
 			num_correct_vs_explainable_recall[int(is_correct),int(is_explainable)] += num_explainable_edges / num_important_edges
-		print('[iteration {}] (num_samples: {})'.format(sample_id - 1, num_samples))
-		print('  Accuracy: {}'.format(torch.sum(num_correct_vs_explainable[1,:]) / (num_samples + 1)))
-		print('  Fraction of inputs explainable by path-merging algorithm: {}'.format(torch.sum(num_correct_vs_explainable[:,1]) / (num_samples + 1)))
-		print('  Fraction of inputs that are correct and explainable: {}'.format(torch.sum(num_correct_vs_explainable[1,1]) / (num_samples + 1)))
-		print('  Fraction of inputs that are incorrect and explainable: {}'.format(torch.sum(num_correct_vs_explainable[0,1]) / (num_samples + 1)))
-		print('  Fraction of inputs that are correct and unexplainable: {}'.format(torch.sum(num_correct_vs_explainable[1,0]) / (num_samples + 1)))
-		print('  Fraction of inputs that are incorrect and unexplainable: {}'.format(torch.sum(num_correct_vs_explainable[0,0]) / (num_samples + 1)))
-		print('  Average number of identified path-merge operations per example: {}'.format(total_path_merge_ops / (num_samples + 1)))
-		if total_path_merge_ops != 0:
-			print('  Fraction of path-merge operations that are suboptimal: {}'.format(total_suboptimal_path_merge_ops / total_path_merge_ops))
+		if not quiet:
+			print('[iteration {}] (num_samples: {})'.format(sample_id - 1, num_samples))
+			print('  Accuracy: {}'.format(torch.sum(num_correct_vs_explainable[1,:]) / (num_samples + 1)))
+			print('  Fraction of inputs explainable by path-merging algorithm: {}'.format(torch.sum(num_correct_vs_explainable[:,1]) / (num_samples + 1)))
+			print('  Fraction of inputs that are correct and explainable: {}'.format(torch.sum(num_correct_vs_explainable[1,1]) / (num_samples + 1)))
+			print('  Fraction of inputs that are incorrect and explainable: {}'.format(torch.sum(num_correct_vs_explainable[0,1]) / (num_samples + 1)))
+			print('  Fraction of inputs that are correct and unexplainable: {}'.format(torch.sum(num_correct_vs_explainable[1,0]) / (num_samples + 1)))
+			print('  Fraction of inputs that are incorrect and unexplainable: {}'.format(torch.sum(num_correct_vs_explainable[0,0]) / (num_samples + 1)))
+			print('  Average number of identified path-merge operations per example: {}'.format(total_path_merge_ops / (num_samples + 1)))
+			if total_path_merge_ops != 0:
+				print('  Fraction of path-merge operations that are suboptimal: {}'.format(total_suboptimal_path_merge_ops / total_path_merge_ops))
 		#print('  "Recall" of inputs that are correct and explainable: {}'.format(torch.sum(num_correct_vs_explainable_recall[1,1]) / num_correct_vs_explainable[1,1]))
 		#print('  "Recall" of inputs that are incorrect and explainable: {}'.format(torch.sum(num_correct_vs_explainable_recall[0,1]) / num_correct_vs_explainable[0,1]))
 		#print('  "Recall" of inputs that are correct and unexplainable: {}'.format(torch.sum(num_correct_vs_explainable_recall[1,0]) / num_correct_vs_explainable[1,0]))
@@ -2693,5 +2656,65 @@ if __name__ == "__main__":
 			print_summary()
 		stdout.flush()
 		num_samples += 1
+
+	explainable_example_proportion = torch.sum(num_correct_vs_explainable[1,:]) / num_samples
+	average_merge_ops_per_example = total_path_merge_ops / num_samples
+	suboptimal_merge_op_proportion = 0.0 if total_path_merge_ops == 0 else total_suboptimal_path_merge_ops / total_path_merge_ops
+	return explainable_example_proportion, average_merge_ops_per_example, suboptimal_merge_op_proportion
+
+
+if __name__ == "__main__":
+	import signal
+	import pdb
+	signal.signal(signal.SIGINT, lambda sig,frame: pdb.Pdb().set_trace(frame))
+
+	torch.set_printoptions(sci_mode=False)
+	from sys import argv, exit
+	if len(argv) != 4:
+		print("Usage: trace_circuit [checkpoint_filepath] [lookahead] [num_samples]")
+		exit(1)
+
+	if not torch.cuda.is_available():
+		print("ERROR: CUDA device is not available.")
+		#from sys import exit
+		#exit(-1)
+		device = torch.device('cpu')
+	else:
+		device = torch.device('cuda')
+
+	filepath = argv[1]
+	tfm_model, _, _, _ = torch.load(filepath, map_location=device)
+	for transformer in tfm_model.transformers:
+		if not hasattr(transformer, 'pre_ln'):
+			transformer.pre_ln = True
+	tfm_model = torch.compile(tfm_model)
+	tracer = TransformerTracer(tfm_model)
+
+	#input = [22, 21,  5, 19, 21, 11,  5, 21, 10,  3, 21,  4, 10, 21,  9,  4, 21,  9, 11, 23,  9,  3, 20,  9]
+	#input = [22, 22, 22, 21, 14,  3, 21, 14,  6, 21, 18, 14, 21,  3,  1, 21,  6, 16, 23, 18,  1, 20, 18, 14]
+	#input = [46, 45,  3, 19, 45, 18, 39, 45, 36, 15, 45, 24, 42, 45, 37,  3, 45, 37, 36, 45, 23, 32, 45,  8, 24, 45, 19, 30, 45, 15, 23, 45, 39, 40, 45, 40, 34, 45, 30, 18, 45, 32,  8, 47, 37, 34, 44, 37]
+	#input = [46, 46, 46, 46, 46, 46, 46, 45, 31, 39, 45, 42,  4, 45, 21,  7, 45, 19, 20, 45, 13, 22, 45,  7, 42, 45, 20, 21, 45, 17, 19, 45, 17, 31, 45, 10, 14, 45, 39, 10, 45, 14, 13, 47, 17,  4, 44, 17]
+	#input = [62, 62, 62, 62, 62, 61, 15,  8, 61, 11, 18, 61,  9,  5, 61, 19, 14, 61, 19, 17, 61,  1, 11, 61,  6,  7, 61, 10,  3, 61,  2,  1, 61, 13, 10, 61, 12,  4, 61, 17, 16, 61,  7, 12, 61, 14,  2, 61,  3,  9, 61, 16, 15, 61, 18,  6, 61,  8, 13, 63, 19,  4, 60, 19]
+	#input = [44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 44, 43, 21, 40, 43, 21, 22, 43, 22, 34, 43, 13,  3, 43, 31,  2, 43, 24, 13, 43,  4, 41, 43, 30, 31, 43, 17, 15, 43, 34, 38, 43,  3, 28, 43, 18, 17, 43, 14, 24, 43,  2,  4, 43, 32, 30, 43, 40, 18, 43, 15, 14, 43, 38, 32, 45, 21, 28, 42, 21]
+	#input = [31, 31, 31, 31, 31, 31, 31, 30,  7, 23, 30,  9, 22, 30,  6,  4, 30, 6, 10, 30, 25, 19, 30, 17,  9, 30, 17, 16, 30,  1, 14, 30, 11, 21, 30, 26,  1, 30, 12, 11, 30, 14,  6, 30, 15, 25, 30,  4, 17, 30, 24, 28, 30, 19,  8, 30, 27, 26, 30, 27, 12, 30, 27,  5, 30, 22, 24, 30, 8,  3, 30, 18, 15, 30,  3,  7, 30,  3, 10, 30,  3,  2, 30, 21, 18, 32, 27, 28, 29, 27]
+	#input = [44, 44, 44, 44, 44, 44, 43, 29, 36, 43, 25, 23, 43, 15,  4, 43, 16, 14, 43, 21, 29, 43, 27, 40, 43,  4,  9, 43,  8, 19, 43, 31,  8, 43, 31, 10, 43, 31,  2, 43,  9, 21, 43, 17, 28, 43,  2, 15, 43,  2, 12, 43, 33, 10, 43, 22, 37, 43, 34, 26, 43, 18,  7, 43, 19, 39, 43, 28, 27, 43, 37, 20, 43, 14, 11, 43, 20, 30, 43, 10,  3, 43, 26,  8, 43, 39, 38, 43, 30, 35, 43, 23, 17, 43,  7, 25, 43, 11, 32, 43, 35, 33, 43,  5, 16, 43, 12, 22, 43, 32, 34, 43, 36,  5, 43,  1,  2, 43,  1, 31, 43,  3, 18, 45,  2, 40, 42,  2]
+	input = [37, 37, 37, 37, 37, 37, 37, 37, 37, 37, 37, 37, 37, 37, 37, 37, 37, 37, 37, 37, 37, 37, 37, 37, 37, 37, 37, 37, 36,  9, 26, 36, 19, 32, 36, 26, 13, 36, 29,  2, 36, 18,  6, 36, 16, 22, 36,  5,  8, 36, 10, 28, 36,  3, 16, 36, 30, 33, 36, 13, 14, 36, 12, 31, 36, 34,  9, 36, 28,  3, 36, 14, 30, 36, 14, 11, 36, 17, 29, 36, 31, 24, 36, 11, 19, 36, 33,  1, 36, 32, 17, 36,  8, 12, 36,  1, 10, 36,  2,  5, 36, 22, 18, 38, 14,  6, 35, 14]
+	input = torch.LongTensor(input).to(device)
+	other_input = input.clone().detach()
+	other_input[-3] = 7
+	#other_input[next(i for i in range(len(input)) if input[i] ==  1 and input[i+1] == 14) + 1] = 21
+	#other_input[next(i for i in range(len(input)) if input[i] == 11 and input[i+1] == 21) + 1] = 14
+	#other_input[next(i for i in range(len(input)) if input[i] ==  6 and input[i+1] ==  4) + 0] = 18
+	#other_input[next(i for i in range(len(input)) if input[i] ==  6 and input[i+1] ==  4) + 1] = 15
+	#other_input[next(i for i in range(len(input)) if input[i] == 18 and input[i+1] == 15) + 0] =  6
+	#other_input[next(i for i in range(len(input)) if input[i] == 18 and input[i+1] == 15) + 1] =  4
+	#other_input[next(i for i in range(len(input)) if input[i] == 17 and input[i+1] ==  9) + 0] = 25
+	#other_input[next(i for i in range(len(input)) if input[i] == 17 and input[i+1] ==  9) + 1] = 19
+	#other_input[next(i for i in range(len(input)) if input[i] == 25 and input[i+1] == 19) + 0] = 17
+	#other_input[next(i for i in range(len(input)) if input[i] == 25 and input[i+1] == 19) + 1] =  9
+	#tracer.trace2(input)
+	#prediction = tracer.trace(input, other_input, quiet=False)
+
+	do_analysis(filepath, tfm_model, int(argv[2]), int(argv[3]))
 
 	print_summary()

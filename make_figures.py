@@ -60,7 +60,7 @@ def make_sensitivity_figures(max_epoch=100000):
 	data[2,:21] = [acc for acc,_,_ in crafted_OOD_accuracies]
 
 	fig = plt.gcf()
-	fig.set_size_inches(8.0, 1.85, forward=True)
+	fig.set_size_inches(8.0, 1.9, forward=True)
 	r_cmap = plt.get_cmap('plasma').reversed()
 	plt.imshow(data, cmap=r_cmap, vmin=0.0, vmax=1.0)
 	plt.xticks([-0.2] + [i for i in range(1,21)], labels=(['Tested on\nnaïve distr.'] + [i+1 for i in range(20)]), rotation=45, ha="right", rotation_mode="anchor")
@@ -71,7 +71,7 @@ def make_sensitivity_figures(max_epoch=100000):
 	for i in range(data.shape[0]):
 		for j in range(data.shape[1]):
 			c = "w" if data[i,j] > 0.6 else "k"
-			plt.text(j, i, '%.2f' % data[i,j], ha="center", va="center", color=c, fontsize=9)
+			plt.text(j, i, '%.2f' % data[i,j], ha="center", va="center", color=c, fontsize=8)
 
 	plt.xticks(np.arange(-.5, 21, 1), minor=True)
 	plt.yticks(np.arange(-.5, 3, 1), minor=True)
@@ -137,7 +137,7 @@ def make_dfs_figures(max_epoch=100000):
 	for i in range(data.shape[0]):
 		for j in range(data.shape[1]):
 			c = "w" if data[i,j] > 0.6 else "k"
-			plt.text(j, i, '%.2f' % data[i,j], ha="center", va="center", color=c, fontsize=9)
+			plt.text(j, i, '%.2f' % data[i,j], ha="center", va="center", color=c, fontsize=8)
 
 	plt.xticks(np.arange(-.5, 16, 1), minor=True)
 	plt.yticks(np.arange(-.5, 2, 1), minor=True)
@@ -160,8 +160,13 @@ def read_csv(filename):
 			rows.append(row)
 	return rows
 
-def make_scaling_figures(epoch=1500, variable='input_sizes'):
-	seeds = [int(d[len('seed_'):]) for d in listdir('scaling_experiments/csvs/scaling_' + variable) if d.startswith('seed_')]
+def make_scaling_figures(epoch=1500, variable='input_sizes', keep_incomplete_seeds=False):
+	if variable in ('dfs_padded','dfs_unpadded'):
+		csv_dir = 'dfs_csvs/'
+	else:
+		csv_dir = 'scaling_experiments/csvs/'
+
+	seeds = [int(d[len('seed_'):]) for d in listdir(csv_dir + 'scaling_' + variable) if d.startswith('seed_')]
 
 	train_losses = {}
 	test_losses = {}
@@ -185,8 +190,11 @@ def make_scaling_figures(epoch=1500, variable='input_sizes'):
 			prefix = 'hid_'
 		elif variable in ('NL_16hid_8layer', 'NL_32hid_16layer'):
 			var_name = 'Input size'
-			prefix = ''
-		inputs = [f for f in listdir('scaling_experiments/csvs/scaling_' + variable + '/seed_' + str(seed)) if f.startswith(prefix) and f.endswith('.csv')]
+			prefix = 'input_'
+		elif variable in ('dfs_padded', 'dfs_unpadded'):
+			var_name = 'Input size'
+			prefix = 'input_'
+		inputs = [f for f in listdir(csv_dir + 'scaling_' + variable + '/seed_' + str(seed)) if f.startswith(prefix) and f.endswith('.csv')]
 		for f in inputs:
 			inputsize = int(f[len(prefix):-len('.csv')])
 			if variable == 'hidden_dim' and inputsize in IGNORE_HIDS:
@@ -195,7 +203,7 @@ def make_scaling_figures(epoch=1500, variable='input_sizes'):
 				continue
 			elif variable in ('NL_16hid_8layer', 'NL_32hid_16layer') and inputsize in IGNORE_NL_INPUTSIZES:
 				continue
-			csv = read_csv('scaling_experiments/csvs/scaling_{}/seed_{}/{}'.format(variable, seed, f))
+			csv = read_csv(csv_dir + 'scaling_{}/seed_{}/{}'.format(variable, seed, f))
 			csv[0] = [s.replace(' ','_').lower() for s in csv[0]]
 			if 'epoch' not in csv[0]:
 				print('WARNING: {} {}, seed {}, has no results.'.format(var_name, inputsize, seed))
@@ -210,7 +218,7 @@ def make_scaling_figures(epoch=1500, variable='input_sizes'):
 				print('WARNING: {} {}, seed {}, is missing epoch {}.'.format(var_name, inputsize, seed, epoch))
 				continue
 			row = csv[row_idx]
-			train_loss_column = np.array([float(csv[i][train_loss_idx]) for i in range(1,row_idx+TRAIN_LOSS_WINDOW+2)])
+			train_loss_column = np.array([float(csv[i][train_loss_idx]) if i < len(csv) else float(csv[-1][train_loss_idx]) for i in range(1,row_idx+TRAIN_LOSS_WINDOW+2)])
 			train_loss_column = np.concatenate((np.ones(TRAIN_LOSS_WINDOW)*float(csv[1][train_loss_idx]), train_loss_column))
 			# TODO: this is due to an earlier bug in the `train.py` code where the loss wasn't being correctly scaled by the batch size; this line should be removed if this script is being used on data produced from a more recent version of `train.py` where the bug is fixed
 			if variable == 'layers' and inputsize >= 64:
@@ -240,34 +248,35 @@ def make_scaling_figures(epoch=1500, variable='input_sizes'):
 			has_converged[inputsize][seed] = has_seed_converged
 		first_seed = False
 
-	# check if there are any seeds with missing inputsizes
-	for seed in seeds:
-		if seed in incomplete_seeds:
-			continue
-		if any([seed not in losses for losses in train_losses.values()]):
-			incomplete_seeds.append(seed)
+	if not keep_incomplete_seeds:
+		# check if there are any seeds with missing inputsizes
+		for seed in seeds:
+			if seed in incomplete_seeds:
+				continue
+			if any([seed not in losses for losses in train_losses.values()]):
+				incomplete_seeds.append(seed)
 
-	# remove incomplete seeds from results
-	if len(incomplete_seeds) != 0:
-		print('WARNING: The following seeds have incomplete results {}; they will not be included in the plots.'.format(incomplete_seeds))
-	for inputsize,losses in list(train_losses.items()):
-		for seed in incomplete_seeds:
-			if seed in losses:
-				del losses[seed]
-		if len(losses) == 0:
-			del train_losses[inputsize]
-	for inputsize,losses in list(test_losses.items()):
-		for seed in incomplete_seeds:
-			if seed in losses:
-				del losses[seed]
-		if len(losses) == 0:
-			del test_losses[inputsize]
-	for inputsize,losses in list(has_converged.items()):
-		for seed in incomplete_seeds:
-			if seed in losses:
-				del losses[seed]
-		if len(losses) == 0:
-			del has_converged[inputsize]
+		# remove incomplete seeds from results
+		if len(incomplete_seeds) != 0:
+			print('WARNING: The following seeds have incomplete results {}; they will not be included in the plots.'.format(incomplete_seeds))
+		for inputsize,losses in list(train_losses.items()):
+			for seed in incomplete_seeds:
+				if seed in losses:
+					del losses[seed]
+			if len(losses) == 0:
+				del train_losses[inputsize]
+		for inputsize,losses in list(test_losses.items()):
+			for seed in incomplete_seeds:
+				if seed in losses:
+					del losses[seed]
+			if len(losses) == 0:
+				del test_losses[inputsize]
+		for inputsize,losses in list(has_converged.items()):
+			for seed in incomplete_seeds:
+				if seed in losses:
+					del losses[seed]
+			if len(losses) == 0:
+				del has_converged[inputsize]
 
 	if variable == 'input_sizes':
 		xaxis = 'Maximum input graph size'
@@ -286,6 +295,10 @@ def make_scaling_figures(epoch=1500, variable='input_sizes'):
 		xaxis = 'Maximum input graph size'
 		legend_title = 'Maximum input graph size'
 		xmin, xmax = 8, 34
+	elif variable in ('dfs_padded', 'dfs_unpadded'):
+		xaxis = 'Maximum input graph size'
+		legend_title = 'Maximum input graph size'
+		xmin, xmax = 8, 52
 
 	inputsizes = np.empty(len(test_losses), dtype=np.uint64)
 	counter = 0
@@ -304,6 +317,8 @@ def make_scaling_figures(epoch=1500, variable='input_sizes'):
 		ntoken = (fixed_max_input_size-5) // 3 + 5
 		dmodel = np.maximum(ntoken, inputsizes) + fixed_max_input_size
 		x = 6*dmodel*dmodel*nlayers
+	elif variable in ('dfs_padded', 'dfs_unpadded'):
+		x = (inputsizes - 5) // 3
 
 	converged = np.empty(len(has_converged))
 	counter = 0
@@ -533,6 +548,107 @@ def make_scaling_figures(epoch=1500, variable='input_sizes'):
 	fig.savefig('figures/scaling_' + variable + '_train_minloss.pdf', dpi=256)
 	plt.clf()
 
+def get_mi_results(ckpt_dir, epoch=3370):
+	from trace_circuit import do_analysis, MissingSampleError
+	results = np.empty((3,20))
+	counter = 0
+	for lookahead in [-1] + list(range(1,20)):
+		ckpt_filepath = ckpt_dir + '/epoch{}.pt'.format(epoch)
+		try:
+			print('Reading trace_circuit analysis from {} for lookahead {}.'.format(ckpt_filepath, lookahead))
+			explainable_example_proportion, average_merge_ops_per_example, suboptimal_merge_op_proportion = do_analysis(ckpt_filepath, None, lookahead, 100, quiet=True)
+			results[0,counter] = explainable_example_proportion
+			results[1,counter] = average_merge_ops_per_example
+			results[2,counter] = 1.0 - suboptimal_merge_op_proportion
+		except MissingSampleError:
+			print('WARNING: Checkpoint for {} is missing tracing results for lookahead {}.'.format(ckpt_filepath, lookahead))
+			results[:,counter] = np.nan
+		counter += 1
+	return results
+
+def make_mi_figures(epoch=3370):
+	greedy_ckpt_dir  = 'useful_path_results/checkpoints_v3_6layer_inputsize128_maxlookahead-1_seed3_trainstreaming_nomask_unablated_padded' # available seeds: 1-8
+	crafted_ckpt_dir = 'useful_path_results/checkpoints_v3_6layer_inputsize128_maxlookahead20_seed1_trainstreaming_nomask_unablated_padded' # available seeds: 1-8
+	crafted_OOD_ckpt_dir = 'useful_path_results/checkpoints_v3_6layer_inputsize128_maxlookahead12_seed2_trainstreaming_nomask_unablated_padded' # available seeds: 1-8
+	greedy_results = get_mi_results(greedy_ckpt_dir, epoch)
+	crafted_results = get_mi_results(crafted_ckpt_dir, epoch)
+	crafted_OOD_results = get_mi_results(crafted_OOD_ckpt_dir, epoch)
+	untrained_results = get_mi_results(crafted_ckpt_dir, epoch=0)
+
+	data = np.empty((4,20))
+	data[0,:] = greedy_results[0,:]
+	data[1,:] = crafted_results[0,:]
+	data[2,:] = crafted_OOD_results[0,:]
+	data[3,:] = untrained_results[0,:]
+
+	fig = plt.gcf()
+	fig.set_size_inches(8.0, 2.3, forward=True)
+	r_cmap = plt.get_cmap('plasma').reversed()
+	r_cmap.set_bad(color='white')
+	plt.imshow(data, cmap=r_cmap, vmin=0.0, vmax=1.0)
+	plt.xticks([-0.2] + [i for i in range(1,20)], labels=(['Tested on\nnaïve distr.'] + [i for i in range(1,20)]), rotation=45, ha="right", rotation_mode="anchor")
+	plt.yticks(np.arange(4), labels=['Naïve distr.', 'Balanced distr.', 'Balanced distr.\n(lookahead $\\le 12$)', 'Random model'])
+	plt.text(-4.5, 2.3, '\\textbf{Trained on:}', color='#555', rotation='vertical')
+	plt.tick_params(axis='both', which='both', length=0)
+	plt.grid(False)
+	plt.title('Proportion of examples explained by path-merging algorithm')
+	for i in range(data.shape[0]):
+		for j in range(data.shape[1]):
+			if np.isnan(data)[i,j]:
+				plt.text(j, i, 'N/A', ha="center", va="center", color="k", fontsize=7)
+			else:
+				c = "w" if data[i,j] > 0.6 else "k"
+				plt.text(j, i, '%.2f' % data[i,j], ha="center", va="center", color=c, fontsize=8)
+
+	plt.xticks(np.arange(-.5, 19, 1), minor=True)
+	plt.yticks(np.arange(-.5, 3, 1), minor=True)
+	plt.grid(which='minor', color='w', linestyle='-', linewidth=1)
+	plt.tick_params(which='minor', bottom=False, left=False)
+
+	ax = plt.gca()
+	draw_brace(ax, (19.4, 0.6), 5.2, 'Tested on balanced distribution with lookahead')
+
+	plt.tight_layout()
+	fig.savefig('figures/mi_explainable_proportion.pdf', dpi=128)
+	plt.clf()
+
+	data = np.empty((4,20))
+	data[0,:] = greedy_results[2,:]
+	data[1,:] = crafted_results[2,:]
+	data[2,:] = crafted_OOD_results[2,:]
+	data[3,:] = untrained_results[2,:]
+
+	fig = plt.gcf()
+	fig.set_size_inches(8.0, 2.3, forward=True)
+	r_cmap = plt.get_cmap('plasma').reversed()
+	r_cmap.set_bad(color='white')
+	plt.imshow(data, cmap=r_cmap, vmin=0.0, vmax=1.0)
+	plt.xticks([-0.2] + [i for i in range(1,20)], labels=(['Tested on\nnaïve distr.'] + [i for i in range(1,20)]), rotation=45, ha="right", rotation_mode="anchor")
+	plt.yticks(np.arange(4), labels=['Naïve distr.', 'Balanced distr.', 'Balanced distr.\n(lookahead $\\le 12$)', 'Random model'])
+	plt.text(-4.5, 2.3, '\\textbf{Trained on:}', color='#555', rotation='vertical')
+	plt.tick_params(axis='both', which='both', length=0)
+	plt.grid(False)
+	plt.title('Proportion of ``optimal\'\' path-merge operations')
+	for i in range(data.shape[0]):
+		for j in range(data.shape[1]):
+			if np.isnan(data)[i,j]:
+				plt.text(j, i, 'N/A', ha="center", va="center", color="k", fontsize=7)
+			else:
+				c = "w" if data[i,j] > 0.6 else "k"
+				plt.text(j, i, '%.2f' % data[i,j], ha="center", va="center", color=c, fontsize=8)
+
+	plt.xticks(np.arange(-.5, 19, 1), minor=True)
+	plt.yticks(np.arange(-.5, 3, 1), minor=True)
+	plt.grid(which='minor', color='w', linestyle='-', linewidth=1)
+	plt.tick_params(which='minor', bottom=False, left=False)
+
+	ax = plt.gca()
+	draw_brace(ax, (19.4, 0.6), 5.2, 'Tested on balanced distribution with lookahead')
+
+	plt.tight_layout()
+	fig.savefig('figures/mi_optimal_merge_op_proportion.pdf', dpi=128)
+	plt.clf()
+
 
 from sys import argv
 do_all = (len(argv) == 1 or '--all' in argv)
@@ -552,8 +668,12 @@ if do_all or '--dfs' in argv:
 if do_all or '--scaling-inputsize' in argv:
 	make_scaling_figures(epoch=900, variable='input_sizes')
 if do_all or '--scaling-layers' in argv:
-	make_scaling_figures(epoch=280, variable='layers')
+	make_scaling_figures(epoch=290, variable='layers')
 if do_all or '--scaling-hiddendim' in argv:
 	make_scaling_figures(epoch=900, variable='hidden_dim')
 if do_all or '--scaling-NL' in argv:
-	make_scaling_figures(epoch=350, variable='NL_32hid_16layer')
+	make_scaling_figures(epoch=300, variable='NL_16hid_8layer')
+if do_all or '--scaling-dfs' in argv:
+	make_scaling_figures(epoch=2840, variable='dfs_padded', keep_incomplete_seeds=True)
+if do_all or '--mi' in argv:
+	make_mi_figures(epoch=3370)
