@@ -706,6 +706,116 @@ py::tuple generate_training_set(const unsigned int max_input_size, const uint64_
 	return py::make_tuple(inputs, outputs, labels, num_collisions);
 }
 
+py::array_t<int64_t, py::array::c_style> lookahead_histogram(const unsigned int max_input_size, const uint64_t num_samples, const unsigned int max_edges, const int distance_from_start, const bool quiet=false)
+{
+	const unsigned int QUERY_PREFIX_TOKEN = (max_input_size-5) / 3 + 4;
+	const unsigned int EDGE_PREFIX_TOKEN = (max_input_size-5) / 3 + 2;
+	const unsigned int PATH_PREFIX_TOKEN = (max_input_size-5) / 3 + 1;
+
+	unsigned int num_generated = 0;
+	unsigned int max_lookahead = ((max_input_size - 5) / 3 - 1) / 2;
+	size_t histogram_shape[1]{max_lookahead};
+	py::array_t<int64_t, py::array::c_style> histogram(histogram_shape);
+	auto histogram_mem = histogram.mutable_unchecked<1>();
+	for (unsigned int i = 0; i < max_lookahead; i++)
+		histogram_mem(i) = 0;
+
+	while (num_generated < num_samples) {
+		array<node> g(32);
+		node* start; node* end;
+		array<array<node*>> paths(8);
+		while (true) {
+			unsigned int num_vertices = randrange(3, (max_input_size - 5) / 3);
+			if (!generate_example(g, start, end, paths, num_vertices, 4, (max_input_size - 5) / 3, true, -1, 0)) {
+				for (node& n : g) core::free(n);
+				for (array<node*>& a : paths) core::free(a);
+				g.length = 0; paths.length = 0;
+				continue;
+			}
+			unsigned int shortest_path_length = paths[0].length;
+			for (unsigned int i = 1; i < paths.length; i++)
+				if (paths[i].length < shortest_path_length)
+					shortest_path_length = paths[i].length;
+			if (shortest_path_length > 1)
+				break;
+			for (node& n : g) core::free(n);
+			for (array<node*>& a : paths) core::free(a);
+			g.length = 0; paths.length = 0;
+		}
+
+		array<pair<unsigned int, unsigned int>> edges(8);
+		for (node& vertex : g)
+			for (node* child : vertex.children)
+				edges.add(make_pair(vertex.id, child->id));
+		if (edges.length > max_edges || edges.length * 3 + 4 > max_input_size) {
+			for (node& n : g) core::free(n);
+			for (array<node*>& a : paths) core::free(a);
+			g.length = 0; paths.length = 0;
+			continue;
+		}
+		shuffle(edges);
+
+		array<unsigned int> prefix(max_input_size);
+		for (auto& entry : edges) {
+			prefix[prefix.length++] = EDGE_PREFIX_TOKEN;
+			prefix[prefix.length++] = entry.key;
+			prefix[prefix.length++] = entry.value;
+		}
+		prefix[prefix.length++] = QUERY_PREFIX_TOKEN;
+		prefix[prefix.length++] = start->id;
+		prefix[prefix.length++] = end->id;
+		prefix[prefix.length++] = PATH_PREFIX_TOKEN;
+
+		for (const array<node*>& path : paths) {
+			if (path.length == 1)
+				continue;
+			for (unsigned int j = 1; j < path.length; j++) {
+				if (distance_from_start != -1 && j != (unsigned int) distance_from_start)
+					continue;
+				array<unsigned int> example(prefix.length + j);
+				for (unsigned int i = 0; i < prefix.length; i++)
+					example[i] = prefix[i];
+				for (unsigned int i = 0; i < j; i++)
+					example[prefix.length + i] = path[i]->id;
+				example.length = prefix.length + j;
+				if (example.length > max_input_size)
+					continue;
+
+				unsigned int lookahead_steps = lookahead_depth(path[j-1], path[j], end);
+				histogram_mem(lookahead_steps) += 1;
+				num_generated++;
+				if (num_generated == num_samples)
+					break;
+			}
+			if (num_generated == num_samples)
+				break;
+		}
+
+		if (!quiet && num_generated > 0 && (num_generated % 1000 == 0 || num_generated >= num_samples)) {
+			printf("%d examples generated.\n", num_generated);
+
+			printf("Lookahead steps histogram:\n");
+			printf("[");
+			bool first = true;
+			for (unsigned int i = 0; i < max_lookahead; i++) {
+				if (histogram_mem(i) == 0)
+					continue;
+				if (!first) printf(", ");
+				printf("%d:%.2f", i, (float) histogram_mem(i) / num_generated + 1e-9);
+				first = false;
+			}
+			printf("]\n");
+		}
+
+		for (node& n : g) core::free(n);
+		for (array<node*>& a : paths) core::free(a);
+		g.length = 0; paths.length = 0;
+		continue;
+	}
+
+	return histogram;
+}
+
 py::tuple generate_reachable_training_set(const unsigned int max_input_size, const uint64_t dataset_size, const unsigned int lookahead, const unsigned int max_edges, const py::object& reserved_inputs, const int distance_from_start, const int reachable_distance, const unsigned int start_vertex_index, const bool exclude_start_vertex)
 {
 	const unsigned int QUERY_PREFIX_TOKEN = (max_input_size-5) / 3 + 4;
@@ -1213,5 +1323,6 @@ PYBIND11_MODULE(generator, m) {
 	m.def("generate_training_set", &generate_training_set);
 	m.def("generate_reachable_training_set", &generate_reachable_training_set);
 	m.def("generate_dfs_training_set", &generate_dfs_training_set);
+	m.def("lookahead_histogram", &lookahead_histogram);
 	m.def("set_seed", &core::set_seed);
 }

@@ -2657,7 +2657,7 @@ def do_analysis(ckpt_filepath, tracer, lookahead, total_samples, quiet=False):
 		stdout.flush()
 		num_samples += 1
 
-	explainable_example_proportion = torch.sum(num_correct_vs_explainable[1,:]) / num_samples
+	explainable_example_proportion = torch.sum(num_correct_vs_explainable[:,1]) / num_samples
 	average_merge_ops_per_example = total_path_merge_ops / num_samples
 	suboptimal_merge_op_proportion = 0.0 if total_path_merge_ops == 0 else total_suboptimal_path_merge_ops / total_path_merge_ops
 	return explainable_example_proportion, average_merge_ops_per_example, suboptimal_merge_op_proportion

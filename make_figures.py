@@ -441,7 +441,11 @@ def make_scaling_figures(epoch=1500, variable='input_sizes', keep_incomplete_see
 		labels = ['{0:.1f}M'.format(l/1000000) for _,(_,l) in handles.items()]
 	else:
 		labels = [str(l) for _,(_,l) in handles.items()]
-	plt.legend([h for _,(h,_) in handles.items()], labels, title=legend_title, fontsize=6.0, title_fontsize=7.5, ncols=np.ceil(len(labels)/6), handlelength=1.0)
+	if len(labels) <= 4:
+		num_cols = len(labels)
+	else:
+		num_cols = np.ceil(len(labels)/6)
+	plt.legend([h for _,(h,_) in handles.items()], labels, title=legend_title, fontsize=6.0, title_fontsize=7.5, ncols=num_cols, handlelength=1.0)
 	plt.xlim(1000000, max_x)
 	#plt.ylim(0.0001, 10.0)
 	ax.set_xscale("log", base=10)
@@ -470,7 +474,11 @@ def make_scaling_figures(epoch=1500, variable='input_sizes', keep_incomplete_see
 		labels = ['{0:.1f}M'.format(l/1000000) for _,(_,l) in handles.items()]
 	else:
 		labels = [str(l) for _,(_,l) in handles.items()]
-	plt.legend([h for _,(h,_) in handles.items()], labels, title=legend_title, fontsize=6.0, title_fontsize=7.5, ncols=np.ceil(len(labels)/6), handlelength=1.0)
+	if len(labels) <= 4:
+		num_cols = len(labels)
+	else:
+		num_cols = np.ceil(len(labels)/6)
+	plt.legend([h for _,(h,_) in handles.items()], labels, title=legend_title, fontsize=6.0, title_fontsize=7.5, ncols=num_cols, handlelength=1.0)
 	plt.xlim(100000, max_x)
 	#plt.ylim(0.0001, 10.0)
 	ax.set_xscale("log", base=10)
@@ -503,7 +511,11 @@ def make_scaling_figures(epoch=1500, variable='input_sizes', keep_incomplete_see
 		labels = ['{0:.1f}M'.format(l/1000000) for _,(_,l) in handles.items()]
 	else:
 		labels = [str(l) for _,(_,l) in handles.items()]
-	plt.legend([h for _,(h,_) in handles.items()], labels, title=legend_title, fontsize=6.0, title_fontsize=7.5, ncols=np.ceil(len(labels)/6), handlelength=1.0)
+	if len(labels) <= 4:
+		num_cols = len(labels)
+	else:
+		num_cols = np.ceil(len(labels)/6)
+	plt.legend([h for _,(h,_) in handles.items()], labels, title=legend_title, fontsize=6.0, title_fontsize=7.5, ncols=num_cols, handlelength=1.0)
 	plt.xlim(1000000, max_x)
 	#plt.ylim(0.0001, 10.0)
 	ax.set_xscale("log", base=10)
@@ -536,7 +548,11 @@ def make_scaling_figures(epoch=1500, variable='input_sizes', keep_incomplete_see
 		labels = ['{0:.1f}M'.format(l/1000000) for _,(_,l) in handles.items()]
 	else:
 		labels = [str(l) for _,(_,l) in handles.items()]
-	plt.legend([h for _,(h,_) in handles.items()], labels, title=legend_title, fontsize=6.0, title_fontsize=7.5, ncols=np.ceil(len(labels)/6), handlelength=1.0)
+	if len(labels) <= 4:
+		num_cols = len(labels)
+	else:
+		num_cols = np.ceil(len(labels)/6)
+	plt.legend([h for _,(h,_) in handles.items()], labels, title=legend_title, fontsize=6.0, title_fontsize=7.5, ncols=num_cols, handlelength=1.0)
 	plt.xlim(100000, max_x)
 	#plt.ylim(0.0001, 10.0)
 	ax.set_xscale("log", base=10)
@@ -612,23 +628,22 @@ def make_mi_figures(epoch=3370):
 	fig.savefig('figures/mi_explainable_proportion.pdf', dpi=128)
 	plt.clf()
 
-	data = np.empty((4,20))
+	data = np.empty((3,20))
 	data[0,:] = greedy_results[2,:]
 	data[1,:] = crafted_results[2,:]
 	data[2,:] = crafted_OOD_results[2,:]
-	data[3,:] = untrained_results[2,:]
 
 	fig = plt.gcf()
-	fig.set_size_inches(8.0, 2.3, forward=True)
+	fig.set_size_inches(8.0, 1.95, forward=True)
 	r_cmap = plt.get_cmap('plasma').reversed()
 	r_cmap.set_bad(color='white')
 	plt.imshow(data, cmap=r_cmap, vmin=0.0, vmax=1.0)
 	plt.xticks([-0.2] + [i for i in range(1,20)], labels=(['Tested on\nnaïve distr.'] + [i for i in range(1,20)]), rotation=45, ha="right", rotation_mode="anchor")
-	plt.yticks(np.arange(4), labels=['Naïve distr.', 'Balanced distr.', 'Balanced distr.\n(lookahead $\\le 12$)', 'Random model'])
+	plt.yticks(np.arange(3), labels=['Naïve distr.', 'Balanced distr.', 'Balanced distr.\n(lookahead $\\le 12$)'])
 	plt.text(-4.5, 2.3, '\\textbf{Trained on:}', color='#555', rotation='vertical')
 	plt.tick_params(axis='both', which='both', length=0)
 	plt.grid(False)
-	plt.title('Proportion of ``optimal\'\' path-merge operations')
+	plt.title('Proportion of ``maximal\'\' path-merge operations')
 	for i in range(data.shape[0]):
 		for j in range(data.shape[1]):
 			if np.isnan(data)[i,j]:
@@ -638,17 +653,56 @@ def make_mi_figures(epoch=3370):
 				plt.text(j, i, '%.2f' % data[i,j], ha="center", va="center", color=c, fontsize=8)
 
 	plt.xticks(np.arange(-.5, 19, 1), minor=True)
-	plt.yticks(np.arange(-.5, 3, 1), minor=True)
+	plt.yticks(np.arange(-.5, 2, 1), minor=True)
 	plt.grid(which='minor', color='w', linestyle='-', linewidth=1)
 	plt.tick_params(which='minor', bottom=False, left=False)
 
 	ax = plt.gca()
-	draw_brace(ax, (19.4, 0.6), 5.2, 'Tested on balanced distribution with lookahead')
+	draw_brace(ax, (19.4, 0.6), 4.0, 'Tested on balanced distribution with lookahead')
 
 	plt.tight_layout()
 	fig.savefig('figures/mi_optimal_merge_op_proportion.pdf', dpi=128)
 	plt.clf()
 
+def make_lookahead_histogram(num_samples=1000000):
+	def build_module(name):
+		from os import system
+		if system(f"g++ -Ofast -fno-stack-protector -Wall -Wpedantic -shared -fPIC $(python3 -m pybind11 --includes) -I../ {name}.cpp -o {name}$(python3-config --extension-suffix)") != 0:
+			print(f"ERROR: Unable to compile `{name}.cpp`.")
+			import sys
+			sys.exit(1)
+	try:
+		from os.path import getmtime
+		from importlib.util import find_spec
+		generator_module = find_spec('generator')
+		if generator_module == None:
+			raise ModuleNotFoundError
+		elif getmtime(generator_module.origin) < getmtime('generator.cpp'):
+			print("C++ module `generator` is out-of-date. Compiling from source...")
+			build_module("generator")
+		import generator
+	except ModuleNotFoundError:
+		print("C++ module `generator` not found. Compiling from source...")
+		build_module("generator")
+		import generator
+	print("C++ module `generator` loaded.")
+
+	output = generator.lookahead_histogram(128, 10000000, 9999, 1, False)
+	output = output / np.sum(output)
+
+	fig = plt.gcf()
+	ax = plt.gca()
+	fig.set_size_inches(4, 2.5, forward=True)
+	ax.bar(np.arange(0,len(output)), output)
+	plt.xlim(-0.5, 20.5)
+	#plt.ylim(1.0e-9, 0.6)
+	ax.set_yscale("log", base=10)
+	plt.xlabel('Lookahead')
+	plt.ylabel('Example frequency')
+	#plt.grid(True, axis='x', which='both')
+	plt.tight_layout()
+	fig.savefig('figures/lookahead_histogram.pdf', dpi=256)
+	plt.clf()
 
 from sys import argv
 do_all = (len(argv) == 1 or '--all' in argv)
@@ -672,8 +726,10 @@ if do_all or '--scaling-layers' in argv:
 if do_all or '--scaling-hiddendim' in argv:
 	make_scaling_figures(epoch=900, variable='hidden_dim')
 if do_all or '--scaling-NL' in argv:
-	make_scaling_figures(epoch=300, variable='NL_16hid_8layer')
+	make_scaling_figures(epoch=535, variable='NL_16hid_8layer')
 if do_all or '--scaling-dfs' in argv:
 	make_scaling_figures(epoch=2840, variable='dfs_padded', keep_incomplete_seeds=True)
 if do_all or '--mi' in argv:
 	make_mi_figures(epoch=3370)
+if do_all or '--lookahead-histogram' in argv:
+	make_lookahead_histogram()
