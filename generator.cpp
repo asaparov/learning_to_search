@@ -1118,6 +1118,9 @@ bool generate_dfs_example(array<node>& vertices, const node*& start, const node*
 			} else if (current->children.contains(end)) {
 				found_goal = true;
 				path.add(end);
+				unsigned int index = removable_edges.index_of(make_pair(current->id, end->id));
+				if (index < removable_edges.length)
+					removable_edges.remove(index);
 				break;
 			}
 
