@@ -160,7 +160,7 @@ def read_csv(filename):
 			rows.append(row)
 	return rows
 
-def make_scaling_figures(epoch=1500, variable='input_sizes', keep_incomplete_seeds=False):
+def make_scaling_figures(epoch=1500, variable='input_sizes', keep_incomplete_seeds=False, train_loss_scaling_bug=True):
 	if variable in ('dfs_padded','dfs_unpadded'):
 		csv_dir = 'dfs_csvs/'
 	else:
@@ -220,11 +220,12 @@ def make_scaling_figures(epoch=1500, variable='input_sizes', keep_incomplete_see
 			row = csv[row_idx]
 			train_loss_column = np.array([float(csv[i][train_loss_idx]) if i < len(csv) else float(csv[-1][train_loss_idx]) for i in range(1,row_idx+TRAIN_LOSS_WINDOW+2)])
 			train_loss_column = np.concatenate((np.ones(TRAIN_LOSS_WINDOW)*float(csv[1][train_loss_idx]), train_loss_column))
-			# TODO: this is due to an earlier bug in the `train.py` code where the loss wasn't being correctly scaled by the batch size; this line should be removed if this script is being used on data produced from a more recent version of `train.py` where the bug is fixed
-			if variable == 'layers' and inputsize >= 64:
-				train_loss_column /= 2**12
-			else:
-				train_loss_column /= 2**10
+			if train_loss_scaling_bug:
+				# TODO: this is due to an earlier bug in the `train.py` code where the loss wasn't being correctly scaled by the batch size; this line should be removed if this script is being used on data produced from a more recent version of `train.py` where the bug is fixed
+				if variable == 'layers' and inputsize >= 64:
+					train_loss_column /= 2**12
+				else:
+					train_loss_column /= 2**10
 			train_loss = np.convolve(train_loss_column, np.ones(TRAIN_LOSS_WINDOW*2 + 1)/(TRAIN_LOSS_WINDOW*2 + 1), mode='valid')
 
 			test_loss_column = np.array([float(csv[i][test_loss_idx]) if i < len(csv) else float(csv[-1][test_loss_idx]) for i in range(1,row_idx+TEST_LOSS_WINDOW+2)])
@@ -728,7 +729,7 @@ if do_all or '--scaling-hiddendim' in argv:
 if do_all or '--scaling-NL' in argv:
 	make_scaling_figures(epoch=535, variable='NL_16hid_8layer')
 if do_all or '--scaling-dfs' in argv:
-	make_scaling_figures(epoch=2840, variable='dfs_padded', keep_incomplete_seeds=True)
+	make_scaling_figures(epoch=1100, variable='dfs_padded', keep_incomplete_seeds=True, train_loss_scaling_bug=False)
 if do_all or '--mi' in argv:
 	make_mi_figures(epoch=3370)
 if do_all or '--lookahead-histogram' in argv:
