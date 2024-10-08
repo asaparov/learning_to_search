@@ -661,8 +661,7 @@ def train(max_input_size, dataset_size, distribution, max_lookahead, seed_value,
 	reserved_inputs = set()
 	NUM_TEST_SAMPLES = 10000
 	if dfs:
-		# TODO: i think we could theoretically generate examples with `backtrack_distance = (max_input_size - 4) // 4 - 1`, but the rejection rate in the current rejection sampling method is too high to feasibly generate such samples
-		max_backtrack_distance = (max_input_size - 4) // 4 - 2
+		max_backtrack_distance = (max_input_size - 4) // 4 - 1
 		for backtrack_distance in [-1] + list(range(max_backtrack_distance + 1)):
 			generator.set_seed(seed_value)
 			print('Reserving OOD test data for backtrack distance = {}'.format(backtrack_distance))

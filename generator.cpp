@@ -970,7 +970,7 @@ py::tuple generate_reachable_training_set(const unsigned int max_input_size, con
 	return py::make_tuple(inputs, outputs, num_collisions);
 }
 
-bool generate_dfs_example(array<node>& vertices, const node*& start, const node*& end, unsigned int& current_node_index, array<const node*>& path, unsigned int num_vertices, unsigned int max_num_parents, unsigned int max_vertex_id, const int requested_backtrack)
+bool generate_dfs_example(array<node>& vertices, const node*& start, const node*& end, unsigned int& current_node_index, array<const node*>& path, unsigned int num_vertices, unsigned int max_num_parents, unsigned int max_vertex_id, const int requested_backtrack, unsigned int max_edges)
 {
 	if (!vertices.ensure_capacity(num_vertices))
 		return false;
@@ -1013,6 +1013,16 @@ bool generate_dfs_example(array<node>& vertices, const node*& start, const node*
 	}
 	free(out_degrees);
 
+	/* create a list of edges that we can remove */
+	unsigned int new_edge_count = 0;
+	array<pair<unsigned int, unsigned int>> all_edges(16);
+	for (const node& vertex : vertices)
+		for (const node* child : vertex.children)
+			all_edges.add(make_pair(vertex.id, child->id));
+	unsigned int total_edge_count = all_edges.length;
+
+	array<pair<unsigned int, unsigned int>> removable_edges(16);
+	removable_edges.append(all_edges.data, all_edges.length);
 	while (true) {
 		/* select a start and goal vertex uniformly at random */
 		unsigned int start_index;
@@ -1054,14 +1064,16 @@ bool generate_dfs_example(array<node>& vertices, const node*& start, const node*
 				if (!has_path_to_start) {
 					vertices[start_index].children.add(&vertices[i]);
 					vertices[i].parents.add(&vertices[start_index]);
+					new_edge_count++;
+					total_edge_count++;
 				}
 			}
 		}
 
 		/* perform DFS from the start vertex */
-		array<const node*> queue(8);
+		array<pair<const node*, const node*>> queue(8);
 		if (requested_backtrack == 0 || requested_backtrack == -1) {
-			queue[0] = start;
+			queue[0] = make_pair((const node*) nullptr, start);
 			queue.length = 1;
 		} else {
 			/* if `requested_backtrack` is specified, start the DFS in the second subgraph */
@@ -1080,16 +1092,23 @@ bool generate_dfs_example(array<node>& vertices, const node*& start, const node*
 			shuffle(first_subgraph_children, num_first_subgraph_children);
 			shuffle(second_subgraph_children, num_second_subgraph_children);
 			for (unsigned int i = 0; i < num_first_subgraph_children; i++)
-				queue.add(first_subgraph_children[i]);
+				queue.add(make_pair(start, first_subgraph_children[i]));
 			for (unsigned int i = 0; i < num_second_subgraph_children; i++)
-				queue.add(second_subgraph_children[i]);
+				queue.add(make_pair(start, second_subgraph_children[i]));
 			free(first_subgraph_children);
 			free(second_subgraph_children);
 		}
 		bool found_goal = false;
 		while (queue.length != 0) {
-			const node* current = queue.pop();
+			pair<const node*, const node*> state = queue.pop();
+			const node* parent = state.key;
+			const node* current = state.value;
+			if (path.contains(current))
+				continue;
 			path.add(current);
+			unsigned int index = removable_edges.index_of(make_pair(parent->id, current->id));
+			if (index < removable_edges.length)
+				removable_edges.remove(index);
 
 			if (current == end) {
 				found_goal = true;
@@ -1108,7 +1127,7 @@ bool generate_dfs_example(array<node>& vertices, const node*& start, const node*
 			shuffle(children, current->children.length);
 			for (unsigned int i = 0; i < current->children.length; i++) {
 				if (path.contains(children[i])) continue;
-				queue.add(children[i]);
+				queue.add(make_pair(current, children[i]));
 			}
 			free(children);
 		}
@@ -1116,6 +1135,8 @@ bool generate_dfs_example(array<node>& vertices, const node*& start, const node*
 		/* check if the goal vertex is reachable from the start vertex */
 		if (found_goal)
 			break;
+		removable_edges.clear();
+		removable_edges.append(all_edges.data, all_edges.length);
 		path.clear();
 	}
 
@@ -1123,6 +1144,22 @@ bool generate_dfs_example(array<node>& vertices, const node*& start, const node*
 		current_node_index = randrange(path.length - 1);
 	else
 		current_node_index = requested_backtrack;
+
+	/* remove edges to avoid generating a graph with too many edges */
+	unsigned int edges_to_remove;
+	if (total_edge_count > max_edges)
+		edges_to_remove = total_edge_count - max_edges;
+	else
+		edges_to_remove = new_edge_count;
+	edges_to_remove = min((unsigned int) removable_edges.length, edges_to_remove);
+	for (unsigned int i = 0; i < edges_to_remove; i++) {
+		unsigned int u = randrange(removable_edges.length);
+		unsigned int parent_id = removable_edges[u].key;
+		unsigned int child_id = removable_edges[u].value;
+		vertices[parent_id].children.remove(vertices[parent_id].children.index_of(&vertices[child_id]));
+		vertices[child_id].parents.remove(vertices[child_id].parents.index_of(&vertices[parent_id]));
+		removable_edges.remove(u);
+	}
 
 	/* remove any correlation between graph topology and vertex IDs by shuffling the vertices */
 	unsigned int* new_indices = (unsigned int*) alloca(sizeof(unsigned int) * (max_vertex_id + 1));
@@ -1185,7 +1222,7 @@ py::tuple generate_dfs_training_set(const unsigned int max_input_size, const uin
 			unsigned int num_vertices = std::max(2u, randrange(longest_path_length + 1));
 			if (requested_backtrack != -1)
 				num_vertices = std::max((unsigned int) requested_backtrack + 2, num_vertices);
-			if (!generate_dfs_example(g, start, end, current_node_index, path, num_vertices, max_input_size / 24 + 1, (max_input_size - 5) / 3, requested_backtrack)) {
+			if (!generate_dfs_example(g, start, end, current_node_index, path, num_vertices, max_input_size / 24 + 1, (max_input_size - 5) / 3, requested_backtrack, longest_path_length)) {
 				for (node& n : g) core::free(n);
 				g.length = 0; path.length = 0;
 				continue;
