@@ -1106,9 +1106,11 @@ bool generate_dfs_example(array<node>& vertices, const node*& start, const node*
 			if (path.contains(current))
 				continue;
 			path.add(current);
-			unsigned int index = removable_edges.index_of(make_pair(parent->id, current->id));
-			if (index < removable_edges.length)
-				removable_edges.remove(index);
+			if (parent != nullptr) {
+				unsigned int index = removable_edges.index_of(make_pair(parent->id, current->id));
+				if (index < removable_edges.length)
+					removable_edges.remove(index);
+			}
 
 			if (current == end) {
 				found_goal = true;
@@ -1183,7 +1185,7 @@ bool generate_dfs_example(array<node>& vertices, const node*& start, const node*
 	return true;
 }
 
-py::tuple generate_dfs_training_set(const unsigned int max_input_size, const uint64_t dataset_size, const py::object& reserved_inputs, const int requested_backtrack, const bool random_padding, const bool quiet=false)
+py::tuple generate_dfs_training_set(const unsigned int max_input_size, const uint64_t dataset_size, const py::object& reserved_inputs, const int requested_backtrack, const bool random_padding, const bool uniform, const bool quiet=false)
 {
 	const unsigned int QUERY_PREFIX_TOKEN = (max_input_size-5) / 3 + 4;
 	const unsigned int PADDING_TOKEN = (max_input_size-5) / 3 + 3;
@@ -1209,7 +1211,21 @@ py::tuple generate_dfs_training_set(const unsigned int max_input_size, const uin
 	for (unsigned int i = 0; i < max_input_size; i++)
 		backtrack_distance_histogram[i] = 0;
 
+	float* MAX_FREQS_PER_BUCKET = (float*) alloca(sizeof(float) * max_input_size);
+	if (requested_backtrack == -1) {
+		for (unsigned int i = 0; i < max_input_size; i++)
+			MAX_FREQS_PER_BUCKET[i] = 1.0;
+	} else {
+		for (unsigned int i = 0; i < (unsigned) requested_backtrack + 1; i++)
+			MAX_FREQS_PER_BUCKET[i] = 1.0 / (requested_backtrack+1);
+		for (unsigned int i = requested_backtrack + 1; i < max_input_size; i++)
+			MAX_FREQS_PER_BUCKET[i] = 0.0;
+		MAX_FREQS_PER_BUCKET[requested_backtrack] += 0.05;
+	}
+
 	array<const node*> path(32);
+	unsigned int* potential_backtracks = (unsigned int*) alloca(max((size_t) 1, sizeof(unsigned int) * (requested_backtrack + 1)));
+	unsigned int potential_backtrack_count = 0;
 	unsigned int num_attempts = 0;
 	while (num_generated < dataset_size) {
 		if (num_attempts >= 10000000)
@@ -1220,9 +1236,18 @@ py::tuple generate_dfs_training_set(const unsigned int max_input_size, const uin
 		unsigned int current_node_index;
 		while (true) {
 			unsigned int num_vertices = std::max(2u, randrange(longest_path_length + 1));
-			if (requested_backtrack != -1)
+			int backtrack = requested_backtrack;
+			if (requested_backtrack != -1) {
+				if (uniform) {
+					potential_backtrack_count = 0;
+					for (unsigned int i = 0; i < (unsigned) requested_backtrack + 1; i++)
+						if (num_generated == 0 || backtrack_distance_histogram[i] / num_generated < MAX_FREQS_PER_BUCKET[i])
+							potential_backtracks[potential_backtrack_count++] = i;
+					backtrack = choice(potential_backtracks, potential_backtrack_count);
+				}
 				num_vertices = std::max((unsigned int) requested_backtrack + 2, num_vertices);
-			if (!generate_dfs_example(g, start, end, current_node_index, path, num_vertices, max_input_size / 24 + 1, (max_input_size - 5) / 3, requested_backtrack, longest_path_length)) {
+			}
+			if (!generate_dfs_example(g, start, end, current_node_index, path, num_vertices, max_input_size / 24 + 1, (max_input_size - 5) / 3, backtrack, longest_path_length)) {
 				for (node& n : g) core::free(n);
 				g.length = 0; path.length = 0;
 				continue;
@@ -1300,7 +1325,9 @@ py::tuple generate_dfs_training_set(const unsigned int max_input_size, const uin
 				prefix[prefix.length++] = path[j]->id;
 		}
 
-		if (requested_backtrack != -1 && (unsigned int) requested_backtrack != backtrack_distance) {
+		if ((requested_backtrack != -1 && !uniform && (unsigned int) requested_backtrack != backtrack_distance)
+		 || (uniform && num_generated != 0 && backtrack_distance_histogram[backtrack_distance] / num_generated >= MAX_FREQS_PER_BUCKET[backtrack_distance]))
+		{
 			for (node& n : g) core::free(n);
 			g.length = 0; path.length = 0;
 			continue;
