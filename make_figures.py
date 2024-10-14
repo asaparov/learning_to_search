@@ -161,7 +161,7 @@ def read_csv(filename):
 	return rows
 
 def make_scaling_figures(epoch=1500, variable='input_sizes', keep_incomplete_seeds=False, train_loss_scaling_bug=True):
-	if variable in ('dfs_padded','dfs_unpadded'):
+	if variable in ('dfs_padded','dfs_unpadded', 'dfs_balanced'):
 		csv_dir = 'dfs_csvs/'
 	else:
 		csv_dir = 'scaling_experiments/csvs/'
@@ -191,7 +191,7 @@ def make_scaling_figures(epoch=1500, variable='input_sizes', keep_incomplete_see
 		elif variable in ('NL_16hid_8layer', 'NL_32hid_16layer'):
 			var_name = 'Input size'
 			prefix = 'input_'
-		elif variable in ('dfs_padded', 'dfs_unpadded'):
+		elif variable in ('dfs_padded', 'dfs_unpadded', 'dfs_balanced'):
 			var_name = 'Input size'
 			prefix = 'input_'
 		inputs = [f for f in listdir(csv_dir + 'scaling_' + variable + '/seed_' + str(seed)) if f.startswith(prefix) and f.endswith('.csv')]
@@ -296,18 +296,17 @@ def make_scaling_figures(epoch=1500, variable='input_sizes', keep_incomplete_see
 		xaxis = 'Maximum input graph size'
 		legend_title = 'Maximum input graph size'
 		xmin, xmax = 8, 34
-	elif variable in ('dfs_padded', 'dfs_unpadded'):
+	elif variable in ('dfs_padded', 'dfs_unpadded', 'dfs_balanced'):
 		xaxis = 'Maximum input graph size'
 		legend_title = 'Maximum input graph size'
-		xmin, xmax = 8, 52
+		xmin, xmax = 10, 65
 
 	inputsizes = np.empty(len(test_losses), dtype=np.uint64)
 	counter = 0
 	for inputsize,_ in test_losses.items():
 		inputsizes[counter] = inputsize
 		counter += 1
-	sorted_idx = inputsizes.argsort()
-	inputsizes = inputsizes[sorted_idx]
+	inputsizes.sort()
 
 	if variable in ('input_sizes', 'NL_16hid_8layer', 'NL_32hid_16layer'):
 		x = (inputsizes - 5) // 3
@@ -318,18 +317,14 @@ def make_scaling_figures(epoch=1500, variable='input_sizes', keep_incomplete_see
 		ntoken = (fixed_max_input_size-5) // 3 + 5
 		dmodel = np.maximum(ntoken, inputsizes) + fixed_max_input_size
 		x = 6*dmodel*dmodel*nlayers
-	elif variable in ('dfs_padded', 'dfs_unpadded'):
+	elif variable in ('dfs_padded', 'dfs_unpadded', 'dfs_balanced'):
 		x = (inputsizes - 5) // 3
 
-	converged = np.empty(len(has_converged))
-	counter = 0
-	for _,converged_list in has_converged.items():
-		if len(converged_list) == 0:
-			converged[counter] = 0.0
-		else:
-			converged[counter] = sum(converged_list.values()) / len(converged_list)
-		counter += 1
-	converged = converged[sorted_idx]
+	converged = np.zeros(len(has_converged))
+	for inputsize,converged_list in has_converged.items():
+		idx = np.where(inputsizes == inputsize)[0].item()
+		if len(converged_list) != 0:
+			converged[idx] = sum(converged_list.values()) / len(converged_list)
 
 	fig = plt.gcf()
 	ax = plt.gca()
@@ -349,15 +344,12 @@ def make_scaling_figures(epoch=1500, variable='input_sizes', keep_incomplete_see
 	plt.clf()
 
 	mintestlosses = np.empty(len(test_losses))
-	counter = 0
+	mintestlosses.fill(float('inf'))
 	for inputsize,loss_list in test_losses.items():
+		idx = np.where(inputsizes == inputsize)[0].item()
 		losses = [v[-1] for k,v in loss_list.items() if has_converged[inputsize][k]]
-		if len(losses) == 0:
-			mintestlosses[counter] = float('inf')
-		else:
-			mintestlosses[counter] = np.min(losses) #min(loss_list.values())
-		counter += 1
-	mintestlosses = mintestlosses[sorted_idx]
+		if len(losses) != 0:
+			mintestlosses[idx] = np.min(losses) #min(loss_list.values())
 
 	if variable == 'input_sizes':
 		a,b = np.polyfit(x[converged > 0], np.log(mintestlosses[converged > 0] - np.min(mintestlosses) + 1.0e-9), 1, w=np.sqrt(mintestlosses[converged > 0]))
@@ -384,12 +376,10 @@ def make_scaling_figures(epoch=1500, variable='input_sizes', keep_incomplete_see
 	plt.clf()
 
 	mintrainlosses = np.empty(len(test_losses))
-	counter = 0
-	for _,loss_list in train_losses.items():
+	for inputsize,loss_list in train_losses.items():
+		idx = np.where(inputsizes == inputsize)[0].item()
 		losses = [v[-1] for k,v in loss_list.items()]
-		mintrainlosses[counter] = np.mean(losses)
-		counter += 1
-	mintrainlosses = mintrainlosses[sorted_idx]
+		mintrainlosses[idx] = np.mean(losses)
 
 	if variable == 'input_sizes':
 		m,b = np.polyfit(x, mintrainlosses, 1)
@@ -729,7 +719,7 @@ if do_all or '--scaling-hiddendim' in argv:
 if do_all or '--scaling-NL' in argv:
 	make_scaling_figures(epoch=535, variable='NL_16hid_8layer')
 if do_all or '--scaling-dfs' in argv:
-	make_scaling_figures(epoch=1100, variable='dfs_padded', keep_incomplete_seeds=True, train_loss_scaling_bug=False)
+	make_scaling_figures(epoch=2100, variable='dfs_balanced', train_loss_scaling_bug=False)
 if do_all or '--mi' in argv:
 	make_mi_figures(epoch=3370)
 if do_all or '--lookahead-histogram' in argv:
