@@ -1,6 +1,15 @@
 #!/bin/python
 
 import csv
+from os.path import isfile
+
+def read_csv(filename):
+	rows = []
+	with open(filename, 'r') as f:
+		reader = csv.reader(f)
+		for row in reader:
+			rows.append(row)
+	return rows
 
 from sys import argv, exit
 if len(argv) < 2:
@@ -8,6 +17,7 @@ if len(argv) < 2:
 	exit(1)
 
 writers = {}
+existing_logs = {}
 f = open(argv[1], 'r')
 
 while True:
@@ -36,9 +46,28 @@ while True:
 
 	if csv_filepath not in writers:
 		try:
-			f_out = open(csv_filepath, 'w')
-			writer = csv.writer(f_out)
-			writer.writerow(['epoch', 'training_loss', 'training_accuracy', 'test_accuracy', 'test_loss'])
+			# check to see if the file exists
+			if csv_filepath not in existing_logs:
+				try:
+					rows = read_csv(csv_filepath)
+					epoch_idx = rows[0].index('epoch')
+					last_epoch = int(rows[-1][epoch_idx])
+					existing_logs[csv_filepath] = last_epoch
+				except Exception as e:
+					if not isinstance(e, FileNotFoundError):
+						print("WARNING: Unable to read csv file '{}'.".format(csv_filepath))
+						print(e)
+					existing_logs[csv_filepath] = None
+
+			if existing_logs[csv_filepath] == None:
+				f_out = open(csv_filepath, 'w')
+				writer = csv.writer(f_out)
+				writer.writerow(['epoch', 'training_loss', 'training_accuracy', 'test_accuracy', 'test_loss'])
+			elif epoch == existing_logs[csv_filepath] + 1:
+				f_out = open(csv_filepath, 'a')
+				writer = csv.writer(f_out)
+			else:
+				continue
 			writers[csv_filepath] = writer, f_out
 		except FileNotFoundError:
 			writers[csv_filepath] = None, None
