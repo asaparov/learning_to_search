@@ -638,10 +638,6 @@ def train(max_input_size, dataset_size, distribution, max_lookahead, seed_value,
 		print('ERROR: Curriculum learning is only supported with streaming training (i.e. dataset_size = -1).')
 		stdout.flush()
 		return
-	if dfs and distribution != "simple":
-		print('ERROR: DFS training is currently only supported with the simple training distribution.')
-		stdout.flush()
-		return
 	if distribution == "crafted" and max_lookahead == None:
 		print('ERROR: Crafted training distribution is selected but `max_lookhead` argument is missing.')
 		stdout.flush()
@@ -666,10 +662,10 @@ def train(max_input_size, dataset_size, distribution, max_lookahead, seed_value,
 			generator.set_seed(seed_value)
 			print('Reserving OOD test data for backtrack distance = {}'.format(backtrack_distance))
 			stdout.flush();
-			inputs,outputs,_,_ = generator.generate_dfs_training_set(max_input_size, NUM_TEST_SAMPLES, reserved_inputs, backtrack_distance, False, True)
+			inputs,outputs,_,_ = generator.generate_dfs_training_set(max_input_size, NUM_TEST_SAMPLES, reserved_inputs, backtrack_distance, False, False, True)
 			for i in range(inputs.shape[0]):
 				reserved_inputs.add(tuple([x for x in inputs[i,:] if x != PADDING_TOKEN]))
-			if backtrack_distance == -1:
+			if backtrack_distance == 8:
 				eval_inputs, eval_outputs = inputs, outputs
 	else:
 		max_test_lookahead = ((max_input_size - 5) // 3 - 1) // 2
@@ -887,7 +883,7 @@ def train(max_input_size, dataset_size, distribution, max_lookahead, seed_value,
 
 					generate_start_time = time.perf_counter()
 					if dfs:
-						inputs, outputs, labels, num_collisions = generator.generate_dfs_training_set(max_input_size, BATCH_SIZE, reserved_inputs, -1, add_padding, True)
+						inputs, outputs, labels, num_collisions = generator.generate_dfs_training_set(max_input_size, BATCH_SIZE, reserved_inputs, self.lookahead, add_padding, True, True)
 					else:
 						inputs, outputs, labels, num_collisions = generator.generate_training_set(max_input_size, BATCH_SIZE, self.lookahead, self.max_edges, reserved_inputs, dist_from_start, True)
 					if num_collisions != 0:

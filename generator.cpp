@@ -1248,7 +1248,7 @@ py::tuple generate_dfs_training_set(const unsigned int max_input_size, const uin
 							potential_backtracks[potential_backtrack_count++] = i;
 					backtrack = choice(potential_backtracks, potential_backtrack_count);
 				}
-				num_vertices = std::max((unsigned int) requested_backtrack + 2, num_vertices);
+				num_vertices = std::max((unsigned int) backtrack + 2, num_vertices);
 			}
 			if (!generate_dfs_example(g, start, end, current_node_index, path, num_vertices, max_input_size / 24 + 1, (max_input_size - 5) / 3, backtrack, longest_path_length)) {
 				for (node& n : g) core::free(n);

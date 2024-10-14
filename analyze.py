@@ -231,19 +231,19 @@ def print_graph(input):
 	QUERY_PREFIX_TOKEN = (n-5) // 3 + 4
 	PADDING_TOKEN = (n-5) // 3 + 3
 	EDGE_PREFIX_TOKEN = (n-5) // 3 + 2
-
-	start_index = np.sum(input == PADDING_TOKEN)
-	num_edges = np.sum(input == EDGE_PREFIX_TOKEN)
+	PATH_PREFIX_TOKEN = (n-5) // 3 + 1
 
 	forward_edges = []
 	for i in range((n - 5) // 3 + 1):
 		forward_edges.append([])
-	for i in range((n+2)%3, n-5, 3):
-		if i >= start_index:
-			forward_edges[input[i].item()].append(input[i+1].item())
+	edge_indices = np.nonzero(input == EDGE_PREFIX_TOKEN)[0] + 1
+	for i in edge_indices:
+		forward_edges[input[i].item()].append(input[i+1].item())
 
 	# find the major paths from the start vertex in the graph
-	queue = [(input[-1].item(),None,0)]
+	query_index = np.nonzero(input == QUERY_PREFIX_TOKEN)[0][-1].item()
+	start = input[query_index + 1]
+	queue = [(start,None,0)]
 	distances_from_start = {}
 	while len(queue) != 0:
 		current, parent, distance = queue.pop()
@@ -255,6 +255,8 @@ def print_graph(input):
 			queue.append((child,current,distance+1))
 	# find the vertices with distance at least that from the start to the goal vertex
 	goal = input[np.nonzero(input == QUERY_PREFIX_TOKEN)[0]+2].item()
+	if goal not in distances_from_start:
+		import pdb; pdb.set_trace()
 	goal_distance,_ = distances_from_start[goal]
 	furthest_vertices = []
 	for vertex,(distance,_) in distances_from_start.items():
@@ -298,7 +300,11 @@ def print_graph(input):
 			if (src,dst) not in printed_edges:
 				print(str(src) + ' -> ' + str(dst))
 				printed_edges.append((src,dst))
-	print('Start: ' + str(input[-1].item()) + ', Goal: ' + str(goal))
+	start = input[np.nonzero(input == QUERY_PREFIX_TOKEN)[0]+1].item()
+	print('Start: ' + str(start) + ', Goal: ' + str(goal))
+
+	path_prefix_index = np.nonzero(input == PATH_PREFIX_TOKEN)[0][-1].item()
+	print('Path: ' + str(input[(path_prefix_index+1):]))
 
 
 def do_evaluate_model(filepath, star_distribution=False, max_backtrack_distance=None):
@@ -318,8 +324,7 @@ def do_evaluate_model(filepath, star_distribution=False, max_backtrack_distance=
 
 	is_dfs = 'dfs' in dirname
 	if max_backtrack_distance == None:
-		# TODO: i think we could theoretically generate examples with `backtrack_distance = (max_input_size - 4) // 4 - 1`, but the rejection rate in the current rejection sampling method is too high to feasibly generate such samples
-		max_backtrack_distance = (max_input_size - 4) // 4 - 2
+		max_backtrack_distance = (max_input_size - 4) // 4 - 1
 
 	if not hasattr(model, 'looped'):
 		model.looped = False
@@ -343,9 +348,17 @@ def do_evaluate_model(filepath, star_distribution=False, max_backtrack_distance=
 	if is_dfs:
 		for backtrack_distance in [-1] + list(range(0, max_backtrack_distance + 1)):
 			generator.set_seed(get_seed(1))
-			inputs,outputs,_,_ = generator.generate_dfs_training_set(max_input_size, NUM_TEST_SAMPLES, reserved_inputs, backtrack_distance, False, True)
+			inputs,outputs,labels,_ = generator.generate_dfs_training_set(max_input_size, NUM_TEST_SAMPLES, reserved_inputs, backtrack_distance, False, False, True)
 			test_acc,test_loss,predictions = evaluate_model(model, inputs, outputs)
 			confidence_int = binomial_confidence_int(test_acc, NUM_TEST_SAMPLES)
+			'''print("Mistaken inputs:")
+			predictions = np.array(predictions.cpu())
+			incorrect_indices,_ = np.nonzero(np.take_along_axis(outputs, predictions[:,None], axis=1) == 0)
+			np.set_printoptions(threshold=10_000)
+			for incorrect_index in incorrect_indices:
+				print_graph(inputs[incorrect_index, :])
+				print("Expected answer: {}, predicted answer: {} (label: {})\n".format(np.nonzero(outputs[incorrect_index])[0], predictions[incorrect_index], labels[incorrect_index]))'''
+			import pdb; pdb.set_trace()
 			print("Test accuracy = %.2f±%.2f, test loss = %f" % (test_acc, confidence_int, test_loss))
 			test_accuracies.append((test_acc, confidence_int, test_loss))
 	elif star_distribution:
