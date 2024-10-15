@@ -624,7 +624,7 @@ def generate_training_set(max_input_size, dataset_size, max_lookahead, reserved_
 
 	return inputs, outputs, valid_outputs, num_collisions
 
-def train(max_input_size, dataset_size, distribution, max_lookahead, seed_value, nlayers, hidden_dim, bidirectional, absolute_pos_emb, learnable_token_emb, toeplitz_attn, toeplitz_reg, toeplitz_pos_only, add_padding, ablate, pre_ln, curriculum_mode, looped, dfs):
+def train(max_input_size, dataset_size, distribution, max_lookahead, seed_value, nlayers, nhead, hidden_dim, bidirectional, absolute_pos_emb, learnable_token_emb, toeplitz_attn, toeplitz_reg, toeplitz_pos_only, add_padding, ablate, pre_ln, curriculum_mode, looped, dfs):
 	generator.set_seed(seed_value)
 	seed(seed_value)
 	torch.manual_seed(seed_value)
@@ -755,6 +755,8 @@ def train(max_input_size, dataset_size, distribution, max_lookahead, seed_value,
 		filename += '_looped'
 	if dfs:
 		filename += '_dfs'
+	if nhead != 1:
+		filename += '_nhead' + str(nhead)
 	if isdir(filename):
 		existing_epochs = [int(ckpt[(ckpt.rfind('epoch') + len('epoch')):-len('.pt')]) for ckpt in listdir(filename) if ckpt.startswith('epoch')]
 	else:
@@ -762,7 +764,6 @@ def train(max_input_size, dataset_size, distribution, max_lookahead, seed_value,
 		makedirs(filename)
 
 	ntoken = (max_input_size-5) // 3 + 5
-	nhead = 1
 	d_hid = ntoken + hidden_dim
 	dropout = 0
 	if ablate == "none":
@@ -1096,6 +1097,7 @@ if __name__ == "__main__":
 	parser.add_argument("--dataset-size", type=int)
 	parser.add_argument("--max-lookahead", type=int, required=False)
 	parser.add_argument("--nlayers", type=int)
+	parser.add_argument("--nhead", type=int, default=1, required=False)
 	parser.add_argument("--hidden-dim", type=int)
 	parser.add_argument("--seed", type=int, default=1)
 	parser.add_argument("--bidirectional", type=parse_bool_arg, required=True, metavar="'y/n'")
@@ -1119,6 +1121,7 @@ if __name__ == "__main__":
 		distribution=args.distribution,
 		max_lookahead=args.max_lookahead,
 		seed_value=args.seed,
+		nhead=args.nhead,
 		nlayers=args.nlayers,
 		hidden_dim=args.hidden_dim,
 		bidirectional=args.bidirectional,
