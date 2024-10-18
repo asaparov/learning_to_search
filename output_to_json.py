@@ -33,7 +33,9 @@ while True:
 
 	while True:
 		line = f.readline()
-		if line.startswith('training accuracy: '):
+		if line == '':
+			break
+		elif line.startswith('training accuracy: '):
 			training_accuracy = float(line[len('training accuracy: '):line.rindex('±')])
 		elif line.startswith('test accuracy = '):
 			tokens = line.split(',')
@@ -43,6 +45,9 @@ while True:
 			ckpt_filepath = line[len('saving to "'):line.rindex('"')]
 			csv_filepath = '/'.join(ckpt_filepath.split('/')[:-1]) + '/log.csv'
 			break
+
+	if line == '':
+		break
 
 	if csv_filepath not in writers:
 		try:
