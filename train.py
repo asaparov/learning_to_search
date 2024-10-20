@@ -624,13 +624,13 @@ def generate_training_set(max_input_size, dataset_size, max_lookahead, reserved_
 
 	return inputs, outputs, valid_outputs, num_collisions
 
-def train(max_input_size, dataset_size, distribution, max_lookahead, seed_value, nlayers, nhead, hidden_dim, bidirectional, absolute_pos_emb, learnable_token_emb, toeplitz_attn, toeplitz_reg, toeplitz_pos_only, add_padding, ablate, pre_ln, curriculum_mode, looped, dfs):
+def train(max_input_size, dataset_size, distribution, max_lookahead, seed_value, nlayers, nhead, hidden_dim, bidirectional, absolute_pos_emb, learnable_token_emb, toeplitz_attn, toeplitz_reg, toeplitz_pos_only, add_padding, ablate, pre_ln, curriculum_mode, looped, dfs, warm_up):
 	generator.set_seed(seed_value)
 	seed(seed_value)
 	torch.manual_seed(seed_value)
 	np.random.seed(seed_value)
 	PADDING_TOKEN = (max_input_size-5) // 3 + 3
-	BATCH_SIZE = 2 ** 10
+	BATCH_SIZE = 2 ** 8
 	print('Number of available CPUs: {}'.format(len(sched_getaffinity(0))))
 	stdout.flush()
 
@@ -757,6 +757,8 @@ def train(max_input_size, dataset_size, distribution, max_lookahead, seed_value,
 		filename += '_dfs'
 	if nhead != 1:
 		filename += '_nhead' + str(nhead)
+	if warm_up != 0:
+		filename += '_warmup' + str(warm_up)
 	if isdir(filename):
 		existing_epochs = [int(ckpt[(ckpt.rfind('epoch') + len('epoch')):-len('.pt')]) for ckpt in listdir(filename) if ckpt.startswith('epoch')]
 	else:
@@ -813,7 +815,9 @@ def train(max_input_size, dataset_size, distribution, max_lookahead, seed_value,
 		torch.set_rng_state(torch_random_state.cpu())
 
 	loss_func = CrossEntropyLoss(ignore_index=PADDING_TOKEN, reduction='mean')
-	optimizer = SophiaG((p for p in model.parameters() if p.requires_grad), lr=1.0e-5, weight_decay=0.1)
+	INITIAL_LR = 1.0e-4
+	TARGET_LR = 1.0e-5
+	optimizer = SophiaG((p for p in model.parameters() if p.requires_grad), lr=TARGET_LR, weight_decay=0.1)
 
 	log_interval = 1
 	eval_interval = 1
@@ -907,6 +911,8 @@ def train(max_input_size, dataset_size, distribution, max_lookahead, seed_value,
 		iterable_dataset = StreamingDataset(epoch * STREAMING_BLOCK_SIZE // BATCH_SIZE, model.lookahead, model.max_edges)
 		train_loader = DataLoader(iterable_dataset, batch_size=None, num_workers=NUM_DATA_WORKERS, pin_memory=True, prefetch_factor=8)
 
+	examples_seen = epoch * STREAMING_BLOCK_SIZE
+	LR_DECAY_TIME = 2**24 # examples seen
 	while True:
 		start_time = time.perf_counter()
 		transfer_time = 0.0
@@ -918,6 +924,18 @@ def train(max_input_size, dataset_size, distribution, max_lookahead, seed_value,
 		reinit_data_loader = False
 		for batch in (train_loader if dataset_size == -1 else cycle(train_loader)):
 			batch_start_time = time.perf_counter()
+
+			if warm_up != 0:
+				if examples_seen < warm_up:
+					lr = examples_seen * INITIAL_LR / warm_up
+				elif examples_seen < warm_up + LR_DECAY_TIME:
+					lr = (0.5*np.cos(np.pi * (examples_seen - warm_up) / LR_DECAY_TIME) + 0.5) * (INITIAL_LR - TARGET_LR) + TARGET_LR
+				else:
+					lr = TARGET_LR
+			else:
+				lr = TARGET_LR
+			for param_group in optimizer.param_groups:
+				param_group['lr'] = lr
 			model.train()
 			optimizer.zero_grad()
 
@@ -925,6 +943,7 @@ def train(max_input_size, dataset_size, distribution, max_lookahead, seed_value,
 			input = input.to(device, non_blocking=True)
 			output = output.to(device, non_blocking=True)
 			label = label.to(device, non_blocking=True)
+			examples_seen += BATCH_SIZE
 
 			#if device.type == 'cuda':
 			#	torch.cuda.synchronize(device)
@@ -979,6 +998,7 @@ def train(max_input_size, dataset_size, distribution, max_lookahead, seed_value,
 					else:
 						print("throughput = {} examples/s".format(effective_dataset_size / elapsed_time))
 					print('Total number of training examples generated that are in the test set: {}'.format(iterable_dataset.total_collisions.value))
+					print('Learning rate: {}'.format(lr))
 					print("[PROFILE] Total batch time: {}s".format(elapsed_time))
 					print("[PROFILE] Time to transfer data to GPU: {}s".format(transfer_time))
 					print("[PROFILE] Time to train: {}s".format(train_time))
@@ -1113,6 +1133,7 @@ if __name__ == "__main__":
 	parser.add_argument("--looped", type=parse_bool_arg, default=False)
 	parser.add_argument("--dfs", type=parse_bool_arg, default=False)
 	parser.add_argument("--distribution", type=str, default="crafted", choices=["simple", "crafted"])
+	parser.add_argument("--warm-up", type=int, default=0, required=False)
 	args = parser.parse_args()
 
 	train(
@@ -1135,4 +1156,5 @@ if __name__ == "__main__":
 		pre_ln=args.preLN,
 		curriculum_mode=args.curriculum,
 		looped=args.looped,
-		dfs=args.dfs)
+		dfs=args.dfs,
+		warm_up=args.warm_up)
