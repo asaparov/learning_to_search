@@ -38,7 +38,9 @@ done
 for s in $(seq 1 5); do
 	rm dfs_results/checkpoints_v3_3layer_inputsize112_maxlookahead26_seed${s}_trainstreaming_nomask_unablated_dfs/log.csv 2> /dev/null
 	rm dfs_results/checkpoints_v3_16layer_inputsize112_maxlookahead26_seed${s}_trainstreaming_hiddendim128_nomask_unablated_dfs_nhead4/log.csv 2> /dev/null
+	rm dfs_results/checkpoints_v3_24layer_inputsize112_maxlookahead26_seed${s}_trainstreaming_hiddendim192_nomask_unablated_dfs_nhead4/log.csv 2> /dev/null
 	rm dfs_results/checkpoints_v3_32layer_inputsize112_maxlookahead26_seed${s}_trainstreaming_hiddendim256_nomask_unablated_dfs_nhead4/log.csv 2> /dev/null
+	rm dfs_results/checkpoints_v3_32layer_inputsize112_maxlookahead26_seed${s}_trainstreaming_hiddendim384_nomask_unablated_dfs_nhead4/log.csv 2> /dev/null
 done
 
 for s in $(seq 1 5); do
@@ -49,12 +51,14 @@ python output_to_json.py run_train212.out
 python output_to_json.py run_train242.out
 python output_to_json.py run_train252.out
 python output_to_json.py run_train262.out
-for s in $(seq 278 287); do
+for s in $(seq 278 297); do
 	python output_to_json.py run_train${s}.out
 done
 
 for s in $(seq 1 5); do
 	mv dfs_results/checkpoints_v3_3layer_inputsize112_maxlookahead26_seed${s}_trainstreaming_nomask_unablated_dfs/log.csv dfs_csvs/scaling_dfs_params/seed_${s}/3layer_16hid_1head.csv
 	mv dfs_results/checkpoints_v3_16layer_inputsize112_maxlookahead26_seed${s}_trainstreaming_hiddendim128_nomask_unablated_dfs_nhead4/log.csv dfs_csvs/scaling_dfs_params/seed_${s}/16layer_128hid_4head.csv
+	mv dfs_results/checkpoints_v3_24layer_inputsize112_maxlookahead26_seed${s}_trainstreaming_hiddendim192_nomask_unablated_dfs_nhead4/log.csv dfs_csvs/scaling_dfs_params/seed_${s}/24layer_192hid_4head.csv
 	mv dfs_results/checkpoints_v3_32layer_inputsize112_maxlookahead26_seed${s}_trainstreaming_hiddendim256_nomask_unablated_dfs_nhead4/log.csv dfs_csvs/scaling_dfs_params/seed_${s}/32layer_256hid_4head.csv
+	mv dfs_results/checkpoints_v3_32layer_inputsize112_maxlookahead26_seed${s}_trainstreaming_hiddendim384_nomask_unablated_dfs_nhead4/log.csv dfs_csvs/scaling_dfs_params/seed_${s}/32layer_384hid_4head.csv
 done

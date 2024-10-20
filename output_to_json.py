@@ -35,6 +35,11 @@ while True:
 		line = f.readline()
 		if line == '':
 			break
+		elif line.startswith('epoch = '):
+			# this is a continuation of a previous training run where the output from the last epoch is incomplete
+			tokens = line.split(',')
+			epoch = int(tokens[0][len('epoch = '):])
+			training_loss = float(tokens[1][tokens[1].rindex('=')+1:].strip())
 		elif line.startswith('training accuracy: '):
 			training_accuracy = float(line[len('training accuracy: '):line.rindex('±')])
 		elif line.startswith('test accuracy = '):
