@@ -161,8 +161,10 @@ def read_csv(filename):
 	return rows
 
 def make_scaling_figures(epoch=1500, variable='input_sizes', keep_incomplete_seeds=False, train_loss_scaling_bug=True):
-	if variable in ('dfs_padded','dfs_unpadded', 'dfs_balanced'):
+	if variable in ('dfs_padded','dfs_unpadded', 'dfs_balanced', 'dfs_params'):
 		csv_dir = 'dfs_csvs/'
+	elif variable in ('direct_schedule', 'dfs_schedule'):
+		csv_dir = 'schedule_csvs/'
 	else:
 		csv_dir = 'scaling_experiments/csvs/'
 
@@ -177,27 +179,48 @@ def make_scaling_figures(epoch=1500, variable='input_sizes', keep_incomplete_see
 	TEST_LOSS_WINDOW = 40
 	IGNORE_HIDS = [2048,4096]
 	IGNORE_LAYERS = [256,1024,2048]
+	IGNORE_INPUTSIZES = [138]
 	IGNORE_NL_INPUTSIZES = [96,112,128]
 	for seed in sorted(seeds):
 		if variable == 'input_sizes':
-			var_name = 'Input size'
+			var_name = 'input size'
 			prefix = '1e-5_seed' + str(seed) + '_'
 		elif variable == 'layers':
-			var_name = 'Num layers'
+			var_name = 'num layers'
 			prefix = 'nlayers_'
 		elif variable == 'hidden_dim':
-			var_name = 'Hidden dim'
+			var_name = 'hidden dim'
 			prefix = 'hid_'
 		elif variable in ('NL_16hid_8layer', 'NL_32hid_16layer'):
-			var_name = 'Input size'
+			var_name = 'input size'
 			prefix = 'input_'
 		elif variable in ('dfs_padded', 'dfs_unpadded', 'dfs_balanced'):
-			var_name = 'Input size'
+			var_name = 'input size'
 			prefix = 'input_'
+		elif variable == 'dfs_params':
+			var_name = 'non-embedding parameters'
+			prefix = ''
+		elif variable in ('direct_schedule', 'dfs_schedule'):
+			var_name = 'warmup'
+			prefix = 'warmup_'
 		inputs = [f for f in listdir(csv_dir + 'scaling_' + variable + '/seed_' + str(seed)) if f.startswith(prefix) and f.endswith('.csv')]
 		for f in inputs:
-			inputsize = int(f[len(prefix):-len('.csv')])
-			if variable == 'hidden_dim' and inputsize in IGNORE_HIDS:
+			if variable == 'dfs_params':
+				tokens = f[:-len('.csv')].split('_')
+				if len(tokens) != 3 or not tokens[0].endswith('layer') or not tokens[1].endswith('hid') or not tokens[2].endswith('head'):
+					continue
+				nlayers = int(tokens[0][:-len('layer')])
+				hid = int(tokens[1][:-len('hid')])
+				nheads = int(tokens[2][:-len('head')])
+				fixed_max_input_size = 112
+				ntoken = (fixed_max_input_size-5) // 3 + 5
+				dmodel = max(ntoken, hid) + fixed_max_input_size
+				inputsize = 6*dmodel*dmodel*nlayers
+			else:
+				inputsize = int(f[len(prefix):-len('.csv')])
+			if variable == 'input_sizes' and inputsize in IGNORE_INPUTSIZES:
+				continue
+			elif variable == 'hidden_dim' and inputsize in IGNORE_HIDS:
 				continue
 			elif variable == 'layers' and inputsize in IGNORE_LAYERS:
 				continue
@@ -206,7 +229,7 @@ def make_scaling_figures(epoch=1500, variable='input_sizes', keep_incomplete_see
 			csv = read_csv(csv_dir + 'scaling_{}/seed_{}/{}'.format(variable, seed, f))
 			csv[0] = [s.replace(' ','_').lower() for s in csv[0]]
 			if 'epoch' not in csv[0]:
-				print('WARNING: {} {}, seed {}, has no results.'.format(var_name, inputsize, seed))
+				print('WARNING: {} {}, seed {}, has no results.'.format(var_name.capitalize(), inputsize, seed))
 				continue
 			epoch_idx = csv[0].index('epoch')
 			train_loss_idx = csv[0].index('training_loss')
@@ -215,9 +238,10 @@ def make_scaling_figures(epoch=1500, variable='input_sizes', keep_incomplete_see
 			try:
 				row_idx = next(i for i in range(1,len(csv)) if int(csv[i][epoch_idx]) == epoch)
 			except StopIteration:
-				print('WARNING: {} {}, seed {}, is missing epoch {}.'.format(var_name, inputsize, seed, epoch))
-				continue
-			row = csv[row_idx]
+				print('WARNING: {} {}, seed {}, is missing epoch {}.'.format(var_name.capitalize(), inputsize, seed, epoch))
+				if not keep_incomplete_seeds:
+					continue
+				row_idx = len(csv) - 1
 			train_loss_column = np.array([float(csv[i][train_loss_idx]) if i < len(csv) else float(csv[-1][train_loss_idx]) for i in range(1,row_idx+TRAIN_LOSS_WINDOW+2)])
 			train_loss_column = np.concatenate((np.ones(TRAIN_LOSS_WINDOW)*float(csv[1][train_loss_idx]), train_loss_column))
 			if train_loss_scaling_bug:
@@ -240,7 +264,7 @@ def make_scaling_figures(epoch=1500, variable='input_sizes', keep_incomplete_see
 
 			if inputsize not in test_losses:
 				if not first_seed:
-					print('WARNING: {} {} is missing seed {}.'.format(var_name, inputsize, seed))
+					print('WARNING: {} {} is missing seed {}.'.format(var_name.capitalize(), inputsize, seed))
 				train_losses[inputsize] = {}
 				test_losses[inputsize] = {}
 				has_converged[inputsize] = {}
@@ -254,7 +278,9 @@ def make_scaling_figures(epoch=1500, variable='input_sizes', keep_incomplete_see
 		for seed in seeds:
 			if seed in incomplete_seeds:
 				continue
-			if any([seed not in losses for losses in train_losses.values()]):
+			missing_inputsizes = [inputsize for inputsize,losses in train_losses.items() if seed not in losses]
+			if len(missing_inputsizes) != 0:
+				print('WARNING: Seed {} is missing {} {}.'.format(seed, var_name, inputsize))
 				incomplete_seeds.append(seed)
 
 		# remove incomplete seeds from results
@@ -287,7 +313,7 @@ def make_scaling_figures(epoch=1500, variable='input_sizes', keep_incomplete_see
 		xaxis = 'Number of transformer layers'
 		legend_title = 'Number of\ntransformer layers'
 		xmin, xmax = 4, 45
-	elif variable == 'hidden_dim':
+	elif variable == 'hidden_dim' or variable == 'dfs_params':
 		xaxis = 'Non-embedding parameters'
 		legend_title = 'Non-embedding\nparameters'
 		nlayers = 8
@@ -300,6 +326,10 @@ def make_scaling_figures(epoch=1500, variable='input_sizes', keep_incomplete_see
 		xaxis = 'Maximum input graph size'
 		legend_title = 'Maximum input graph size'
 		xmin, xmax = 10, 65
+	elif variable in ('dfs_schedule', 'direct_schedule'):
+		xaxis = 'Warmup steps'
+		legend_title = 'Warmup steps'
+		xmin, xmax = 0, 300000
 
 	inputsizes = np.empty(len(test_losses), dtype=np.uint64)
 	counter = 0
@@ -310,7 +340,7 @@ def make_scaling_figures(epoch=1500, variable='input_sizes', keep_incomplete_see
 
 	if variable in ('input_sizes', 'NL_16hid_8layer', 'NL_32hid_16layer'):
 		x = (inputsizes - 5) // 3
-	elif variable == 'layers':
+	elif variable == 'layers' or variable == 'dfs_params':
 		x = inputsizes
 	elif variable == 'hidden_dim':
 		fixed_max_input_size = 98
@@ -319,6 +349,8 @@ def make_scaling_figures(epoch=1500, variable='input_sizes', keep_incomplete_see
 		x = 6*dmodel*dmodel*nlayers
 	elif variable in ('dfs_padded', 'dfs_unpadded', 'dfs_balanced'):
 		x = (inputsizes - 5) // 3
+	elif variable in ('dfs_schedule', 'direct_schedule'):
+		x = inputsizes / 2**8
 
 	converged = np.zeros(len(has_converged))
 	for inputsize,converged_list in has_converged.items():
@@ -333,7 +365,7 @@ def make_scaling_figures(epoch=1500, variable='input_sizes', keep_incomplete_see
 	plt.xlim(xmin, xmax)
 	plt.ylim(-0.05, 1.05)
 	ax.set_xscale("log", base=10)
-	if variable != 'hidden_dim':
+	if variable not in ('hidden_dim', 'dfs_params', 'direct_schedule', 'dfs_schedule'):
 		ax.xaxis.set_major_formatter(mticker.FormatStrFormatter('%d'))
 		ax.xaxis.set_minor_formatter(mticker.FormatStrFormatter('%d'))
 	plt.xlabel(xaxis)
@@ -354,26 +386,28 @@ def make_scaling_figures(epoch=1500, variable='input_sizes', keep_incomplete_see
 	if variable == 'input_sizes':
 		a,b = np.polyfit(x[converged > 0], np.log(mintestlosses[converged > 0] - np.min(mintestlosses) + 1.0e-9), 1, w=np.sqrt(mintestlosses[converged > 0]))
 
-	fig = plt.gcf()
-	ax = plt.gca()
-	fig.set_size_inches(4, 2.5, forward=True)
-	if variable == 'input_sizes':
-		x_fit = np.arange(xmin,xmax,(xmax-xmin)/10000)
-		ax.plot(x_fit, mintestlosses[0]-1.0e-9+np.exp(b+a*x_fit), '--', color='k', linewidth=0.5)
-	ax.plot(x[converged > 0], mintestlosses[converged > 0], '.')
-	plt.xlim(xmin, xmax)
-	#plt.ylim(0.0001, 10.0)
-	ax.set_xscale("log", base=10)
-	ax.set_yscale("log", base=10)
-	if variable != 'hidden_dim':
-		ax.xaxis.set_major_formatter(mticker.FormatStrFormatter('%d'))
-		ax.xaxis.set_minor_formatter(mticker.FormatStrFormatter('%d'))
-	plt.xlabel(xaxis)
-	plt.ylabel('Minimum test loss')
-	plt.grid(True, axis='x', which='both')
-	plt.tight_layout()
-	fig.savefig('figures/scaling_' + variable + '_test.pdf', dpi=256)
-	plt.clf()
+	if np.sum(converged > 0) > 1:
+		fig = plt.gcf()
+		ax = plt.gca()
+		fig.set_size_inches(4, 2.5, forward=True)
+		if variable == 'input_sizes':
+			x_fit = np.arange(xmin,xmax,(xmax-xmin)/10000)
+			ax.plot(x_fit, mintestlosses[0]-1.0e-9+np.exp(b+a*x_fit), '--', color='k', linewidth=0.5)
+		ax.plot(x[converged > 0], mintestlosses[converged > 0], '.')
+		plt.xlim(xmin, xmax)
+		#plt.ylim(0.0001, 10.0)
+		ax.set_xscale("log", base=10)
+		ax.set_yscale("log", base=10)
+		if variable not in ('hidden_dim', 'dfs_params', 'direct_schedule', 'dfs_schedule'):
+			ax.xaxis.set_major_formatter(mticker.FormatStrFormatter('%d'))
+			ax.xaxis.set_minor_formatter(mticker.FormatStrFormatter('%d'))
+		plt.xlabel(xaxis)
+		plt.ylabel('Minimum test loss')
+		plt.grid(True, axis='x', which='both')
+		import pdb; pdb.set_trace()
+		plt.tight_layout()
+		fig.savefig('figures/scaling_' + variable + '_test.pdf', dpi=256)
+		plt.clf()
 
 	mintrainlosses = np.empty(len(test_losses))
 	for inputsize,loss_list in train_losses.items():
@@ -395,7 +429,7 @@ def make_scaling_figures(epoch=1500, variable='input_sizes', keep_incomplete_see
 	#plt.ylim(0.0001, 10.0)
 	ax.set_xscale("log", base=10)
 	ax.set_yscale("log", base=10)
-	if variable != 'hidden_dim':
+	if variable not in ('hidden_dim', 'dfs_params', 'direct_schedule', 'dfs_schedule'):
 		ax.xaxis.set_major_formatter(mticker.FormatStrFormatter('%d'))
 		ax.xaxis.set_minor_formatter(mticker.FormatStrFormatter('%d'))
 	plt.xlabel(xaxis)
@@ -410,10 +444,13 @@ def make_scaling_figures(epoch=1500, variable='input_sizes', keep_incomplete_see
 	end_color_point = 0.85
 	colors = {}
 	counter = 0
-	for inputsize in inputsizes:
-		t = counter/(len(inputsizes) - 1)
-		colors[inputsize] = cmap(t*start_color_point + (1-t)*end_color_point)
-		counter += 1
+	if len(inputsizes) == 1:
+		colors[inputsizes[0]] = cmap(0.0)
+	else:
+		for inputsize in inputsizes:
+			t = counter/(len(inputsizes) - 1)
+			colors[inputsize] = cmap(t*start_color_point + (1-t)*end_color_point)
+			counter += 1
 
 	fig = plt.gcf()
 	ax = plt.gca()
@@ -428,7 +465,7 @@ def make_scaling_figures(epoch=1500, variable='input_sizes', keep_incomplete_see
 			max_x = max(examples_seen[-1], max_x)
 			if inputsize not in handles:
 				handles[inputsize] = (line, x[i])
-	if variable == 'hidden_dim':
+	if variable in ('hidden_dim', 'dfs_params'):
 		labels = ['{0:.1f}M'.format(l/1000000) for _,(_,l) in handles.items()]
 	else:
 		labels = [str(l) for _,(_,l) in handles.items()]
@@ -461,7 +498,7 @@ def make_scaling_figures(epoch=1500, variable='input_sizes', keep_incomplete_see
 			max_x = max(examples_seen[-1], max_x)
 			if inputsize not in handles:
 				handles[inputsize] = (line, x[i])
-	if variable == 'hidden_dim':
+	if variable in ('hidden_dim', 'dfs_params'):
 		labels = ['{0:.1f}M'.format(l/1000000) for _,(_,l) in handles.items()]
 	else:
 		labels = [str(l) for _,(_,l) in handles.items()]
@@ -498,7 +535,7 @@ def make_scaling_figures(epoch=1500, variable='input_sizes', keep_incomplete_see
 		line, = ax.plot(examples_seen, np.min(all_losses, axis=0), c=colors[inputsize], alpha=0.8)
 		max_x = max(examples_seen[-1], max_x)
 		handles[inputsize] = (line, x[i])
-	if variable == 'hidden_dim':
+	if variable in ('hidden_dim', 'dfs_params', 'direct_schedule', 'dfs_schedule'):
 		labels = ['{0:.1f}M'.format(l/1000000) for _,(_,l) in handles.items()]
 	else:
 		labels = [str(l) for _,(_,l) in handles.items()]
@@ -535,7 +572,7 @@ def make_scaling_figures(epoch=1500, variable='input_sizes', keep_incomplete_see
 		line, = ax.plot(examples_seen, np.min(all_losses, axis=0), c=colors[inputsize], alpha=0.8)
 		max_x = max(examples_seen[-1], max_x)
 		handles[inputsize] = (line, x[i])
-	if variable == 'hidden_dim':
+	if variable in ('hidden_dim', 'dfs_params', 'direct_schedule', 'dfs_schedule'):
 		labels = ['{0:.1f}M'.format(l/1000000) for _,(_,l) in handles.items()]
 	else:
 		labels = [str(l) for _,(_,l) in handles.items()]
@@ -717,9 +754,13 @@ if do_all or '--scaling-layers' in argv:
 if do_all or '--scaling-hiddendim' in argv:
 	make_scaling_figures(epoch=900, variable='hidden_dim')
 if do_all or '--scaling-NL' in argv:
-	make_scaling_figures(epoch=535, variable='NL_16hid_8layer')
+	make_scaling_figures(epoch=1120, variable='NL_16hid_8layer')
 if do_all or '--scaling-dfs' in argv:
-	make_scaling_figures(epoch=2100, variable='dfs_balanced', train_loss_scaling_bug=False)
+	make_scaling_figures(epoch=2845, variable='dfs_balanced', train_loss_scaling_bug=False)
+if do_all or '--scaling-dfs-params' in argv:
+	make_scaling_figures(epoch=500, variable='dfs_params', keep_incomplete_seeds=True, train_loss_scaling_bug=False)
+if do_all or '--scaling-schedule' in argv:
+	make_scaling_figures(epoch=1550, variable='dfs_schedule', keep_incomplete_seeds=True, train_loss_scaling_bug=False)
 if do_all or '--mi' in argv:
 	make_mi_figures(epoch=3370)
 if do_all or '--lookahead-histogram' in argv:
