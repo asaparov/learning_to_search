@@ -2,3 +2,7 @@
 *.sbatch
 *.out
 __pycache__
+
+.venv
+.idea
+*.so

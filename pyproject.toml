@@ -1,0 +1,13 @@
+[project]
+name = "learning-to-search"
+
+[tool.poetry]
+package-mode = false
+
+[tool.poetry.dependencies]
+python = "~3.11"
+numpy = "^1.24.3"
+pybind11 = "^2.13.6"
+torch = "^2.5.0"
+
+# TODO: Configure build system for the C++ code.
