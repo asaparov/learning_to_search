@@ -1386,10 +1386,714 @@ py::tuple generate_dfs_training_set(const unsigned int max_input_size, const uin
 	return py::make_tuple(inputs, outputs, labels, num_collisions);
 }
 
+/* TODO: for debugging; delete these */
+bool debug_flag = false;
+unsigned int debug_counter = 0;
+
+bool generate_si_example(array<node>& vertices, const node*& start, const node*& end, unsigned int& current_node_index, array<const node*>& path, unsigned int num_vertices, unsigned int max_num_parents, unsigned int max_vertex_id, unsigned int max_edges, unsigned int frontier_size, unsigned int branch_size)
+{
+	if (!vertices.ensure_capacity(num_vertices))
+		return false;
+	for (unsigned int i = 0; i < num_vertices; i++)
+		if (!init(vertices[i], i)) return false;
+	vertices.length = num_vertices;
+
+	/* sample some parent/ancestor vertices */
+	constexpr float ALPHA = 1.0f;
+	unsigned int* out_degrees = (unsigned int*) calloc(num_vertices, sizeof(unsigned int));
+	if (out_degrees == nullptr)
+		return false;
+	for (unsigned int i = 1; i < num_vertices; i++) {
+		/* sample the number of child and parent vertices */
+		unsigned int num_parents = randrange(1, max_num_parents);
+		num_parents = std::min(num_parents, i);
+
+		/* sample the parents of this new node */
+		float total_probability = 0.0f;
+		array<float> probabilities(i);
+		for (unsigned int j = 0; j < i; j++) {
+			probabilities[j] = ALPHA + out_degrees[j];
+			total_probability += probabilities[j];
+		}
+		probabilities.length = i;
+
+		array<unsigned int> sampled_parents(std::max(1u, num_parents));
+		for (unsigned int j = 0; j < num_parents; j++) {
+			unsigned int u = sample_categorical(probabilities.data, total_probability, probabilities.length);
+			sampled_parents.add(u);
+			total_probability -= probabilities[u];
+			probabilities[u] = 0.0f;
+		}
+
+		for (unsigned int parent_id : sampled_parents) {
+			vertices[parent_id].children.add(&vertices[i]);
+			vertices[i].parents.add(&vertices[parent_id]);
+			out_degrees[parent_id] += 1;
+		}
+	}
+	free(out_degrees);
+
+	/* the current vertex must have at least `branch_size` vertices following it */
+	current_node_index = randrange(num_vertices - max(frontier_size, branch_size));
+	node* current_node = &vertices[current_node_index];
+
+	/* randomly sample the start and goal vertices */
+	unsigned int start_index = randrange(current_node_index + 1);
+	unsigned int end_index = randrange(current_node_index + 1, num_vertices);
+	start = &vertices[start_index]; end = &vertices[end_index];
+
+//debug_flag = true;
+if (debug_flag) {
+fprintf(stderr, "GRAPH before sampling frontier: (%lu vertices; requested frontier_size: %u, requested branch_size: %u)\n", vertices.length, frontier_size, branch_size);
+fprintf(stderr, "start: %u, goal: %u, current: %u\n", vertices[start_index].id, vertices[end_index].id, vertices[current_node_index].id);
+for (const node& vertex : vertices) {
+    for (const node* child : vertex.children) {
+        fprintf(stderr, "%u -> %u\n", vertex.id, child->id);
+    }
+}
+fprintf(stderr, "PATH: ");
+for (unsigned int i = 0; i < path.length; i += 2) {
+    if (i != 0) fprintf(stderr, ", ");
+    fprintf(stderr, "(%u, %u)", path[i]->id, path[i + 1]->id);
+}
+fprintf(stderr, "\n");
+}
+
+	/* randomly sample the frontier (visited vertices with unvisited child nodes) */
+	array<node*> frontier(8);
+	array<node*> available_nodes(8);
+	frontier.add(&vertices[start_index]);
+	if (start_index != current_node_index)
+		frontier.add(&vertices[current_node_index]);
+	for (unsigned int i = start_index + 1; i < vertices.length - 1; i++)
+		if (!frontier.contains(&vertices[i]))
+			available_nodes.add(&vertices[i]);
+	while (frontier.length < frontier_size) {
+		unsigned int r = randrange(available_nodes.length);
+		frontier.add(available_nodes[r]);
+		available_nodes.remove(r);
+	}
+
+if (debug_flag) {
+fprintf(stderr, "frontier: [");
+for (unsigned int i = 0; i < frontier.length; i++) {
+	if (i != 0) fprintf(stderr, ",");
+	fprintf(stderr, "%u", frontier[i]->id);
+}
+fprintf(stderr, "]\n");
+}
+
+	unsigned int new_edge_count = 0;
+	array<pair<unsigned int, unsigned int>> removable_edges(16);
+	for (const node& vertex : vertices)
+		for (const node* child : vertex.children)
+			removable_edges.add(make_pair(vertex.id, child->id));
+	unsigned int total_edge_count = removable_edges.length;
+
+	/* construct a path such that all vertices in `frontier` are visited */
+	array<pair<const node*, node*>> queue(8);
+	for (node* child : start->children)
+		if (frontier.contains(child)) queue.add(make_pair(start, child));
+	while (queue.length != 0) {
+		unsigned int r = randrange(queue.length);
+		const node* prev = queue[r].key;
+		const node* next = queue[r].value;
+		queue.remove(r);
+		if (path.contains(next))
+			continue;
+		path.add(prev);
+		path.add(next);
+		removable_edges.remove(removable_edges.index_of(make_pair(prev->id, next->id)));
+
+		for (node* child : next->children)
+			if (frontier.contains(child)) queue.add(make_pair(next, child));
+	}
+
+if (debug_flag) {
+fprintf(stderr, "GRAPH after constructing initial path: (%lu vertices)\n", vertices.length);
+fprintf(stderr, "start: %u, goal: %u, current: %u\n", vertices[start_index].id, vertices[end_index].id, vertices[current_node_index].id);
+for (const node& vertex : vertices) {
+	for (const node* child : vertex.children) {
+		fprintf(stderr, "%u -> %u\n", vertex.id, child->id);
+	}
+}
+fprintf(stderr, "PATH: ");
+for (unsigned int i = 0; i < path.length; i += 2) {
+	if (i != 0) fprintf(stderr, ", ");
+	fprintf(stderr, "(%u, %u)", path[i]->id, path[i + 1]->id);
+}
+fprintf(stderr, "\n");
+}
+
+	/* get set of vertices reachable from `start` */
+	array<node*> stack(8);
+	array<node*> reachable(8);
+	stack[stack.length++] = &vertices[start_index];
+	while (stack.length != 0) {
+		node* current = stack.pop();
+		if (reachable.contains(current))
+			continue;
+		reachable.add(current);
+
+		for (node* child : current->children) {
+			if (!reachable.contains(child) && !stack.contains(child))
+				stack.add(child);
+		}
+	}
+
+	/* for the unvisited vertices in `frontier`, move edges until they have an incoming edge from a visited vertex */
+	for (node* frontier_vertex : frontier) {
+		if (frontier_vertex == start || path.contains(frontier_vertex))
+			continue;
+
+		/* get the most recent visited ancestors */
+		array<node*> stack(8);
+		array<node*> visited_ancestors(8);
+		stack.append(frontier_vertex->parents.data, frontier_vertex->parents.length);
+		while (stack.length != 0) {
+			node* current = stack.pop();
+
+			bool has_visited_parent = false;
+			for (node* parent : current->parents) {
+				if (parent == start || path.contains(parent)) {
+					if (!visited_ancestors.contains(parent))
+						visited_ancestors.add(parent);
+					has_visited_parent = true;
+				}
+			}
+			if (!has_visited_parent)
+				stack.append(current->parents.data, current->parents.length);
+		}
+
+		if (visited_ancestors.length != 0) {
+			node* new_parent = choice(visited_ancestors.data, visited_ancestors.length);
+
+			/* replace an existing parent with `new_parent` */
+			unsigned int r = randrange(frontier_vertex->parents.length);
+			node* old_parent = frontier_vertex->parents[r];
+			frontier_vertex->parents[r] = new_parent;
+			old_parent->children.remove(old_parent->children.index_of(frontier_vertex));
+			new_parent->children.add(frontier_vertex);
+			path.add(new_parent);
+			path.add(frontier_vertex);
+			removable_edges.remove(removable_edges.index_of(make_pair(old_parent->id, frontier_vertex->id)));
+
+			/* move the new edge in `path` to a random position */
+			unsigned int insert_path_index = path.index_of(new_parent);
+			if (path.length == 0) insert_path_index = 0;
+			else if (insert_path_index % 2 == 1) insert_path_index++;
+			unsigned int insert_index = randrange(insert_path_index, path.length);
+			insert_index -= insert_index % 2;
+			for (unsigned int j = path.length - 1; j >= insert_index + 2; j--)
+				path[j] = path[j - 2];
+			path[insert_index] = new_parent;
+			path[insert_index + 1] = frontier_vertex;
+		} else {
+			/* there is no path from `start` to `frontier_vertex`, so add a new parent that is reachable from `start` */
+			array<node*> candidate_parents(8);
+			for (node* n : reachable) {
+				if (n->id < frontier_vertex->id)
+					candidate_parents.add(n);
+			}
+
+			node* new_parent = choice(candidate_parents.data, candidate_parents.length);
+			frontier_vertex->parents.add(new_parent);
+			new_parent->children.add(frontier_vertex);
+			path.add(new_parent);
+			path.add(frontier_vertex);
+
+			/* move the new edge in `path` to a random position */
+			unsigned int insert_path_index = path.index_of(new_parent);
+			if (path.length == 0) insert_path_index = 0;
+			else if (insert_path_index % 2 == 1) insert_path_index++;
+			unsigned int insert_index = randrange(insert_path_index, path.length);
+			insert_index -= insert_index % 2;
+			for (unsigned int j = path.length - 1; j >= insert_index + 2; j--)
+				path[j] = path[j - 2];
+			path[insert_index] = new_parent;
+			path[insert_index + 1] = frontier_vertex;
+		}
+	}
+
+if (debug_flag) {
+fprintf(stderr, "GRAPH after moving edges so that all frontier vertices are visited: (%lu vertices)\n", vertices.length);
+fprintf(stderr, "start: %u, goal: %u, current: %u\n", vertices[start_index].id, vertices[end_index].id, vertices[current_node_index].id);
+for (const node& vertex : vertices) {
+    for (const node* child : vertex.children) {
+        fprintf(stderr, "%u -> %u\n", vertex.id, child->id);
+    }
+}
+fprintf(stderr, "PATH: ");
+for (unsigned int i = 0; i < path.length; i += 2) {
+    if (i != 0) fprintf(stderr, ", ");
+    fprintf(stderr, "(%u, %u)", path[i]->id, path[i + 1]->id);
+}
+fprintf(stderr, "\n");
+}
+
+	/* next we have to make sure every vertex in `frontier` has an unvisited child */
+	for (node* frontier_vertex : frontier) {
+		bool has_unvisited_child = false;
+		for (const node* child : frontier_vertex->children) {
+			if (!path.contains(child)) {
+				has_unvisited_child = true;
+				break;
+			}
+		}
+		if (has_unvisited_child) continue;
+
+		/* randomly select an unvisited vertex after `frontier_vertex` */
+		array<unsigned int> unvisited(8);
+		for (unsigned int i = frontier_vertex->id + 1; i < vertices.length; i++)
+			if (!path.contains(&vertices[i])) unvisited.add(i);
+		node* new_child = &vertices[choice(unvisited.data, unvisited.length)];
+
+		/* see if we can replace an unvisited parent node of `new_child` */
+		unvisited.clear();
+		for (unsigned int i = 0; i < new_child->parents.length; i++)
+			if (new_child->parents[i] != start && !path.contains(new_child->parents[i]))
+				unvisited.add(i);
+		if (unvisited.length != 0) {
+			unsigned int r = choice(unvisited.data, unvisited.length);
+			node* old_parent = new_child->parents[r];
+			old_parent->children.remove(old_parent->children.index_of(new_child));
+			frontier_vertex->children.add(new_child);
+			new_child->parents[r] = frontier_vertex;
+			removable_edges.remove(removable_edges.index_of(make_pair(old_parent->id, new_child->id)));
+		} else {
+			/* we can't remove any parents from `new_child` so simply add an edge */
+			frontier_vertex->children.add(new_child);
+			new_child->parents.add(frontier_vertex);
+			total_edge_count++; new_edge_count++;
+		}
+	}
+
+if (debug_flag) {
+fprintf(stderr, "GRAPH after ensuring all frontier vertices have an unvisited child: (%lu vertices)\n", vertices.length);
+fprintf(stderr, "start: %u, goal: %u, current: %u\n", vertices[start_index].id, vertices[end_index].id, vertices[current_node_index].id);
+for (const node& vertex : vertices) {
+    for (const node* child : vertex.children) {
+        fprintf(stderr, "%u -> %u\n", vertex.id, child->id);
+    }
+}
+fprintf(stderr, "PATH: ");
+for (unsigned int i = 0; i < path.length; i += 2) {
+    if (i != 0) fprintf(stderr, ", ");
+    fprintf(stderr, "(%u, %u)", path[i]->id, path[i + 1]->id);
+}
+fprintf(stderr, "\n");
+}
+
+	/* next, we want to make sure `vertices[current_node_index]` has an edge to `branch_size` vertices that follows it */
+	unsigned int current_branch_size = 0;
+	available_nodes.clear();
+	for (unsigned int i = current_node_index + 1; i < vertices.length; i++) {
+		if (current_node->children.contains(&vertices[i])) {
+			current_branch_size++;
+			unsigned int index = removable_edges.index_of(make_pair(current_node_index, i));
+			if (index < removable_edges.length)
+				removable_edges.remove(index);
+		} else available_nodes.add(&vertices[i]);
+	}
+	while (current_branch_size < branch_size) {
+		unsigned int r = randrange(available_nodes.length);
+		node* new_child = available_nodes[r];
+		available_nodes.remove(r);
+
+		/* see if we can replace an unvisited parent node of `new_child` */
+		array<unsigned int> unvisited(8);
+		for (unsigned int i = 0; i < new_child->parents.length; i++)
+			if (new_child->parents[i] != start && !path.contains(new_child->parents[i]))
+				unvisited.add(i);
+		if (unvisited.length != 0) {
+			unsigned int r = choice(unvisited.data, unvisited.length);
+			node* old_parent = new_child->parents[r];
+			old_parent->children.remove(old_parent->children.index_of(new_child));
+			current_node->children.add(new_child);
+			new_child->parents[r] = current_node;
+			removable_edges.remove(removable_edges.index_of(make_pair(old_parent->id, new_child->id)));
+		} else {
+			/* we can't remove any parents from `new_child` so simply add an edge */
+			current_node->children.add(new_child);
+			new_child->parents.add(current_node);
+			total_edge_count++; new_edge_count++;
+		}
+		current_branch_size++;
+	}
+
+	/* visit some of the children of `current_node` */
+	//unsigned int visited_branches = randrange(branch_size);
+	//array<node*> available_nodes(8);
+	//available_nodes.append(current_node->children.data, current_node->children.length);
+	//unsigned int index = available_nodes.index_of(end);
+	//if (index != available_nodes.length)
+	//	available_nodes.remove(index); /* make sure we don't visit the goal vertex prematurely */
+	//unsigned int insert_path_index = path.index_of(current_node) + 1;
+	//if (path.length == 0) insert_path_index = 0;
+	//else if (insert_path_index % 2 == 1) insert_path_index++;
+	//for (unsigned int i = 0; i < visited_branches && available_nodes.length != 0; i++) {
+		/* count the number of branches with unvisited children */
+	//	unsigned int r = randrange(available_nodes.length);
+	//	node* child = available_nodes[r];
+	//	available_nodes.remove(r);
+
+	//	path.add(current_node);
+	//	path.add(child);
+	//	unsigned int insert_index = randrange(insert_path_index, path.length);
+	//	insert_index -= insert_index % 2;
+	//	for (unsigned int j = path.length - 1; j >= insert_index + 2; j--)
+	//		path[j] = path[j - 2];
+	//	path[insert_index] = current_node;
+	//	path[insert_index + 1] = child;
+	//}
+
+	/* make sure `end` is reachable from `start` */
+	array<pair<node*, const node*>> reachability_stack(8);
+	for (node* child : start->children)
+		reachability_stack.add(make_pair(child, start));
+	array_map<node*, const node*> reverse_ptrs(8);
+	while (reachability_stack.length != 0) {
+		pair<node*, const node*> entry = reachability_stack.pop();
+		node* next = entry.key;
+		const node* parent = entry.value;
+		if (reverse_ptrs.contains(next))
+			continue;
+		reverse_ptrs.put(next, parent);
+		for (node* child : next->children)
+			if (!reachability_stack.contains(make_pair<node*, const node*>(child, next)))
+				reachability_stack.add(make_pair<node*, const node*>(child, next));
+	}
+	if (reverse_ptrs.contains(&vertices[end_index])) {
+		/* make sure none of the edges on the path from `start` to `end` are removable */
+		const node* current = &vertices[end_index];
+		const node* parent = reverse_ptrs.get(current);
+		while (true) {
+			pair<unsigned int, unsigned int> entry = make_pair(parent->id, current->id);
+			unsigned int index = removable_edges.index_of(entry);
+			if (index != removable_edges.length)
+				removable_edges.remove(index);
+			if (path.contains(parent) || parent == start)
+				break;
+			current = parent;
+			parent = reverse_ptrs.get(current);
+		}
+	} else {
+		node* new_parent = choice(reverse_ptrs.keys, reverse_ptrs.size);
+		new_parent->children.add(&vertices[end_index]);
+		vertices[end_index].parents.add(new_parent);
+		total_edge_count++; new_edge_count++;
+	}
+
+if (debug_flag) {
+fprintf(stderr, "GRAPH before removing edges: (%lu vertices)\n", vertices.length);
+fprintf(stderr, "start: %u, goal: %u, current: %u\n", vertices[start_index].id, vertices[end_index].id, vertices[current_node_index].id);
+for (const node& vertex : vertices) {
+    for (const node* child : vertex.children) {
+        fprintf(stderr, "%u -> %u\n", vertex.id, child->id);
+    }
+}
+fprintf(stderr, "PATH: ");
+for (unsigned int i = 0; i < path.length; i += 2) {
+    if (i != 0) fprintf(stderr, ", ");
+    fprintf(stderr, "(%u, %u)", path[i]->id, path[i + 1]->id);
+}
+fprintf(stderr, "\n");
+}
+
+	/* remove edges to avoid generating a graph with too many edges */
+	unsigned int edges_to_remove;
+	if (total_edge_count > max_edges)
+		edges_to_remove = total_edge_count - max_edges;
+	else
+		edges_to_remove = new_edge_count;
+	for (unsigned int i = 0; i < edges_to_remove && removable_edges.length != 0; i++) {
+		unsigned int u = randrange(removable_edges.length);
+		unsigned int parent_id = removable_edges[u].key;
+		unsigned int child_id = removable_edges[u].value;
+		removable_edges.remove(u);
+
+		/* make sure that removing this edge will not remove an unvisited child node from any frontier vertex */
+		bool can_remove_edge = true;
+		for (const node* frontier_vertex : frontier) {
+			bool has_other_unvisited_child = false;
+			for (const node* child : frontier_vertex->children) {
+				if (child->id != child_id && !path.contains(child)) {
+					has_other_unvisited_child = true;
+					break;
+				}
+			}
+			if (!has_other_unvisited_child) {
+				can_remove_edge = false;
+				break;
+			}
+		}
+		if (!can_remove_edge) {
+			i--;
+			continue;
+		}
+
+		vertices[parent_id].children.remove(vertices[parent_id].children.index_of(&vertices[child_id]));
+		vertices[child_id].parents.remove(vertices[child_id].parents.index_of(&vertices[parent_id]));
+	}
+
+if (debug_flag) {
+fprintf(stderr, "GRAPH after removing edges: (%lu vertices)\n", vertices.length);
+fprintf(stderr, "start: %u, goal: %u, current: %u\n", vertices[start_index].id, vertices[end_index].id, vertices[current_node_index].id);
+for (const node& vertex : vertices) {
+    for (const node* child : vertex.children) {
+        fprintf(stderr, "%u -> %u\n", vertex.id, child->id);
+    }
+}
+fprintf(stderr, "PATH: ");
+for (unsigned int i = 0; i < path.length; i += 2) {
+    if (i != 0) fprintf(stderr, ", ");
+    fprintf(stderr, "(%u, %u)", path[i]->id, path[i + 1]->id);
+}
+fprintf(stderr, "\n");
+}
+
+	/* remove any correlation between graph topology and vertex IDs by shuffling the vertices */
+	unsigned int* new_indices = (unsigned int*) alloca(sizeof(unsigned int) * (max_vertex_id + 1));
+	for (unsigned int i = 0; i < max_vertex_id + 1; i++) new_indices[i] = i;
+	shuffle(new_indices, max_vertex_id + 1);
+	unsigned int src_index = 0;
+	for (unsigned int i = 0; i < vertices.length; i++) {
+		bool is_reserved = false;
+		for (unsigned int j = 0; j < array_length(RESERVED_INDICES); j++) {
+			if (new_indices[src_index] == RESERVED_INDICES[j]) {
+				is_reserved = true;
+				break;
+			}
+		}
+		if (is_reserved)
+			src_index++;
+		vertices[i].id = new_indices[src_index];
+		src_index++;
+	}
+
+	return true;
+}
+
+py::tuple generate_si_training_set(const unsigned int max_input_size, const uint64_t dataset_size, const py::object& reserved_inputs, const int requested_frontier_size, const int requested_branch_size, bool uniform, const bool quiet=false)
+{
+	const unsigned int QUERY_PREFIX_TOKEN = (max_input_size-5) / 3 + 4;
+	const unsigned int PADDING_TOKEN = (max_input_size-5) / 3 + 3;
+	const unsigned int EDGE_PREFIX_TOKEN = (max_input_size-5) / 3 + 2;
+	const unsigned int PATH_PREFIX_TOKEN = (max_input_size-5) / 3 + 1;
+
+	unsigned int max_edges = (max_input_size - 2) / 6;
+
+	unsigned int num_generated = 0;
+	unsigned int num_collisions = 0;
+	unsigned int ntokens = (max_input_size - 5) / 3 + 5;
+	size_t input_shape[2]{dataset_size, max_input_size};
+	size_t output_shape[2]{dataset_size, ntokens};
+	size_t label_shape[1]{dataset_size};
+	py::array_t<int64_t, py::array::c_style> inputs(input_shape);
+	py::array_t<float, py::array::c_style> outputs(output_shape);
+	py::array_t<int64_t, py::array::c_style> labels(label_shape);
+	auto inputs_mem = inputs.mutable_unchecked<2>();
+	auto outputs_mem = outputs.mutable_unchecked<2>();
+	auto labels_mem = labels.mutable_unchecked<1>();
+
+	unsigned int* frontier_branch_histogram = (unsigned int*) alloca(sizeof(unsigned int) * (max_edges + 1) * max_edges);
+	for (unsigned int i = 0; i < (max_edges + 1) * max_edges; i++)
+		frontier_branch_histogram[i] = 0;
+
+	float* MAX_FREQS_PER_BUCKET = (float*) alloca(sizeof(float) * (max_edges + 1) * max_edges);
+	unsigned int nonzero_buckets = 0;
+	for (unsigned int i = 0; i < max_edges + 1; i++) {
+		/* frontier_size is i */
+		for (unsigned int j = 0; j < max_edges; j++) {
+			/* branch_size is j */
+			if (i == 0 || j == 0 || i > (unsigned) requested_frontier_size || j > (unsigned) requested_branch_size || i + j > max_edges + 1) {
+				MAX_FREQS_PER_BUCKET[i*max_edges + j] = 0.0;
+			} else {
+				MAX_FREQS_PER_BUCKET[i*max_edges + j] = 1.0;
+				nonzero_buckets++;
+			}
+		}
+	}
+	for (unsigned int i = 0; i < (max_edges + 1) * max_edges; i++)
+		if (MAX_FREQS_PER_BUCKET[i] != 0.0) MAX_FREQS_PER_BUCKET[i] /= nonzero_buckets;
+	if ((unsigned) requested_branch_size < max_edges + 1 - requested_frontier_size)
+		MAX_FREQS_PER_BUCKET[requested_frontier_size*max_edges + requested_branch_size] += 0.05 / nonzero_buckets;
+	else
+		MAX_FREQS_PER_BUCKET[requested_frontier_size*max_edges + max_edges + 1 - requested_frontier_size] += 0.05 / nonzero_buckets;
+
+	array<const node*> path(32);
+	pair<unsigned int, unsigned int>* potential_frontier_branches = (pair<unsigned int, unsigned int>*) alloca(max((size_t) 1, sizeof(pair<unsigned int, unsigned int>) * ((max_edges + 1) * max_edges)));
+	unsigned int potential_frontier_branch_count = 0;
+	unsigned int num_attempts = 0;
+	while (num_generated < dataset_size) {
+		if (num_attempts >= 10000000)
+			break;
+		num_attempts++;
+		array<node> g(32);
+		const node* start; const node* end;
+		unsigned int current_node_index;
+/*if (num_attempts == 17802)
+debug_flag = true;*/
+		while (true) {
+			unsigned int num_vertices = std::max(2u, randrange(max_edges + 1));
+			unsigned int frontier_size; unsigned int branch_size;
+			if (uniform) {
+				potential_frontier_branch_count = 0;
+				for (unsigned int i = 1; i < max_edges + 1; i++) {
+					for (unsigned int j = 1; j < max_edges; j++) {
+						if (num_generated == 0 || (float) frontier_branch_histogram[i*max_edges + j] / num_generated < MAX_FREQS_PER_BUCKET[i*max_edges + j])
+							potential_frontier_branches[potential_frontier_branch_count++] = make_pair(i, j);
+					}
+				}
+				pair<unsigned int, unsigned int> frontier_branch = choice(potential_frontier_branches, potential_frontier_branch_count);
+				frontier_size = frontier_branch.key;
+				branch_size = frontier_branch.value;
+			} else {
+				frontier_size = requested_frontier_size;
+				branch_size = requested_branch_size;
+			}
+			num_vertices = std::max(frontier_size + branch_size, num_vertices);
+			if (!generate_si_example(g, start, end, current_node_index, path, num_vertices, max_input_size / 24 + 1, (max_input_size - 2) / 6 + 2, max_edges, frontier_size, branch_size)) {
+				for (node& n : g) core::free(n);
+				g.length = 0; path.length = 0;
+				continue;
+			}
+			break;
+		}
+
+		array<pair<unsigned int, unsigned int>> edges(8);
+		for (node& vertex : g)
+			for (node* child : vertex.children)
+				edges.add(make_pair(vertex.id, child->id));
+		if (edges.length > max_edges) {
+			for (node& n : g) core::free(n);
+			g.length = 0; path.length = 0;
+			continue;
+		}
+		shuffle(edges);
+
+		array<unsigned int> prefix(max_input_size);
+		for (auto& entry : edges) {
+			prefix[prefix.length++] = EDGE_PREFIX_TOKEN;
+			prefix[prefix.length++] = entry.key;
+			prefix[prefix.length++] = entry.value;
+		}
+		prefix[prefix.length++] = QUERY_PREFIX_TOKEN;
+		prefix[prefix.length++] = start->id;
+		prefix[prefix.length++] = end->id;
+		prefix[prefix.length++] = PATH_PREFIX_TOKEN;
+
+		/* compute the frontier size and branch size of this example */
+		array<const node*> frontier(8);
+		for (unsigned int i = 0; i < path.length; i++) {
+			bool has_unvisited_children = false;
+			for (const node* child : path[i]->children) {
+				if (!path.contains(child)) {
+					has_unvisited_children = true;
+					break;
+				}
+			}
+			if (has_unvisited_children && !frontier.contains(path[i]))
+				frontier.add(path[i]);
+		}
+		if (frontier.length == 0)
+			frontier.add(start);
+		const node* current_node = &g[current_node_index];
+		unsigned int branch_size = current_node->children.length;
+
+		bool is_selection_step = (randrange(2) == 0);
+		for (unsigned int j = 3*(path.length/2) + (is_selection_step ? 1 : 2); j < 3*(max_edges - 1) + 2; j++)
+			prefix[prefix.length++] = PATH_PREFIX_TOKEN;
+		for (unsigned int j = 0; j < path.length; j += 2) {
+			prefix[prefix.length++] = PATH_PREFIX_TOKEN;
+			prefix[prefix.length++] = path[j]->id;
+			prefix[prefix.length++] = path[j+1]->id;
+		}
+		prefix[prefix.length++] = PATH_PREFIX_TOKEN;
+		if (!is_selection_step)
+			prefix[prefix.length++] = current_node->id;
+
+		if ((requested_frontier_size != -1 && !uniform && (unsigned int) requested_frontier_size != (unsigned int) frontier.length)
+		 || (requested_branch_size != -1 && !uniform && (unsigned int) requested_branch_size != branch_size)
+		 || (uniform && num_generated != 0 && (float) frontier_branch_histogram[frontier.length*max_edges + branch_size] / num_generated >= MAX_FREQS_PER_BUCKET[frontier.length*max_edges + branch_size]))
+		{
+			for (node& n : g) core::free(n);
+			g.length = 0; path.length = 0;
+			continue;
+		}
+
+		/* check if this input is reserved */
+		py::object contains = reserved_inputs.attr("__contains__");
+		py::tuple example_tuple(prefix.length);
+		for (unsigned int i = 0; i < prefix.length; i++)
+			example_tuple[i] = prefix[i];
+		if (contains(example_tuple).is(py_true)) {
+			for (node& n : g) core::free(n);
+			g.length = 0; path.length = 0;
+			num_collisions += 1;
+			continue;
+		}
+
+/*if (frontier.length == 4 && branch_size == 4) {
+fprintf(stderr, "[DEBUG] num_attempts = %u\n", num_attempts);
+exit(0);
+}*/
+		frontier_branch_histogram[frontier.length*max_edges + branch_size]++;
+
+		for (unsigned int i = 0; i < max_input_size - prefix.length; i++)
+			inputs_mem(num_generated, i) = PADDING_TOKEN;
+		for (unsigned int i = 0; i < prefix.length; i++)
+			inputs_mem(num_generated, max_input_size - prefix.length + i) = prefix[i];
+		for (unsigned int i = 0; i < ntokens; i++)
+			outputs_mem(num_generated, i) = 0.0f;
+		if (is_selection_step) {
+			for (const node* frontier_vertex : frontier)
+				outputs_mem(num_generated, frontier_vertex->id) = 1.0f;
+			labels_mem(num_generated) = choice(frontier.data, frontier.length)->id;
+		} else {
+			array<unsigned int> correct_answers(8);
+			for (const node* child : current_node->children) {
+				if (!path.contains(child)) {
+					outputs_mem(num_generated, child->id) = 1.0f;
+					correct_answers.add(child->id);
+				}
+			}
+			labels_mem(num_generated) = choice(correct_answers.data, correct_answers.length);
+		}
+		num_generated++;
+
+		if (!quiet && num_generated > 0 && (num_generated % 1000 == 0 || num_generated >= dataset_size)) {
+			printf("%d examples generated.\n", num_generated);
+			fflush(stdout);
+
+			printf("Frontier-branch size histogram: (log frequencies)\n");
+			printf("[");
+			bool first = true;
+			for (unsigned int i = 0; i < max_edges + 1; i++) {
+				for (unsigned int j = 0; j < max_edges; j++) {
+					if (frontier_branch_histogram[i*max_edges + j] == 0)
+						continue;
+					if (!first) printf(", ");
+					printf("(%d,%d):%.2f {%.2f}", i, j, log(frontier_branch_histogram[i*max_edges + j]) - log(num_generated), log(MAX_FREQS_PER_BUCKET[i*max_edges + j]));
+					first = false;
+				}
+			}
+			printf("]\n");
+		}
+
+		for (node& n : g) core::free(n);
+		g.length = 0; path.length = 0;
+		continue;
+	}
+
+	return py::make_tuple(inputs, outputs, labels, num_collisions);
+}
+
 PYBIND11_MODULE(generator, m) {
 	m.def("generate_training_set", &generate_training_set);
 	m.def("generate_reachable_training_set", &generate_reachable_training_set);
 	m.def("generate_dfs_training_set", &generate_dfs_training_set);
+	m.def("generate_si_training_set", &generate_si_training_set);
 	m.def("lookahead_histogram", &lookahead_histogram);
 	m.def("set_seed", &core::set_seed);
 }
