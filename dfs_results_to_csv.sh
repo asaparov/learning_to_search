@@ -48,6 +48,7 @@ for s in $(seq 1 10); do
 done
 
 python output_to_json.py run_train212.out
+python output_to_json.py run_train232.out
 python output_to_json.py run_train242.out
 python output_to_json.py run_train252.out
 python output_to_json.py run_train262.out
