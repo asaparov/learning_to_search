@@ -3,7 +3,7 @@ import time
 
 def build_module(name):
 	from os import system
-	if system(f"g++ -Ofast -fno-stack-protector -Wall -Wpedantic -shared -fPIC $(python3 -m pybind11 --includes) -I. {name}.cpp -o {name}$(python3-config --extension-suffix)") != 0:
+	if system(f"g++ -Ofast -DNDEBUG -fno-stack-protector -Wall -Wpedantic -shared -fPIC $(python3 -m pybind11 --includes) -I. {name}.cpp -o {name}$(python3-config --extension-suffix)") != 0:
 		print(f"ERROR: Unable to compile `{name}.cpp`.")
 		import sys
 		sys.exit(1)
@@ -26,9 +26,9 @@ print("C++ module `generator` loaded.")
 reserved_inputs = set()
 start_time = time.perf_counter()
 generator.set_seed(9)
-dataset_size = 2 ** 20
+dataset_size = 2 ** 12
 #output = generator.generate_training_set(128, dataset_size, 2, 5, reserved_inputs, -1, False)
 #output = generator.generate_dfs_training_set(48, dataset_size, reserved_inputs, 10, False, True, False)
-output = generator.generate_si_training_set(48, dataset_size, reserved_inputs, 4, 7, True, False)
+output = generator.generate_si_training_set(128, dataset_size, reserved_inputs, 11, 4, False, True)
+print("({},{}) Throughput: {} examples generated/s".format(11, 4, dataset_size / (time.perf_counter() - start_time)))
 import pdb; pdb.set_trace()
-print("Throughput: {} examples generated/s".format(dataset_size / (time.perf_counter() - start_time)))

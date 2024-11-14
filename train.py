@@ -647,7 +647,7 @@ def generate_training_set(max_input_size, dataset_size, max_lookahead, reserved_
 
 	return inputs, outputs, valid_outputs, num_collisions
 
-def train(max_input_size, dataset_size, distribution, max_lookahead, seed_value, nlayers, nhead, hidden_dim, bidirectional, absolute_pos_emb, learnable_token_emb, toeplitz_attn, toeplitz_reg, toeplitz_pos_only, add_padding, ablate, pre_ln, curriculum_mode, looped, dfs, warm_up, batch_size, learning_rate):
+def train(max_input_size, dataset_size, distribution, max_lookahead, seed_value, nlayers, nhead, hidden_dim, bidirectional, absolute_pos_emb, learnable_token_emb, toeplitz_attn, toeplitz_reg, toeplitz_pos_only, add_padding, ablate, pre_ln, curriculum_mode, looped, task, warm_up, batch_size, learning_rate, update_rate):
 	generator.set_seed(seed_value)
 	seed(seed_value)
 	torch.manual_seed(seed_value)
@@ -679,7 +679,7 @@ def train(max_input_size, dataset_size, distribution, max_lookahead, seed_value,
 
 	reserved_inputs = set()
 	NUM_TEST_SAMPLES = 10000
-	if dfs:
+	if task == 'dfs':
 		max_backtrack_distance = (max_input_size - 4) // 4 - 1
 		for backtrack_distance in [-1] + list(range(max_backtrack_distance + 1)):
 			generator.set_seed(seed_value)
@@ -690,7 +690,31 @@ def train(max_input_size, dataset_size, distribution, max_lookahead, seed_value,
 				reserved_inputs.add(tuple([x for x in inputs[i,:] if x != PADDING_TOKEN]))
 			if backtrack_distance == 8:
 				eval_inputs, eval_outputs = inputs, outputs
-	else:
+	elif task == 'si':
+		max_edges = (max_input_size - 2) // 6
+		max_frontier_size = (max_edges + 1) // 2
+		max_branch_size = max_edges
+		frontier_branches = []
+		for frontier_size in range(1, max_frontier_size + 1):
+			for branch_size in range(1, max_branch_size + 1):
+				if frontier_size + branch_size > max_edges + 1:
+					continue
+				frontier_branches.append((frontier_size, branch_size))
+		for frontier_size, branch_size in frontier_branches:
+			gen_eval_start_time = time.perf_counter()
+			setstate(random_state)
+			np.random.set_state(np_random_state)
+			torch.set_rng_state(torch_random_state)
+
+			print('Reserving OOD test data for frontier_size = {}, branch_size = {}'.format(frontier_size, branch_size))
+			stdout.flush()
+			inputs,outputs,_,_ = generator.generate_si_training_set(max_input_size, 10000 if (frontier_size == 4 and branch_size == 4) else NUM_TEST_SAMPLES, reserved_inputs, frontier_size, branch_size, False, True)
+			print('Done. Throughput: {} examples/s'.format(NUM_TEST_SAMPLES / (time.perf_counter() - gen_eval_start_time)))
+			for i in range(inputs.shape[0]):
+				reserved_inputs.add(tuple([x for x in inputs[i,:] if x != PADDING_TOKEN]))
+			if frontier_size == 4 and branch_size == 4:
+				eval_inputs, eval_outputs = inputs, outputs
+	elif task == 'search':
 		max_test_lookahead = ((max_input_size - 5) // 3 - 1) // 2
 		dist_from_start = 1 if add_padding else -1
 		for lookahead in list(range(1, max_test_lookahead + 1)) + [None]:
@@ -707,12 +731,21 @@ def train(max_input_size, dataset_size, distribution, max_lookahead, seed_value,
 				reserved_inputs.add(tuple([x for x in inputs[i,:] if x != PADDING_TOKEN]))
 			if lookahead == None:
 				eval_inputs, eval_outputs = inputs, outputs
+	else:
+		print('ERROR: Unrecognized task "{}".'.format(task))
+		stdout.flush()
+		return
 	if BATCH_SIZE < eval_inputs.shape[0]:
 		eval_inputs = eval_inputs[:BATCH_SIZE]
 		eval_outputs = eval_outputs[:BATCH_SIZE]
 
 	train_filename = 'train{}_v3_inputsize{}_maxlookahead{}_{}seed{}.pkl'.format(dataset_size, max_input_size, max_lookahead, 'padded_' if add_padding else '', seed_value)
-	prefix = 'dfs_results/' if dfs else 'useful_path_results/'
+	if task == 'dfs':
+		prefix = 'dfs_results/'
+	elif task == 'si':
+		prefix = 'si_results/'
+	else:
+		prefix = 'useful_path_results/'
 	if dataset_size != -1:
 		train_path = prefix + train_filename
 		if isfile(train_path):
@@ -776,8 +809,8 @@ def train(max_input_size, dataset_size, distribution, max_lookahead, seed_value,
 		filename += '_layercurriculum2'
 	if looped:
 		filename += '_looped'
-	if dfs:
-		filename += '_dfs'
+	if task != 'search':
+		filename += '_' + task
 	if nhead != 1:
 		filename += '_nhead' + str(nhead)
 	if warm_up != 0:
@@ -786,6 +819,8 @@ def train(max_input_size, dataset_size, distribution, max_lookahead, seed_value,
 		filename += '_batchsize' + str(batch_size)
 	if learning_rate != 1.0e-5:
 		filename += '_lr' + str(learning_rate)
+	if update_rate != 2 ** 18:
+		filename += '_update' + str(update_rate)
 	if isdir(filename):
 		existing_epochs = [int(ckpt[(ckpt.rfind('epoch') + len('epoch')):-len('.pt')]) for ckpt in listdir(filename) if ckpt.startswith('epoch')]
 	else:
@@ -875,7 +910,7 @@ def train(max_input_size, dataset_size, distribution, max_lookahead, seed_value,
 		# we are doing streaming training, so use an IterableDataset
 		from itertools import cycle
 		from threading import Lock
-		STREAMING_BLOCK_SIZE = 2 ** 18
+		STREAMING_BLOCK_SIZE = update_rate
 		NUM_DATA_WORKERS = 2
 		seed_generator = Random(seed_value)
 		seed_generator_lock = Lock()
@@ -914,8 +949,10 @@ def train(max_input_size, dataset_size, distribution, max_lookahead, seed_value,
 					np.random.seed(new_seed)
 
 					generate_start_time = time.perf_counter()
-					if dfs:
+					if task == 'dfs':
 						inputs, outputs, labels, num_collisions = generator.generate_dfs_training_set(max_input_size, BATCH_SIZE, reserved_inputs, self.lookahead, add_padding, True, True)
+					elif task == 'si':
+						inputs, outputs, labels, num_collisions = generator.generate_si_training_set(max_input_size, BATCH_SIZE, reserved_inputs, max_frontier_size, max_branch_size, True, True)
 					else:
 						inputs, outputs, labels, num_collisions = generator.generate_training_set(max_input_size, BATCH_SIZE, self.lookahead, self.max_edges, reserved_inputs, dist_from_start, True)
 					if num_collisions != 0:
@@ -1158,11 +1195,12 @@ if __name__ == "__main__":
 	parser.add_argument("--preLN", type=parse_bool_arg, required=True, metavar="'y/n'")
 	parser.add_argument("--curriculum", type=str, required=True, choices=["y", "n", "layerbylayer", "layerbylayer2"])
 	parser.add_argument("--looped", type=parse_bool_arg, default=False)
-	parser.add_argument("--dfs", type=parse_bool_arg, default=False)
+	parser.add_argument("--task", type=str, default="search", choices=["search", "dfs", "si"])
 	parser.add_argument("--distribution", type=str, default="crafted", choices=["simple", "crafted"])
 	parser.add_argument("--warm-up", type=int, default=0, required=False)
 	parser.add_argument("--batch-size", type=int, default=2**8, required=False)
 	parser.add_argument("--learning-rate", type=float, default=1.0e-5, required=False)
+	parser.add_argument("--update-rate", type=int, default=2**18, required=False)
 	args = parser.parse_args()
 
 	train(
@@ -1185,7 +1223,8 @@ if __name__ == "__main__":
 		pre_ln=args.preLN,
 		curriculum_mode=args.curriculum,
 		looped=args.looped,
-		dfs=args.dfs,
+		task=args.task,
 		warm_up=args.warm_up,
 		batch_size=args.batch_size,
-		learning_rate=args.learning_rate)
+		learning_rate=args.learning_rate,
+		update_rate=args.update_rate)
