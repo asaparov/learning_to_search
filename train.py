@@ -36,7 +36,7 @@ def build_module(name):
 		sys.stdout = old_stdout
 
 	python_extension_suffix = sysconfig.get_config_var("EXT_SUFFIX")
-	command = f"g++ -Ofast -fno-stack-protector -Wall -Wpedantic -shared -fPIC {includes} -I. {name}.cpp -o {name}{python_extension_suffix}"
+	command = f"g++ -Ofast -DNDEBUG -fno-stack-protector -Wall -Wpedantic -shared -fPIC {includes} -I. {name}.cpp -o {name}{python_extension_suffix}"
 	print(command)
 	if os.system(command) != 0:
 		print(f"ERROR: Unable to compile `{name}.cpp`.")
@@ -153,7 +153,7 @@ def get_descendants(node):
 			queue.append(child)
 	return descendants
 
-def generate_graph_with_lookahead(num_vertices, max_num_parents, max_vertex_id, lookahead, num_paths):
+def generate_graph_with_lookahead(num_vertices, max_num_parents, max_vertex_id, lookahead, num_paths, max_prefix_vertices):
 	num_vertices = max(2, num_vertices, 1 + num_paths * lookahead)
 
 	vertices = []
@@ -179,7 +179,7 @@ def generate_graph_with_lookahead(num_vertices, max_num_parents, max_vertex_id, 
 				vertices[index - 1].children.append(vertices[index])
 				index += 1
 
-	num_prefix_vertices = randrange(num_vertices - index + 1)
+	num_prefix_vertices = randrange(min(max_prefix_vertices + 1, num_vertices - index + 1))
 	prev_vertex = vertices[0]
 	for i in range(num_prefix_vertices):
 		vertices[index].children.append(prev_vertex)
@@ -300,7 +300,7 @@ def compute_paths(graph, start, end, get_shortest_paths):
 
 	return paths
 
-def generate_example(num_vertices, max_num_parents, max_vertex_id, get_shortest_paths=True, lookahead=None, num_paths=None):
+def generate_example(num_vertices, max_num_parents, max_vertex_id, get_shortest_paths=True, lookahead=None, num_paths=None, max_prefix_vertices=None):
 	if lookahead == None:
 		graph = generate_graph(num_vertices, max_num_parents, max_vertex_id)
 
@@ -311,7 +311,7 @@ def generate_example(num_vertices, max_num_parents, max_vertex_id, get_shortest_
 			if end != start:
 				break
 	else:
-		graph, start, end = generate_graph_with_lookahead(num_vertices, max_num_parents, max_vertex_id, lookahead, num_paths)
+		graph, start, end = generate_graph_with_lookahead(num_vertices, max_num_parents, max_vertex_id, lookahead, num_paths, max_prefix_vertices)
 		if graph == None:
 			return None, None, None, None
 
@@ -364,7 +364,7 @@ def generate_star_graph(num_spokes, spoke_length, max_vertex_id):
 def binomial_confidence_int(p, n):
 	return 1.96 * np.sqrt(p * (1.0 - p) / n)
 
-def generate_star_graph_data(max_input_size, num_spokes, spoke_length, num_samples=1000):
+def generate_star_graph_data(max_input_size, num_spokes, spoke_length, num_samples=1000, reserved_inputs=None, uniform=False):
 	QUERY_PREFIX_TOKEN = (max_input_size-5) // 3 + 4
 	PADDING_TOKEN = (max_input_size-5) // 3 + 3
 	EDGE_PREFIX_TOKEN = (max_input_size-5) // 3 + 2
@@ -373,8 +373,20 @@ def generate_star_graph_data(max_input_size, num_spokes, spoke_length, num_sampl
 	total_predictions = 0
 	inputs = np.empty((num_samples, max_input_size), dtype=np.int64)
 	outputs = np.empty(num_samples, dtype=np.int64)
+	num_collisions = 0
+	spoke_lengths = []
+	if uniform:
+		for spoke_len in range(1, spoke_length + 1):
+			max_spoke_count = ((max_input_size - 5) // 3 - 1) // spoke_len
+			for spoke_count in range(1, max_spoke_count + 1):
+				if spoke_count > num_spokes:
+					continue
+				spoke_lengths.append((spoke_len, spoke_count))
+	else:
+		spoke_lengths = [(spoke_length, num_spokes)]
 	while total_predictions < num_samples:
-		g, start, end = generate_star_graph(num_spokes, spoke_length, (max_input_size - 5) // 3)
+		spoke_len,spoke_count = choice(spoke_lengths)
+		g, start, end = generate_star_graph(spoke_count, spoke_len, (max_input_size - 5) // 3)
 
 		paths = compute_paths(g, start, end, get_shortest_paths=True)
 		if paths == None:
@@ -387,6 +399,9 @@ def generate_star_graph_data(max_input_size, num_spokes, spoke_length, num_sampl
 		prefix.extend([QUERY_PREFIX_TOKEN, start.id, end.id, PATH_PREFIX_TOKEN])
 
 		prefix.append(start.id)
+		if reserved_inputs != None and tuple(prefix) in reserved_inputs:
+			num_collisions += 1
+			continue
 		input = [PADDING_TOKEN] * (max_input_size - len(prefix)) + prefix
 		inputs[total_predictions,:] = input
 		outputs[total_predictions] = paths[0][1].id
@@ -394,9 +409,9 @@ def generate_star_graph_data(max_input_size, num_spokes, spoke_length, num_sampl
 		if total_predictions == num_samples:
 			break
 
-	return inputs, outputs
+	return inputs, outputs, num_collisions
 
-def generate_eval_data(max_input_size, min_path_length=2, distance_from_start=-1, distance_from_end=-1, lookahead_steps=None, num_paths_at_fork=None, num_samples=1000):
+def generate_eval_data(max_input_size, min_path_length=2, distance_from_start=-1, distance_from_end=-1, lookahead_steps=None, num_paths_at_fork=None, num_samples=1000, max_prefix_vertices=None):
 	QUERY_PREFIX_TOKEN = (max_input_size-5) // 3 + 4
 	PADDING_TOKEN = (max_input_size-5) // 3 + 3
 	EDGE_PREFIX_TOKEN = (max_input_size-5) // 3 + 2
@@ -431,7 +446,7 @@ def generate_eval_data(max_input_size, min_path_length=2, distance_from_start=-1
 				num_vertices = min(lookahead_steps * num_paths + 1 + randrange(0, 6), (max_input_size - 5) // 3)
 			else:
 				num_paths = None
-			g, start, end, paths = generate_example(num_vertices, 4, (max_input_size - 5) // 3, get_shortest_paths=False, lookahead=lookahead_steps, num_paths=num_paths)
+			g, start, end, paths = generate_example(num_vertices, 4, (max_input_size - 5) // 3, get_shortest_paths=False, lookahead=lookahead_steps, num_paths=num_paths, max_prefix_vertices=(max_input_size if max_prefix_vertices == None else max_prefix_vertices))
 			if paths != None and min([len(path) for path in paths]) > (min(lookahead_steps, min_path_length) if lookahead_steps != None else min_path_length):
 				break
 
@@ -661,12 +676,16 @@ def train(max_input_size, dataset_size, distribution, max_lookahead, seed_value,
 		print('ERROR: Curriculum learning is only supported with streaming training (i.e. dataset_size = -1).')
 		stdout.flush()
 		return
-	if distribution == "crafted" and max_lookahead == None:
-		print('ERROR: Crafted training distribution is selected but `max_lookhead` argument is missing.')
+	if distribution in ("crafted", "crafted_no_prefix", "star") and max_lookahead == None:
+		print('ERROR: Crafted or star training distribution is selected but `max_lookahead` argument is missing.')
 		stdout.flush()
 		return
 	if distribution == "simple" and max_lookahead != None:
 		print('ERROR: `max_lookahead` is not supported with the simple training distribution.')
+		stdout.flush()
+		return
+	if distribution in ("crafted_no_prefix", "star") and task != "search":
+		print('ERROR: Distributions `crafted_no_prefix` and `star` are only supported with task `search`.')
 		stdout.flush()
 		return
 	if max_lookahead == None:
@@ -691,6 +710,7 @@ def train(max_input_size, dataset_size, distribution, max_lookahead, seed_value,
 			if backtrack_distance == 8:
 				eval_inputs, eval_outputs = inputs, outputs
 	elif task == 'si':
+		NUM_TEST_SAMPLES = 1000
 		max_edges = (max_input_size - 2) // 6
 		max_frontier_size = (max_edges + 1) // 2
 		max_branch_size = max_edges
@@ -708,29 +728,50 @@ def train(max_input_size, dataset_size, distribution, max_lookahead, seed_value,
 
 			print('Reserving OOD test data for frontier_size = {}, branch_size = {}'.format(frontier_size, branch_size))
 			stdout.flush()
-			inputs,outputs,_,_ = generator.generate_si_training_set(max_input_size, 10000 if (frontier_size == 4 and branch_size == 4) else NUM_TEST_SAMPLES, reserved_inputs, frontier_size, branch_size, False, True)
+			inputs,outputs,_,_ = generator.generate_si_training_set(max_input_size, NUM_TEST_SAMPLES, reserved_inputs, frontier_size, branch_size, False, True)
 			print('Done. Throughput: {} examples/s'.format(NUM_TEST_SAMPLES / (time.perf_counter() - gen_eval_start_time)))
 			for i in range(inputs.shape[0]):
 				reserved_inputs.add(tuple([x for x in inputs[i,:] if x != PADDING_TOKEN]))
 			if frontier_size == 4 and branch_size == 4:
 				eval_inputs, eval_outputs = inputs, outputs
 	elif task == 'search':
-		max_test_lookahead = ((max_input_size - 5) // 3 - 1) // 2
-		dist_from_start = 1 if add_padding else -1
-		for lookahead in list(range(1, max_test_lookahead + 1)) + [None]:
-			gen_eval_start_time = time.perf_counter()
-			setstate(random_state)
-			np.random.set_state(np_random_state)
-			torch.set_rng_state(torch_random_state)
+		if distribution in ('crafted', 'crafted_no_prefix'):
+			max_test_lookahead = ((max_input_size - 5) // 3 - 1) // 2
+			dist_from_start = 1 if add_padding else -1
+			for lookahead in list(range(1, max_test_lookahead + 1)) + [None]:
+				gen_eval_start_time = time.perf_counter()
+				setstate(random_state)
+				np.random.set_state(np_random_state)
+				torch.set_rng_state(torch_random_state)
 
-			print('Reserving OOD test data for lookahead = {}'.format(lookahead))
-			stdout.flush()
-			inputs,outputs = generate_eval_data(max_input_size, min_path_length=2, distance_from_start=dist_from_start, distance_from_end=-1, lookahead_steps=lookahead, num_paths_at_fork=None, num_samples=NUM_TEST_SAMPLES)
-			print('Done. Throughput: {} examples/s'.format(NUM_TEST_SAMPLES / (time.perf_counter() - gen_eval_start_time)))
-			for i in range(inputs.shape[0]):
-				reserved_inputs.add(tuple([x for x in inputs[i,:] if x != PADDING_TOKEN]))
-			if lookahead == None:
-				eval_inputs, eval_outputs = inputs, outputs
+				print('Reserving OOD test data for lookahead = {}'.format(lookahead))
+				stdout.flush()
+				if distribution == 'crafted':
+					inputs,outputs = generate_eval_data(max_input_size, min_path_length=2, distance_from_start=dist_from_start, distance_from_end=-1, lookahead_steps=lookahead, num_paths_at_fork=None, num_samples=NUM_TEST_SAMPLES, max_prefix_vertices=None)
+				elif distribution == 'crafted_no_prefix':
+					inputs,outputs = generate_eval_data(max_input_size, min_path_length=2, distance_from_start=dist_from_start, distance_from_end=-1, lookahead_steps=lookahead, num_paths_at_fork=None, num_samples=NUM_TEST_SAMPLES, max_prefix_vertices=0)
+				print('Done. Throughput: {} examples/s'.format(NUM_TEST_SAMPLES / (time.perf_counter() - gen_eval_start_time)))
+				for i in range(inputs.shape[0]):
+					reserved_inputs.add(tuple([x for x in inputs[i,:] if x != PADDING_TOKEN]))
+				if lookahead == None:
+					eval_inputs, eval_outputs = inputs, outputs
+		elif distribution == 'star':
+			for spoke_length in range(1, max_lookahead + 1):
+				max_spoke_count = ((max_input_size - 5) // 3 - 1) // spoke_length
+				for num_spokes in range(1, max_spoke_count + 1):
+					gen_eval_start_time = time.perf_counter()
+					setstate(random_state)
+					np.random.set_state(np_random_state)
+					torch.set_rng_state(torch_random_state)
+
+					print('Reserving OOD test data for spoke_length = {} and num_spokes = {}'.format(spoke_length, num_spokes))
+					stdout.flush()
+					inputs,outputs,_ = generate_star_graph_data(max_input_size, num_spokes, spoke_length, num_samples=NUM_TEST_SAMPLES)
+					print('Done. Throughput: {} examples/s'.format(NUM_TEST_SAMPLES / (time.perf_counter() - gen_eval_start_time)))
+					for i in range(inputs.shape[0]):
+						reserved_inputs.add(tuple([x for x in inputs[i,:] if x != PADDING_TOKEN]))
+					if spoke_length == 4 and num_spokes == 3:
+						eval_inputs, eval_outputs = inputs, outputs
 	else:
 		print('ERROR: Unrecognized task "{}".'.format(task))
 		stdout.flush()
@@ -811,6 +852,8 @@ def train(max_input_size, dataset_size, distribution, max_lookahead, seed_value,
 		filename += '_looped'
 	if task != 'search':
 		filename += '_' + task
+	if distribution != 'crafted':
+		filename += '_' + distribution.replace('_', '-')
 	if nhead != 1:
 		filename += '_nhead' + str(nhead)
 	if warm_up != 0:
@@ -940,6 +983,7 @@ def train(max_input_size, dataset_size, distribution, max_lookahead, seed_value,
 				current = start
 				worker_info = torch.utils.data.get_worker_info()
 				worker_id = worker_info.id
+				max_prefix_vertices = (0 if distribution == 'crafted_no_prefix' else max_input_size)
 				while True:
 					worker_start_time = time.perf_counter()
 					new_seed = get_seed(current)
@@ -954,7 +998,15 @@ def train(max_input_size, dataset_size, distribution, max_lookahead, seed_value,
 					elif task == 'si':
 						inputs, outputs, labels, num_collisions = generator.generate_si_training_set(max_input_size, BATCH_SIZE, reserved_inputs, max_frontier_size, max_branch_size, True, True)
 					else:
-						inputs, outputs, labels, num_collisions = generator.generate_training_set(max_input_size, BATCH_SIZE, self.lookahead, self.max_edges, reserved_inputs, dist_from_start, True)
+						if distribution == 'star':
+							max_spoke_length = self.lookahead
+							max_spoke_count = ((max_input_size - 5) // 3 - 1) // 1
+							inputs, labels, num_collisions = generate_star_graph_data(max_input_size, num_spokes=max_spoke_count, spoke_length=max_spoke_length, num_samples=BATCH_SIZE, reserved_inputs=reserved_inputs, uniform=True)
+							ntokens = (max_input_size - 5) // 3 + 5
+							outputs = np.zeros((BATCH_SIZE, ntokens))
+							outputs[:,labels] = 1.0
+						else:
+							inputs, outputs, labels, num_collisions = generator.generate_training_set(max_input_size, BATCH_SIZE, self.lookahead, self.max_edges, reserved_inputs, dist_from_start, max_prefix_vertices, True)
 					if num_collisions != 0:
 						with self.collisions_lock:
 							self.total_collisions.value += num_collisions
@@ -1196,7 +1248,7 @@ if __name__ == "__main__":
 	parser.add_argument("--curriculum", type=str, required=True, choices=["y", "n", "layerbylayer", "layerbylayer2"])
 	parser.add_argument("--looped", type=parse_bool_arg, default=False)
 	parser.add_argument("--task", type=str, default="search", choices=["search", "dfs", "si"])
-	parser.add_argument("--distribution", type=str, default="crafted", choices=["simple", "crafted"])
+	parser.add_argument("--distribution", type=str, default="crafted", choices=["simple", "crafted", "crafted_no_prefix", "star"])
 	parser.add_argument("--warm-up", type=int, default=0, required=False)
 	parser.add_argument("--batch-size", type=int, default=2**8, required=False)
 	parser.add_argument("--learning-rate", type=float, default=1.0e-5, required=False)

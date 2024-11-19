@@ -304,7 +304,8 @@ def print_graph(input):
 	print('Start: ' + str(start) + ', Goal: ' + str(goal))
 
 	path_prefix_index = np.nonzero(input == PATH_PREFIX_TOKEN)[0][-1].item()
-	print('Path: ' + str(input[(path_prefix_index+1):]))
+	path = np.trim_zeros(input[np.nonzero(input == PATH_PREFIX_TOKEN)[0][0]:] - PATH_PREFIX_TOKEN) + PATH_PREFIX_TOKEN
+	print('Path: ' + ' '.join(['P' if v == PATH_PREFIX_TOKEN else str(v) for v in path]))
 
 
 def do_evaluate_model(filepath, star_distribution=False, max_backtrack_distance=None):
@@ -322,7 +323,13 @@ def do_evaluate_model(filepath, star_distribution=False, max_backtrack_distance=
 	training_max_lookahead = int(suffix[:suffix.index('_')])
 	max_lookahead = ((max_input_size - 5) // 3 - 1) // 2
 
-	is_dfs = 'dfs' in dirname
+	task = 'dfs' in dirname
+	if '_dfs_' in dirname:
+		task = 'dfs'
+	elif '_si_' in dirname:
+		task = 'si'
+	else:
+		task = 'search'
 	if max_backtrack_distance == None:
 		max_backtrack_distance = (max_input_size - 4) // 4 - 1
 
@@ -331,6 +338,8 @@ def do_evaluate_model(filepath, star_distribution=False, max_backtrack_distance=
 	for transformer in model.transformers:
 		if not hasattr(transformer, 'pre_ln'):
 			transformer.pre_ln = True
+
+	PATH_PREFIX_TOKEN = (max_input_size-5) // 3 + 1
 
 	seed_generator = Random(training_seed)
 	seed_values = []
@@ -345,7 +354,7 @@ def do_evaluate_model(filepath, star_distribution=False, max_backtrack_distance=
 	NUM_TEST_SAMPLES = 1000
 	reserved_inputs = set()
 	test_accuracies = []
-	if is_dfs:
+	if task == 'dfs':
 		for backtrack_distance in [-1] + list(range(0, max_backtrack_distance + 1)):
 			generator.set_seed(get_seed(1))
 			inputs,outputs,labels,_ = generator.generate_dfs_training_set(max_input_size, NUM_TEST_SAMPLES, reserved_inputs, backtrack_distance, False, False, True)
@@ -360,6 +369,36 @@ def do_evaluate_model(filepath, star_distribution=False, max_backtrack_distance=
 				print("Expected answer: {}, predicted answer: {} (label: {})\n".format(np.nonzero(outputs[incorrect_index])[0], predictions[incorrect_index], labels[incorrect_index]))'''
 			import pdb; pdb.set_trace()
 			print("Test accuracy = %.2f±%.2f, test loss = %f" % (test_acc, confidence_int, test_loss))
+			test_accuracies.append((test_acc, confidence_int, test_loss))
+	elif task == 'si':
+		max_edges = (max_input_size - 2) // 6
+		max_frontier_size = (max_edges + 1) // 2
+		max_branch_size = max_edges
+		frontier_branches = []
+		for frontier_size in range(1, max_frontier_size + 1):
+			for branch_size in range(1, max_branch_size + 1):
+				if frontier_size + branch_size > max_edges + 1:
+					continue
+				frontier_branches.append((frontier_size, branch_size))
+		for frontier_size, branch_size in frontier_branches:
+			generator.set_seed(get_seed(1))
+			inputs,outputs,labels,_ = generator.generate_si_training_set(max_input_size, NUM_TEST_SAMPLES, reserved_inputs, frontier_size, branch_size, False, True)
+			test_acc,test_loss,predictions = evaluate_model(model, inputs, outputs)
+			confidence_int = binomial_confidence_int(test_acc, NUM_TEST_SAMPLES)
+			predictions = np.array(predictions.cpu())
+			'''print("Mistaken inputs:")
+			incorrect_indices,_ = np.nonzero(np.take_along_axis(outputs, predictions[:,None], axis=1) == 0)
+			np.set_printoptions(threshold=10_000)
+			for incorrect_index in incorrect_indices:
+				print_graph(inputs[incorrect_index, :])
+				print("Expected answer: {}, predicted answer: {} (label: {})\n".format(np.nonzero(outputs[incorrect_index])[0], predictions[incorrect_index], labels[incorrect_index]))'''
+			selection_inputs = (inputs[:,-1] == PATH_PREFIX_TOKEN)
+			selection_acc = np.sum(np.take_along_axis(outputs[selection_inputs], predictions[selection_inputs,None], axis=1)) / np.sum(selection_inputs)
+			inference_acc = np.sum(np.take_along_axis(outputs[~selection_inputs], predictions[~selection_inputs,None], axis=1)) / np.sum(~selection_inputs)
+			selection_confidence_int = binomial_confidence_int(selection_acc, np.sum(selection_inputs))
+			inference_confidence_int = binomial_confidence_int(inference_acc, np.sum(~selection_inputs))
+			print("(%u,%u) Test accuracy = %.2f±%.2f, test loss = %f, selection accuracy = %.2f±%.2f, inference accuracy = %.2f±%.2f" % (frontier_size, branch_size, test_acc, confidence_int, test_loss, selection_acc, selection_confidence_int, inference_acc, inference_confidence_int))
+			#import pdb; pdb.set_trace()
 			test_accuracies.append((test_acc, confidence_int, test_loss))
 	elif star_distribution:
 		for spoke_length in range(1, max_lookahead + 1):

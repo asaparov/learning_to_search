@@ -181,7 +181,7 @@ bool has_cycles(array<node>& vertices) {
 	return false;
 }
 
-bool generate_graph_with_lookahead(array<node>& vertices, node*& start, node*& end, unsigned int num_vertices, unsigned int max_num_parents, unsigned int max_vertex_id, unsigned int lookahead, unsigned int num_paths)
+bool generate_graph_with_lookahead(array<node>& vertices, node*& start, node*& end, unsigned int num_vertices, unsigned int max_num_parents, unsigned int max_vertex_id, unsigned int lookahead, unsigned int num_paths, unsigned int max_prefix_vertices)
 {
 	num_vertices = std::max(std::max(2u, num_vertices), 1 + num_paths * lookahead);
 
@@ -215,7 +215,7 @@ bool generate_graph_with_lookahead(array<node>& vertices, node*& start, node*& e
 		}
 	}
 
-	unsigned int num_prefix_vertices = randrange(num_vertices - index + 1);
+	unsigned int num_prefix_vertices = randrange(min(max_prefix_vertices + 1, num_vertices - index + 1));
 	node* prev_vertex = &vertices[0];
 	for (unsigned int i = 0; i < num_prefix_vertices; i++) {
 		vertices[index].children.add(prev_vertex);
@@ -326,13 +326,13 @@ bool generate_graph_with_lookahead(array<node>& vertices, node*& start, node*& e
 	return true;
 }
 
-bool generate_example(array<node>& vertices, node*& start, node*& end, array<array<node*>>& paths, unsigned int num_vertices, unsigned int max_num_parents, unsigned int max_vertex_id, bool get_shortest_paths, int lookahead, unsigned int num_paths)
+bool generate_example(array<node>& vertices, node*& start, node*& end, array<array<node*>>& paths, unsigned int num_vertices, unsigned int max_num_parents, unsigned int max_vertex_id, bool get_shortest_paths, int lookahead, unsigned int num_paths, unsigned int max_prefix_vertices)
 {
 	if (lookahead == -1) {
 		if (!generate_graph(vertices, start, end, num_vertices, max_num_parents, max_vertex_id))
 			return false;
 	} else {
-		if (!generate_graph_with_lookahead(vertices, start, end, num_vertices, max_num_parents, max_vertex_id, lookahead, num_paths))
+		if (!generate_graph_with_lookahead(vertices, start, end, num_vertices, max_num_parents, max_vertex_id, lookahead, num_paths, max_prefix_vertices))
 			return false;
 	}
 
@@ -507,7 +507,7 @@ bool has_path(const node* start, const node* end)
 	return false;
 }
 
-py::tuple generate_training_set(const unsigned int max_input_size, const uint64_t dataset_size, const int max_lookahead, const unsigned int max_edges, const py::object& reserved_inputs, const int distance_from_start, const bool quiet=false)
+py::tuple generate_training_set(const unsigned int max_input_size, const uint64_t dataset_size, const int max_lookahead, const unsigned int max_edges, const py::object& reserved_inputs, const int distance_from_start, const int max_prefix_vertices, const bool quiet=false)
 {
 	const unsigned int QUERY_PREFIX_TOKEN = (max_input_size-5) / 3 + 4;
 	const unsigned int PADDING_TOKEN = (max_input_size-5) / 3 + 3;
@@ -553,7 +553,7 @@ py::tuple generate_training_set(const unsigned int max_input_size, const uint64_
 		while (true) {
 			if (max_lookahead == -1) {
 				unsigned int num_vertices = randrange(3, (max_input_size - 5) / 3);
-				if (!generate_example(g, start, end, paths, num_vertices, 4, (max_input_size - 5) / 3, true, -1, 0)) {
+				if (!generate_example(g, start, end, paths, num_vertices, 4, (max_input_size - 5) / 3, true, -1, 0, max_prefix_vertices == -1 ? max_input_size : max_prefix_vertices)) {
 					for (node& n : g) core::free(n);
 					for (array<node*>& a : paths) core::free(a);
 					g.length = 0; paths.length = 0;
@@ -575,7 +575,7 @@ py::tuple generate_training_set(const unsigned int max_input_size, const uint64_
 				}
 
 				unsigned int num_vertices = std::min(std::min(lookahead * num_paths + 1 + randrange(0, 6), (max_input_size-5) / 3), max_edges + 1);
-				if (!generate_example(g, start, end, paths, num_vertices, 4, (max_input_size - 5) / 3, true, lookahead, num_paths)) {
+				if (!generate_example(g, start, end, paths, num_vertices, 4, (max_input_size - 5) / 3, true, lookahead, num_paths, max_prefix_vertices == -1 ? max_input_size : max_prefix_vertices)) {
 					for (node& n : g) core::free(n);
 					for (array<node*>& a : paths) core::free(a);
 					g.length = 0; paths.length = 0;
@@ -726,7 +726,7 @@ py::array_t<int64_t, py::array::c_style> lookahead_histogram(const unsigned int 
 		array<array<node*>> paths(8);
 		while (true) {
 			unsigned int num_vertices = randrange(3, (max_input_size - 5) / 3);
-			if (!generate_example(g, start, end, paths, num_vertices, 4, (max_input_size - 5) / 3, true, -1, 0)) {
+			if (!generate_example(g, start, end, paths, num_vertices, 4, (max_input_size - 5) / 3, true, -1, 0, -1)) {
 				for (node& n : g) core::free(n);
 				for (array<node*>& a : paths) core::free(a);
 				g.length = 0; paths.length = 0;
@@ -848,7 +848,7 @@ py::tuple generate_reachable_training_set(const unsigned int max_input_size, con
 			}
 
 			unsigned int num_vertices = std::min(std::min(lookahead * num_paths + 1 + randrange(0, 6), (max_input_size-5) / 3), max_edges + 1);
-			if (!generate_example(g, start, end, paths, num_vertices, 4, max_vertex_id, true, lookahead, num_paths)) {
+			if (!generate_example(g, start, end, paths, num_vertices, 4, max_vertex_id, true, lookahead, num_paths, -1)) {
 				for (node& n : g) core::free(n);
 				for (array<node*>& a : paths) core::free(a);
 				g.length = 0; paths.length = 0;
@@ -1741,32 +1741,38 @@ bool generate_si_example(array<node>& vertices, const node*& start, const node*&
 		pair<node*, const node*> entry = reachability_stack.pop();
 		node* next = entry.key;
 		const node* parent = entry.value;
-		if (reverse_ptrs.contains(next))
+		if (next->id > end_index || reverse_ptrs.contains(next))
 			continue;
 		reverse_ptrs.put(next, parent);
 		for (node* child : next->children)
 			if (!reachability_stack.contains(make_pair<node*, const node*>(child, next)))
 				reachability_stack.add(make_pair<node*, const node*>(child, next));
 	}
+	const node* current;
+	const node* parent;
 	if (reverse_ptrs.contains(&vertices[end_index])) {
-		/* make sure none of the edges on the path from `start` to `end` are removable */
-		const node* current = &vertices[end_index];
-		const node* parent = reverse_ptrs.get(current);
-		while (true) {
-			pair<unsigned int, unsigned int> entry = make_pair(parent->id, current->id);
-			unsigned int index = removable_edges.index_of(entry);
-			if (index != removable_edges.length)
-				removable_edges.remove(index);
-			if (path.contains(parent) || parent == start)
-				break;
-			current = parent;
-			parent = reverse_ptrs.get(current);
-		}
+		current = &vertices[end_index];
+		parent = reverse_ptrs.get(current);
 	} else {
+		reverse_ptrs.put(&vertices[start_index], nullptr);
 		node* new_parent = choice(reverse_ptrs.keys, reverse_ptrs.size);
 		new_parent->children.add(&vertices[end_index]);
 		vertices[end_index].parents.add(new_parent);
 		total_edge_count++; new_edge_count++;
+
+		current = &vertices[end_index];
+		parent = new_parent;
+	}
+	/* make sure none of the edges on the path from `start` to `end` are removable */
+	while (true) {
+		pair<unsigned int, unsigned int> entry = make_pair(parent->id, current->id);
+		unsigned int index = removable_edges.index_of(entry);
+		if (index != removable_edges.length)
+			removable_edges.remove(index);
+		if (parent == start)
+			break;
+		current = parent;
+		parent = reverse_ptrs.get(current);
 	}
 
 	/* remove edges to avoid generating a graph with too many edges */
@@ -2007,7 +2013,11 @@ py::tuple generate_si_training_set(const unsigned int max_input_size, const uint
 		const node* current_node = &g[current_node_index];
 		unsigned int branch_size = current_node->children.length;
 
-		bool is_selection_step = (randrange(2) == 0);
+		bool is_selection_step;
+		if (path.length == 0)
+			is_selection_step = false;
+		else
+			is_selection_step = (randrange(2) == 0);
 		if (3*(path.length/2) + (is_selection_step ? 1 : 2) > 3*(max_edges - 1) + 1) {
 			/* we have just barely too many edges */
 			for (node& n : g) core::free(n);
