@@ -18,7 +18,7 @@ from torch.nn import CrossEntropyLoss, BCEWithLogitsLoss
 from torch.utils.data import Dataset, DataLoader
 
 from Sophia import SophiaG
-from gpt2 import Transformer, TransformerLayer, ToeplitzMode, AblationMode
+from gpt2 import Transformer, TransformerLayer, ToeplitzMode, AblationMode, PositionEmbedding
 
 
 def build_module(name):
@@ -662,13 +662,13 @@ def generate_training_set(max_input_size, dataset_size, max_lookahead, reserved_
 
 	return inputs, outputs, valid_outputs, num_collisions
 
-def train(max_input_size, dataset_size, distribution, max_lookahead, seed_value, nlayers, nhead, hidden_dim, bidirectional, absolute_pos_emb, learnable_token_emb, toeplitz_attn, toeplitz_reg, toeplitz_pos_only, add_padding, ablate, pre_ln, curriculum_mode, looped, task, warm_up, batch_size, learning_rate, update_rate):
+def train(max_input_size, dataset_size, distribution, max_lookahead, seed_value, nlayers, nhead, hidden_dim, bidirectional, pos_emb, learnable_token_emb, toeplitz_attn, toeplitz_reg, toeplitz_pos_only, add_padding, ablate, pre_ln, curriculum_mode, looped, task, warm_up, batch_size, learning_rate, update_rate, grad_accumulation_steps):
 	generator.set_seed(seed_value)
 	seed(seed_value)
 	torch.manual_seed(seed_value)
 	np.random.seed(seed_value)
 	PADDING_TOKEN = (max_input_size-5) // 3 + 3
-	BATCH_SIZE = batch_size
+	BATCH_SIZE = batch_size // grad_accumulation_steps
 	print('Number of available CPUs: {}'.format(os.cpu_count()))
 	stdout.flush()
 
@@ -821,8 +821,10 @@ def train(max_input_size, dataset_size, distribution, max_lookahead, seed_value,
 		filename += '_hiddendim{}'.format(hidden_dim)
 	if bidirectional:
 		filename += '_nomask'
-	if not absolute_pos_emb:
-		filename += '_noAPE'
+	if pos_emb == 'none':
+		filename += '_NoPE'
+	elif pos_emb == 'rotary':
+		filename += '_RoPE'
 	if learnable_token_emb:
 		filename += '_learntokemb'
 	if ablate == "none":
@@ -885,6 +887,12 @@ def train(max_input_size, dataset_size, distribution, max_lookahead, seed_value,
 		toeplitz = ToeplitzMode.BLOCK
 	else:
 		toeplitz = ToeplitzMode.NONE
+	if pos_emb == "absolute":
+		pos_emb_mode = PositionEmbedding.ABSOLUTE
+	elif pos_emb == "rotary":
+		pos_emb_mode = PositionEmbedding.ROTARY
+	else:
+		pos_emb_mode = PositionEmbedding.NONE
 	if len(existing_epochs) == 0:
 		if curriculum_mode in ('layerbylayer','layerbylayer2'):
 			initial_layers = min(3, nlayers)
@@ -900,7 +908,7 @@ def train(max_input_size, dataset_size, distribution, max_lookahead, seed_value,
 			rate=1,
 			dropout=dropout,
 			bidirectional=bidirectional,
-			absolute_pos_emb=absolute_pos_emb,
+			pos_emb=pos_emb_mode,
 			learn_token_emb=learnable_token_emb,
 			ablate=ablation_mode,
 			toeplitz=toeplitz,
@@ -1053,7 +1061,6 @@ def train(max_input_size, dataset_size, distribution, max_lookahead, seed_value,
 			for param_group in optimizer.param_groups:
 				param_group['lr'] = lr
 			model.train()
-			optimizer.zero_grad()
 
 			input, output, label = batch
 			input = input.to(device, non_blocking=True)
@@ -1092,14 +1099,16 @@ def train(max_input_size, dataset_size, distribution, max_lookahead, seed_value,
 			epoch_loss += loss_val.item()
 
 			loss_val.backward()
-			optimizer.step()
+			if examples_seen % (BATCH_SIZE * grad_accumulation_steps) == 0:
+				optimizer.step()
+				optimizer.zero_grad()
 
 			#if device.type == 'cuda':
 			#	torch.cuda.synchronize(device)
 			log_start_time = time.perf_counter()
 			train_time += log_start_time - train_start_time
-
 			num_batches += 1
+
 			if num_batches == effective_dataset_size // BATCH_SIZE:
 				#time4 = time.perf_counter()
 				#print('[MAIN] Time to train: {}s'.format(time4 - time3))
@@ -1148,7 +1157,7 @@ def train(max_input_size, dataset_size, distribution, max_lookahead, seed_value,
 						elif curriculum_mode in ('layerbylayer','layerbylayer2') and model.lookahead + 1 > 2 ** (len(model.transformers) - 2) and len(model.transformers) < nlayers and not model.looped:
 							# add another layer to the model
 							print("Increasing number of transformer layers to {}".format(len(model.transformers) + 1))
-							if absolute_pos_emb:
+							if pos_emb == "absolute":
 								embedding_dim = max(ntoken,d_hid)+max_input_size
 								position_dim = max_input_size
 							else:
@@ -1237,7 +1246,7 @@ if __name__ == "__main__":
 	parser.add_argument("--hidden-dim", type=int)
 	parser.add_argument("--seed", type=int, default=1)
 	parser.add_argument("--bidirectional", type=parse_bool_arg, required=True, metavar="'y/n'")
-	parser.add_argument("--absolute-pos-emb", type=parse_bool_arg, required=True, metavar="'y/n'")
+	parser.add_argument("--pos-emb", type=str, required=True, choices=["absolute", "rotary", "none"])
 	parser.add_argument("--learn-tok-emb", type=parse_bool_arg, required=True, metavar="'y/n'")
 	parser.add_argument("--toeplitz-attn", type=parse_bool_arg, required=True, metavar="'y/n'")
 	parser.add_argument("--toeplitz-reg", type=float, required=True, default=0.0)
@@ -1253,6 +1262,7 @@ if __name__ == "__main__":
 	parser.add_argument("--batch-size", type=int, default=2**8, required=False)
 	parser.add_argument("--learning-rate", type=float, default=1.0e-5, required=False)
 	parser.add_argument("--update-rate", type=int, default=2**18, required=False)
+	parser.add_argument("--grad-accumulation-steps", type=int, default=1, required=False)
 	args = parser.parse_args()
 
 	train(
@@ -1265,7 +1275,7 @@ if __name__ == "__main__":
 		nlayers=args.nlayers,
 		hidden_dim=args.hidden_dim,
 		bidirectional=args.bidirectional,
-		absolute_pos_emb=args.absolute_pos_emb,
+		pos_emb=args.pos_emb,
 		learnable_token_emb=args.learn_tok_emb,
 		toeplitz_attn=args.toeplitz_attn,
 		toeplitz_reg=args.toeplitz_reg,
@@ -1279,4 +1289,5 @@ if __name__ == "__main__":
 		warm_up=args.warm_up,
 		batch_size=args.batch_size,
 		learning_rate=args.learning_rate,
-		update_rate=args.update_rate)
+		update_rate=args.update_rate,
+		grad_accumulation_steps=args.grad_accumulation_steps)
