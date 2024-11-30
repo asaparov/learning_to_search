@@ -1,0 +1,90 @@
+#!/bin/bash
+
+for s in $(seq 1 2); do
+	rm useful_path_results/checkpoints_v3_8layer_inputsize32_maxlookahead4_seed${s}_trainstreaming_hiddendim48_RoPE_learntokemb_unablated_padded/log.csv 2> /dev/null
+	rm useful_path_results/checkpoints_v3_8layer_inputsize38_maxlookahead5_seed${s}_trainstreaming_hiddendim54_RoPE_learntokemb_unablated_padded/log.csv 2> /dev/null
+	rm useful_path_results/checkpoints_v3_8layer_inputsize44_maxlookahead6_seed${s}_trainstreaming_hiddendim60_RoPE_learntokemb_unablated_padded/log.csv 2> /dev/null
+	rm useful_path_results/checkpoints_v3_8layer_inputsize50_maxlookahead7_seed${s}_trainstreaming_hiddendim66_RoPE_learntokemb_unablated_padded/log.csv 2> /dev/null
+	rm useful_path_results/checkpoints_v3_8layer_inputsize56_maxlookahead8_seed${s}_trainstreaming_hiddendim72_RoPE_learntokemb_unablated_padded/log.csv 2> /dev/null
+	rm useful_path_results/checkpoints_v3_8layer_inputsize62_maxlookahead9_seed${s}_trainstreaming_hiddendim78_RoPE_learntokemb_unablated_padded/log.csv 2> /dev/null
+	rm useful_path_results/checkpoints_v3_8layer_inputsize68_maxlookahead10_seed${s}_trainstreaming_hiddendim84_RoPE_learntokemb_unablated_padded/log.csv 2> /dev/null
+	rm useful_path_results/checkpoints_v3_8layer_inputsize74_maxlookahead11_seed${s}_trainstreaming_hiddendim90_RoPE_learntokemb_unablated_padded/log.csv 2> /dev/null
+	rm useful_path_results/checkpoints_v3_8layer_inputsize80_maxlookahead12_seed${s}_trainstreaming_hiddendim96_RoPE_learntokemb_unablated_padded/log.csv 2> /dev/null
+	rm useful_path_results/checkpoints_v3_8layer_inputsize86_maxlookahead13_seed${s}_trainstreaming_hiddendim102_RoPE_learntokemb_unablated_padded/log.csv 2> /dev/null
+	rm useful_path_results/checkpoints_v3_8layer_inputsize92_maxlookahead14_seed${s}_trainstreaming_hiddendim108_RoPE_learntokemb_unablated_padded/log.csv 2> /dev/null
+	rm useful_path_results/checkpoints_v3_8layer_inputsize98_maxlookahead15_seed${s}_trainstreaming_hiddendim114_RoPE_learntokemb_unablated_padded/log.csv 2> /dev/null
+	rm useful_path_results/checkpoints_v3_8layer_inputsize104_maxlookahead16_seed${s}_trainstreaming_hiddendim120_RoPE_learntokemb_unablated_padded/log.csv 2> /dev/null
+	rm useful_path_results/checkpoints_v3_8layer_inputsize110_maxlookahead17_seed${s}_trainstreaming_hiddendim126_RoPE_learntokemb_unablated_padded/log.csv 2> /dev/null
+	rm useful_path_results/checkpoints_v3_8layer_inputsize116_maxlookahead18_seed${s}_trainstreaming_hiddendim132_RoPE_learntokemb_unablated_padded/log.csv 2> /dev/null
+	rm useful_path_results/checkpoints_v3_8layer_inputsize122_maxlookahead19_seed${s}_trainstreaming_hiddendim138_RoPE_learntokemb_unablated_padded/log.csv 2> /dev/null
+	rm useful_path_results/checkpoints_v3_8layer_inputsize128_maxlookahead20_seed${s}_trainstreaming_hiddendim144_RoPE_learntokemb_unablated_padded/log.csv 2> /dev/null
+	rm useful_path_results/checkpoints_v3_8layer_inputsize134_maxlookahead21_seed${s}_trainstreaming_hiddendim150_RoPE_learntokemb_unablated_padded/log.csv 2> /dev/null
+	rm useful_path_results/checkpoints_v3_8layer_inputsize140_maxlookahead22_seed${s}_trainstreaming_hiddendim156_RoPE_learntokemb_unablated_padded/log.csv 2> /dev/null
+	rm useful_path_results/checkpoints_v3_8layer_inputsize146_maxlookahead23_seed${s}_trainstreaming_hiddendim162_RoPE_learntokemb_unablated_padded/log.csv 2> /dev/null
+	rm useful_path_results/checkpoints_v3_8layer_inputsize152_maxlookahead24_seed${s}_trainstreaming_hiddendim168_RoPE_learntokemb_unablated_padded/log.csv 2> /dev/null
+done
+
+for s in $(seq 1 2); do
+	mkdir -p decoder_csvs/scaling_decoder_RoPE/seed_${s}
+done
+
+for s in $(seq 28 48); do
+	python output_to_json.py run_train${s}.out
+done
+for s in $(seq 342 362); do
+	python output_to_json.py run_train${s}.out
+done
+
+for s in $(seq 1 2); do
+	mv useful_path_results/checkpoints_v3_8layer_inputsize32_maxlookahead4_seed${s}_trainstreaming_hiddendim48_RoPE_learntokemb_unablated_padded/log.csv decoder_csvs/scaling_decoder_RoPE/seed_${s}/input32_hid48.csv
+	mv useful_path_results/checkpoints_v3_8layer_inputsize38_maxlookahead5_seed${s}_trainstreaming_hiddendim54_RoPE_learntokemb_unablated_padded/log.csv decoder_csvs/scaling_decoder_RoPE/seed_${s}/input38_hid54.csv
+	mv useful_path_results/checkpoints_v3_8layer_inputsize44_maxlookahead6_seed${s}_trainstreaming_hiddendim60_RoPE_learntokemb_unablated_padded/log.csv decoder_csvs/scaling_decoder_RoPE/seed_${s}/input44_hid60.csv
+	mv useful_path_results/checkpoints_v3_8layer_inputsize50_maxlookahead7_seed${s}_trainstreaming_hiddendim66_RoPE_learntokemb_unablated_padded/log.csv decoder_csvs/scaling_decoder_RoPE/seed_${s}/input50_hid66.csv
+	mv useful_path_results/checkpoints_v3_8layer_inputsize56_maxlookahead8_seed${s}_trainstreaming_hiddendim72_RoPE_learntokemb_unablated_padded/log.csv decoder_csvs/scaling_decoder_RoPE/seed_${s}/input56_hid72.csv
+	mv useful_path_results/checkpoints_v3_8layer_inputsize62_maxlookahead9_seed${s}_trainstreaming_hiddendim78_RoPE_learntokemb_unablated_padded/log.csv decoder_csvs/scaling_decoder_RoPE/seed_${s}/input62_hid78.csv
+	mv useful_path_results/checkpoints_v3_8layer_inputsize68_maxlookahead10_seed${s}_trainstreaming_hiddendim84_RoPE_learntokemb_unablated_padded/log.csv decoder_csvs/scaling_decoder_RoPE/seed_${s}/input68_hid84.csv
+	mv useful_path_results/checkpoints_v3_8layer_inputsize74_maxlookahead11_seed${s}_trainstreaming_hiddendim90_RoPE_learntokemb_unablated_padded/log.csv decoder_csvs/scaling_decoder_RoPE/seed_${s}/input74_hid90.csv
+	mv useful_path_results/checkpoints_v3_8layer_inputsize80_maxlookahead12_seed${s}_trainstreaming_hiddendim96_RoPE_learntokemb_unablated_padded/log.csv decoder_csvs/scaling_decoder_RoPE/seed_${s}/input80_hid96.csv
+	mv useful_path_results/checkpoints_v3_8layer_inputsize86_maxlookahead13_seed${s}_trainstreaming_hiddendim102_RoPE_learntokemb_unablated_padded/log.csv decoder_csvs/scaling_decoder_RoPE/seed_${s}/input86_hid102.csv
+	mv useful_path_results/checkpoints_v3_8layer_inputsize92_maxlookahead14_seed${s}_trainstreaming_hiddendim108_RoPE_learntokemb_unablated_padded/log.csv decoder_csvs/scaling_decoder_RoPE/seed_${s}/input92_hid108.csv
+	mv useful_path_results/checkpoints_v3_8layer_inputsize98_maxlookahead15_seed${s}_trainstreaming_hiddendim114_RoPE_learntokemb_unablated_padded/log.csv decoder_csvs/scaling_decoder_RoPE/seed_${s}/input98_hid114.csv
+	mv useful_path_results/checkpoints_v3_8layer_inputsize104_maxlookahead16_seed${s}_trainstreaming_hiddendim120_RoPE_learntokemb_unablated_padded/log.csv decoder_csvs/scaling_decoder_RoPE/seed_${s}/input104_hid120.csv
+	mv useful_path_results/checkpoints_v3_8layer_inputsize110_maxlookahead17_seed${s}_trainstreaming_hiddendim126_RoPE_learntokemb_unablated_padded/log.csv decoder_csvs/scaling_decoder_RoPE/seed_${s}/input110_hid126.csv
+	mv useful_path_results/checkpoints_v3_8layer_inputsize116_maxlookahead18_seed${s}_trainstreaming_hiddendim132_RoPE_learntokemb_unablated_padded/log.csv decoder_csvs/scaling_decoder_RoPE/seed_${s}/input116_hid132.csv
+	mv useful_path_results/checkpoints_v3_8layer_inputsize122_maxlookahead19_seed${s}_trainstreaming_hiddendim138_RoPE_learntokemb_unablated_padded/log.csv decoder_csvs/scaling_decoder_RoPE/seed_${s}/input122_hid138.csv
+	mv useful_path_results/checkpoints_v3_8layer_inputsize128_maxlookahead20_seed${s}_trainstreaming_hiddendim144_RoPE_learntokemb_unablated_padded/log.csv decoder_csvs/scaling_decoder_RoPE/seed_${s}/input128_hid144.csv
+	mv useful_path_results/checkpoints_v3_8layer_inputsize134_maxlookahead21_seed${s}_trainstreaming_hiddendim150_RoPE_learntokemb_unablated_padded/log.csv decoder_csvs/scaling_decoder_RoPE/seed_${s}/input134_hid150.csv
+	mv useful_path_results/checkpoints_v3_8layer_inputsize140_maxlookahead22_seed${s}_trainstreaming_hiddendim156_RoPE_learntokemb_unablated_padded/log.csv decoder_csvs/scaling_decoder_RoPE/seed_${s}/input140_hid156.csv
+	mv useful_path_results/checkpoints_v3_8layer_inputsize146_maxlookahead23_seed${s}_trainstreaming_hiddendim162_RoPE_learntokemb_unablated_padded/log.csv decoder_csvs/scaling_decoder_RoPE/seed_${s}/input146_hid162.csv
+	mv useful_path_results/checkpoints_v3_8layer_inputsize152_maxlookahead24_seed${s}_trainstreaming_hiddendim168_RoPE_learntokemb_unablated_padded/log.csv decoder_csvs/scaling_decoder_RoPE/seed_${s}/input152_hid168.csv
+done
+
+
+for s in $(seq 1 2); do
+	rm useful_path_results/checkpoints_v3_8layer_inputsize98_maxlookahead15_seed${s}_trainstreaming_hiddendim114_RoPE_learntokemb_unablated_padded/log.csv 2> /dev/null
+	#rm useful_path_results/checkpoints_v3_8layer_inputsize98_maxlookahead15_seed${s}_trainstreaming_hiddendim128_RoPE_learntokemb_unablated_padded/log.csv 2> /dev/null
+	rm useful_path_results/checkpoints_v3_8layer_inputsize98_maxlookahead15_seed${s}_trainstreaming_hiddendim256_RoPE_learntokemb_unablated_padded/log.csv 2> /dev/null
+	rm useful_path_results/checkpoints_v3_8layer_inputsize98_maxlookahead15_seed${s}_trainstreaming_hiddendim512_RoPE_learntokemb_unablated_padded/log.csv 2> /dev/null
+	rm useful_path_results/checkpoints_v3_8layer_inputsize98_maxlookahead15_seed${s}_trainstreaming_hiddendim1024_RoPE_learntokemb_unablated_padded/log.csv 2> /dev/null
+done
+
+for s in $(seq 1 2); do
+	mkdir -p decoder_csvs/scaling_decoder_RoPE_params/seed_${s}
+done
+
+python output_to_json.py run_train39.out
+for s in $(seq 49 52); do
+	python output_to_json.py run_train${s}.out
+done
+python output_to_json.py run_train353.out
+for s in $(seq 363 365); do
+	python output_to_json.py run_train${s}.out
+done
+
+for s in $(seq 1 2); do
+	mv useful_path_results/checkpoints_v3_8layer_inputsize98_maxlookahead15_seed${s}_trainstreaming_hiddendim114_RoPE_learntokemb_unablated_padded/log.csv decoder_csvs/scaling_decoder_RoPE_params/seed_${s}/8layer_114hid_1head.csv
+	#mv useful_path_results/checkpoints_v3_8layer_inputsize98_maxlookahead15_seed${s}_trainstreaming_hiddendim128_RoPE_learntokemb_unablated_padded/log.csv decoder_csvs/scaling_decoder_RoPE_params/seed_${s}/8layer_128hid_1head.csv
+	mv useful_path_results/checkpoints_v3_8layer_inputsize98_maxlookahead15_seed${s}_trainstreaming_hiddendim128_RoPE_learntokemb_unablated_padded/log.csv decoder_csvs/scaling_decoder_RoPE_params/seed_${s}/8layer_256hid_1head.csv
+	mv useful_path_results/checkpoints_v3_8layer_inputsize98_maxlookahead15_seed${s}_trainstreaming_hiddendim256_RoPE_learntokemb_unablated_padded/log.csv decoder_csvs/scaling_decoder_RoPE_params/seed_${s}/8layer_512hid_1head.csv
+	mv useful_path_results/checkpoints_v3_8layer_inputsize98_maxlookahead15_seed${s}_trainstreaming_hiddendim1024_RoPE_learntokemb_unablated_padded/log.csv decoder_csvs/scaling_decoder_RoPE_params/seed_${s}/8layer_1024hid_1head.csv
+done

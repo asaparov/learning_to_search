@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import torch.utils.checkpoint
 from torch.nn import LayerNorm
-from gpt2 import AttentionLayer, Past, PadMasking, FutureMasking, PositionalEmbedding, TokenEmbedding, PositionwiseFeedForward, ToeplitzMode
+from gpt2 import AttentionLayer, Past, PadMasking, FutureMasking, PositionalEmbedding, RotaryPositionalEmbedding, TokenEmbedding, PositionwiseFeedForward, ToeplitzMode
 from typing import Optional, Tuple, List, Union
 from enum import Enum
 
@@ -11,6 +11,11 @@ class AblationMode(Enum):
     NO_ABLATION = 0,
     ABLATE_ATTN_LINEAR = 1,
     ABLATE_ATTN_LINEAR_PROJV = 2
+
+class PositionEmbedding(Enum):
+    NONE = 0,
+    ABSOLUTE = 1,
+    ROTARY = 2
 
 
 class TransformerLayer(nn.Module):
@@ -93,7 +98,7 @@ class Transformer(nn.Module):
                  rate: int = 4,
                  dropout: float = 0.1,
                  bidirectional: bool = True,
-                 absolute_pos_emb: bool = True,
+                 pos_emb: PositionEmbedding = PositionEmbedding.ABSOLUTE,
                  learn_token_emb: bool = False,
                  ablate: AblationMode = AblationMode.ABLATE_ATTN_LINEAR_PROJV,
                  toeplitz: ToeplitzMode = ToeplitzMode.NONE,
@@ -105,20 +110,21 @@ class Transformer(nn.Module):
         self.future_masking = FutureMasking()
         self.looped = looped
 
-        #self.positional_embedding = PositionalEmbedding(seq_len, dims)
         if learn_token_emb:
             self.token_embedding = TokenEmbedding(words, dims)
         else:
             self.token_embedding = torch.zeros((words, dims))
             self.token_embedding[:words,:words] = torch.diag(torch.ones(words))
 
-        if absolute_pos_emb:
+        if pos_emb == PositionEmbedding.ABSOLUTE:
             self.positional_embedding = torch.diag(torch.ones(seq_len))
+        elif pos_emb == PositionEmbedding.ROTARY:
+            self.positional_embedding = RotaryPositionalEmbedding(dims, seq_len)
         else:
             self.positional_embedding = None
         self.dropout_embedding = nn.Dropout(dropout)
 
-        if absolute_pos_emb:
+        if pos_emb == PositionEmbedding.ABSOLUTE:
             embedding_dim = dims + seq_len
             token_dim = words
             position_dim = seq_len
@@ -160,12 +166,14 @@ class Transformer(nn.Module):
             x = self.token_embedding(x)
         else:
             x = self.token_embedding[x]
-        if self.positional_embedding is not None:
+        if type(self.positional_embedding) == torch.Tensor:
             if len(x.shape) == 2:
                 pos = self.positional_embedding
             else:
                 pos = self.positional_embedding.unsqueeze(0).expand(x.shape[0], -1, -1)
             x = torch.cat((x, pos), -1)
+        elif self.positional_embedding != None:
+            x = self.positional_embedding(x)
         x = self.dropout_embedding(x)
         #import pdb; pdb.set_trace()
 
@@ -204,7 +212,7 @@ class Transformer(nn.Module):
 
         if self.ln_head:
             x = self.ln_head(x)
-        if self.positional_embedding is not None:
+        if type(self.positional_embedding) == torch.Tensor:
             if len(x.shape) == 2:
                 x = x[:,:-self.positional_embedding.shape[0]]
             else:
