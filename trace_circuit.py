@@ -2312,6 +2312,7 @@ def do_analysis(ckpt_filepath, tracer, lookahead, total_samples, quiet=False):
 		aggregated_dist_copy_directions.append({})
 		aggregated_op_explanations.append({})
 	aggregated_path_merge_lengths = [{} for i in range(num_layers)]
+	aggregated_path_merge_distances = [{} for i in range(num_layers)]
 
 	from functools import cmp_to_key
 	def compare(x, y):
@@ -2512,6 +2513,46 @@ def do_analysis(ckpt_filepath, tracer, lookahead, total_samples, quiet=False):
 			return longest_distance
 
 		if path_merge_explainable != None and root in path_merge_explainable:
+			path_merge_distances = [{} for i in range(num_layers)]
+			distances_from_start = shortest_distances(inputs[0,:], max_input_size-4)
+			for node in path_merge_explainable:
+				for k in range(len(node.successors)):
+					successor = node.successors[k]
+					if successor not in path_merge_explainable:
+						continue
+					if successor.row_id == node.row_id:
+						continue
+
+					if inputs[0,node.row_id] not in distances_from_start:
+						src = -1
+					else:
+						src = distances_from_start[inputs[0,node.row_id]]
+
+					if inputs[0,successor.row_id] not in distances_from_start:
+						dst = -1
+					else:
+						dst = distances_from_start[inputs[0,successor.row_id]]
+
+					if dst not in path_merge_distances[node.layer]:
+						path_merge_distances[node.layer][dst] = {}
+					if src not in path_merge_distances[node.layer][dst]:
+						path_merge_distances[node.layer][dst][src] = 0
+					path_merge_distances[node.layer][dst][src] += 1
+
+					'''other_nodes = [p for p in successor.predecessors if p.row_id == node.row_id]
+					if len(other_nodes) == 0:
+						continue
+					for other_node in other_nodes:'''
+			for l in range(len(path_merge_distances)):
+				for src, dst_map in path_merge_distances[l].items():
+					if src not in aggregated_path_merge_distances[l]:
+						aggregated_path_merge_distances[l][src] = {}
+					for dst, frequency in dst_map.items():
+						if dst not in aggregated_path_merge_distances[l][src]:
+							aggregated_path_merge_distances[l][src][dst] = 0
+						aggregated_path_merge_distances[l][src][dst] += frequency
+
+		if path_merge_explainable != None and root in path_merge_explainable:
 			path_merge_lengths = [{} for i in range(num_layers)]
 			def record_path_length(node, successor):
 				src_path_length = reachable_path_length(inputs[0,:], node.reachable)
@@ -2660,7 +2701,7 @@ def do_analysis(ckpt_filepath, tracer, lookahead, total_samples, quiet=False):
 	explainable_example_proportion = torch.sum(num_correct_vs_explainable[:,1]) / num_samples
 	average_merge_ops_per_example = total_path_merge_ops / num_samples
 	suboptimal_merge_op_proportion = 0.0 if total_path_merge_ops == 0 else total_suboptimal_path_merge_ops / total_path_merge_ops
-	return explainable_example_proportion, average_merge_ops_per_example, suboptimal_merge_op_proportion
+	return explainable_example_proportion, average_merge_ops_per_example, suboptimal_merge_op_proportion, aggregated_path_merge_distances
 
 
 if __name__ == "__main__":

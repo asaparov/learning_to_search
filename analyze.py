@@ -403,15 +403,13 @@ def do_evaluate_model(filepath, star_distribution=False, max_backtrack_distance=
 	elif star_distribution:
 		for spoke_length in range(1, max_lookahead + 1):
 			max_spoke_count = ((max_input_size - 5) // 3 - 1) // spoke_length
-			spoke_accuracies = []
 			for num_spokes in range(1, max_spoke_count + 1):
 				print('spoke_length: {}, num_spokes: {}'.format(spoke_length, num_spokes))
-				inputs,outputs = generate_star_graph_data(max_input_size, num_spokes, spoke_length, num_samples=NUM_TEST_SAMPLES)
+				inputs,outputs,_ = generate_star_graph_data(max_input_size, num_spokes, spoke_length, num_samples=NUM_TEST_SAMPLES)
 				test_acc,test_loss,predictions = evaluate_model(model, inputs, outputs)
 				confidence_int = binomial_confidence_int(test_acc, NUM_TEST_SAMPLES)
 				print("Test accuracy = %.2f±%.2f, test loss = %f" % (test_acc, confidence_int, test_loss))
-				spoke_accuracies.append((test_acc, confidence_int, test_loss))
-			test_accuracies.append(spoke_accuracies)
+				test_accuracies.append((test_acc, confidence_int, test_loss))
 	else:
 		for lookahead in [None] + list(range(1, max_lookahead + 1)):
 			seed(training_seed)

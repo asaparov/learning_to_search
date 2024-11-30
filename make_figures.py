@@ -7,7 +7,7 @@ from os import listdir, makedirs
 import csv
 
 def find_ckpt(directory, max_epoch):
-	existing_epochs = [int(ckpt[(ckpt.rfind('epoch') + len('epoch')):-len('.pt')]) for ckpt in listdir(directory) if ckpt.startswith('epoch')]
+	existing_epochs = [int(ckpt[(ckpt.rfind('epoch') + len('epoch')):-len('.pt')]) for ckpt in listdir(directory) if ckpt.startswith('epoch') and ckpt.endswith('.pt')]
 	selected_epoch = max([epoch for epoch in existing_epochs if epoch <= max_epoch])
 	return directory + '/epoch' + str(selected_epoch) + '.pt'
 
@@ -44,42 +44,56 @@ def make_sensitivity_figures(max_epoch=100000):
 	greedy_ckpt_dir  = 'useful_path_results/checkpoints_v3_6layer_inputsize128_maxlookahead-1_seed3_trainstreaming_nomask_unablated_padded' # available seeds: 1-8
 	crafted_ckpt_dir = 'useful_path_results/checkpoints_v3_6layer_inputsize128_maxlookahead20_seed1_trainstreaming_nomask_unablated_padded' # available seeds: 1-8
 	crafted_OOD_ckpt_dir = 'useful_path_results/checkpoints_v3_6layer_inputsize128_maxlookahead12_seed2_trainstreaming_nomask_unablated_padded' # available seeds: 1-8
+	star_ckpt_dir = 'useful_path_results/checkpoints_v3_6layer_inputsize128_maxlookahead20_seed2_trainstreaming_nomask_unablated_padded_star'
 	greedy_ckpt = find_ckpt(greedy_ckpt_dir, max_epoch)
 	crafted_ckpt = find_ckpt(crafted_ckpt_dir, max_epoch)
 	crafted_OOD_ckpt = find_ckpt(crafted_OOD_ckpt_dir, max_epoch)
+	star_ckpt = find_ckpt(star_ckpt_dir, max_epoch)
 	greedy_accuracies = do_evaluate_model(greedy_ckpt)
 	crafted_accuracies = do_evaluate_model(crafted_ckpt)
 	crafted_OOD_accuracies = do_evaluate_model(crafted_OOD_ckpt)
-	#greedy_star_accuracies = do_evaluate_model(greedy_ckpt, star_distribution=True)
-	#crafted_star_accuracies = do_evaluate_model(crafted_ckpt, star_distribution=True)
-	#crafted_OOD_star_accuracies = do_evaluate_model(crafted_OOD_ckpt, star_distribution=True)
+	star_accuracies = do_evaluate_model(star_ckpt)
+	greedy_star_accuracies = do_evaluate_model(greedy_ckpt, star_distribution=True)
+	crafted_star_accuracies = do_evaluate_model(crafted_ckpt, star_distribution=True)
+	crafted_OOD_star_accuracies = do_evaluate_model(crafted_OOD_ckpt, star_distribution=True)
+	star_star_accuracies = do_evaluate_model(star_ckpt, star_distribution=True)
 
-	data = np.empty((3, 21))
-	data[0,:21] = [acc for acc,_,_ in greedy_accuracies]
-	data[1,:21] = [acc for acc,_,_ in crafted_accuracies]
-	data[2,:21] = [acc for acc,_,_ in crafted_OOD_accuracies]
+	data = np.empty((4, 22))
+	data[0,0] = greedy_accuracies[0][0]
+	data[1,0] = star_accuracies[0][0]
+	data[2,0] = crafted_accuracies[0][0]
+	data[3,0] = crafted_OOD_accuracies[0][0]
+	data[0,1] = np.mean([acc for acc,_,_ in greedy_star_accuracies])
+	data[1,1] = np.mean([acc for acc,_,_ in star_star_accuracies])
+	data[2,1] = np.mean([acc for acc,_,_ in crafted_star_accuracies])
+	data[3,1] = np.mean([acc for acc,_,_ in crafted_OOD_star_accuracies])
+	data[0,2:] = [acc for acc,_,_ in greedy_accuracies[1:]]
+	data[1,2:] = [acc for acc,_,_ in star_accuracies[1:]]
+	data[2,2:] = [acc for acc,_,_ in crafted_accuracies[1:]]
+	data[3,2:] = [acc for acc,_,_ in crafted_OOD_accuracies[1:]]
 
 	fig = plt.gcf()
 	fig.set_size_inches(8.0, 1.9, forward=True)
 	r_cmap = plt.get_cmap('plasma').reversed()
 	plt.imshow(data, cmap=r_cmap, vmin=0.0, vmax=1.0)
-	plt.xticks([-0.2] + [i for i in range(1,21)], labels=(['Tested on\nnaïve distr.'] + [i+1 for i in range(20)]), rotation=45, ha="right", rotation_mode="anchor")
-	plt.yticks(np.arange(3), labels=['Naïve distr.', 'Balanced distr.', 'Balanced distr.\n(lookahead $\\le 12$)', ])
-	plt.text(-4.5, 2.3, '\\textbf{Trained on:}', color='#555', rotation='vertical')
-	plt.tick_params(axis='both', which='both', length=0)
+	plt.xticks([-0.2] + [i for i in range(1,22)], labels=(['Naïve distr.'] + ['Star distr.'] + [i+1 for i in range(20)]), rotation=45, ha="right", rotation_mode="anchor")
+	plt.yticks(np.arange(4), labels=['Naïve distr.', 'Star distr.', 'Balanced distr.', 'Balanced distr.\n(lookahead $\\le 12$)'])
+	plt.text(-4.5, 2.8, '\\textbf{Trained on:}', color='#555', rotation='vertical')
+	plt.text(-4.1, 4.5, '\\textbf{Tested on:}', color='#555')
+	plt.tick_params(axis='both', which='both', length=0, pad=0.8)
 	plt.grid(False)
 	for i in range(data.shape[0]):
 		for j in range(data.shape[1]):
 			c = "w" if data[i,j] > 0.6 else "k"
 			plt.text(j, i, '%.2f' % data[i,j], ha="center", va="center", color=c, fontsize=8)
 
-	plt.xticks(np.arange(-.5, 21, 1), minor=True)
-	plt.yticks(np.arange(-.5, 3, 1), minor=True)
+	plt.xticks(np.arange(-.5, 22, 1), minor=True)
+	plt.yticks(np.arange(-.5, 4, 1), minor=True)
 	plt.grid(which='minor', color='w', linestyle='-', linewidth=1)
 	plt.tick_params(which='minor', bottom=False, left=False)
 
 	ax = plt.gca()
-	draw_brace(ax, (20.4, 0.6), 4.0, 'Tested on balanced distribution with lookahead')
+	draw_brace(ax, (21.4, 1.6), 5.0, 'Balanced distribution with lookahead')
 
 	plt.tight_layout()
 	fig.savefig('figures/sensitivity.pdf', dpi=128)
@@ -163,6 +177,10 @@ def read_csv(filename):
 def make_scaling_figures(epoch=1500, variable='input_sizes', keep_incomplete_seeds=False, train_loss_scaling_bug=True):
 	if variable in ('dfs_padded','dfs_unpadded', 'dfs_balanced', 'dfs_params'):
 		csv_dir = 'dfs_csvs/'
+	elif variable in ('si', 'si_params'):
+		csv_dir = 'si_csvs/'
+	elif variable in ('decoder_RoPE', 'decoder_RoPE_params'):
+		csv_dir = 'decoder_csvs/'
 	elif variable in ('direct_schedule', 'dfs_schedule'):
 		csv_dir = 'schedule_csvs/'
 	else:
@@ -180,7 +198,7 @@ def make_scaling_figures(epoch=1500, variable='input_sizes', keep_incomplete_see
 	IGNORE_HIDS = [2048,4096]
 	IGNORE_LAYERS = [256,1024,2048]
 	IGNORE_INPUTSIZES = [138]
-	IGNORE_NL_INPUTSIZES = [96,112,128]
+	IGNORE_NL_INPUTSIZES = [112,128]
 	for seed in sorted(seeds):
 		if variable == 'input_sizes':
 			var_name = 'input size'
@@ -194,28 +212,59 @@ def make_scaling_figures(epoch=1500, variable='input_sizes', keep_incomplete_see
 		elif variable in ('NL_16hid_8layer', 'NL_32hid_16layer'):
 			var_name = 'input size'
 			prefix = 'input_'
-		elif variable in ('dfs_padded', 'dfs_unpadded', 'dfs_balanced'):
+		elif variable == 'decoder_RoPE':
+			var_name = 'input size'
+			prefix = 'input'
+		elif variable in ('dfs_padded', 'dfs_unpadded', 'dfs_balanced', 'si'):
 			var_name = 'input size'
 			prefix = 'input_'
-		elif variable == 'dfs_params':
+		elif variable in ('dfs_params', 'si_params', 'decoder_RoPE_params'):
 			var_name = 'non-embedding parameters'
 			prefix = ''
 		elif variable in ('direct_schedule', 'dfs_schedule'):
 			var_name = 'warmup'
 			prefix = 'warmup_'
+		elif variable == 'causal_masking':
+			var_name = 'input size'
+			prefix = f'scaling_n_c_1e-5_seed_{seed}_'
+		elif variable == 'causal_masking_hidden_dim':
+			var_name = 'non-embedding parameters'
+			prefix = f'seed{seed}_98_max_8_hid_'
 		inputs = [f for f in listdir(csv_dir + 'scaling_' + variable + '/seed_' + str(seed)) if f.startswith(prefix) and f.endswith('.csv')]
 		for f in inputs:
-			if variable == 'dfs_params':
+			if variable in ('dfs_params', 'si_params', 'decoder_RoPE_params'):
 				tokens = f[:-len('.csv')].split('_')
 				if len(tokens) != 3 or not tokens[0].endswith('layer') or not tokens[1].endswith('hid') or not tokens[2].endswith('head'):
 					continue
 				nlayers = int(tokens[0][:-len('layer')])
 				hid = int(tokens[1][:-len('hid')])
 				nheads = int(tokens[2][:-len('head')])
-				fixed_max_input_size = 112
+				if variable == 'dfs_params':
+					fixed_max_input_size = 112
+				elif variable == 'si_params':
+					fixed_max_input_size = 272
+				elif variable == 'decoder_RoPE_params':
+					fixed_max_input_size = 98
 				ntoken = (fixed_max_input_size-5) // 3 + 5
 				dmodel = max(ntoken, hid) + fixed_max_input_size
 				inputsize = 6*dmodel*dmodel*nlayers
+			elif variable == 'causal_masking':
+				substr = f[len(prefix):]
+				inputsize = int(substr[:substr.index('_')])
+			elif variable == 'causal_masking_hidden_dim':
+				substr = f[len(prefix):]
+				hid = int(substr[:substr.index('_')])
+				nlayers = 8
+				nheads = 1
+				fixed_max_input_size = 98
+				ntoken = (fixed_max_input_size-5) // 3 + 5
+				dmodel = max(ntoken, hid) + fixed_max_input_size
+				inputsize = 6*dmodel*dmodel*nlayers
+			elif variable == 'decoder_RoPE':
+				tokens = f[:-len('.csv')].split('_')
+				if not tokens[0].startswith('input'):
+					continue
+				inputsize = int(tokens[0][len('input'):])
 			else:
 				inputsize = int(f[len(prefix):-len('.csv')])
 			if variable == 'input_sizes' and inputsize in IGNORE_INPUTSIZES:
@@ -248,6 +297,8 @@ def make_scaling_figures(epoch=1500, variable='input_sizes', keep_incomplete_see
 				# TODO: this is due to an earlier bug in the `train.py` code where the loss wasn't being correctly scaled by the batch size; this line should be removed if this script is being used on data produced from a more recent version of `train.py` where the bug is fixed
 				if variable == 'layers' and inputsize >= 64:
 					train_loss_column /= 2**12
+				elif variable == 'hidden_dim' and inputsize == 2048:
+					pass
 				else:
 					train_loss_column /= 2**10
 			train_loss = np.convolve(train_loss_column, np.ones(TRAIN_LOSS_WINDOW*2 + 1)/(TRAIN_LOSS_WINDOW*2 + 1), mode='valid')
@@ -305,7 +356,11 @@ def make_scaling_figures(epoch=1500, variable='input_sizes', keep_incomplete_see
 			if len(losses) == 0:
 				del has_converged[inputsize]
 
-	if variable == 'input_sizes':
+	update_period = 2**18
+	if variable in ('si', 'si_params'):
+		update_period = 2**16
+
+	if variable in ('input_sizes', 'causal_masking'):
 		xaxis = 'Maximum input graph size'
 		legend_title = 'Maximum input graph size'
 		xmin, xmax = 8, 52
@@ -313,16 +368,16 @@ def make_scaling_figures(epoch=1500, variable='input_sizes', keep_incomplete_see
 		xaxis = 'Number of transformer layers'
 		legend_title = 'Number of\ntransformer layers'
 		xmin, xmax = 4, 45
-	elif variable == 'hidden_dim' or variable == 'dfs_params':
+	elif variable in ('hidden_dim', 'dfs_params', 'si_params', 'causal_masking_hidden_dim', 'decoder_RoPE_params'):
 		xaxis = 'Non-embedding parameters'
 		legend_title = 'Non-embedding\nparameters'
 		nlayers = 8
-		xmin, xmax = 100000, 1000000000
+		xmin, xmax = update_period, 1000000000
 	elif variable in ('NL_16hid_8layer', 'NL_32hid_16layer'):
 		xaxis = 'Maximum input graph size'
 		legend_title = 'Maximum input graph size'
 		xmin, xmax = 8, 34
-	elif variable in ('dfs_padded', 'dfs_unpadded', 'dfs_balanced'):
+	elif variable in ('dfs_padded', 'dfs_unpadded', 'dfs_balanced', 'si', 'decoder_RoPE'):
 		xaxis = 'Maximum input graph size'
 		legend_title = 'Maximum input graph size'
 		xmin, xmax = 10, 65
@@ -336,19 +391,21 @@ def make_scaling_figures(epoch=1500, variable='input_sizes', keep_incomplete_see
 	for inputsize,_ in test_losses.items():
 		inputsizes[counter] = inputsize
 		counter += 1
-	inputsizes.sort()
+	inputsizes = np.array(sorted(inputsizes))
 
-	if variable in ('input_sizes', 'NL_16hid_8layer', 'NL_32hid_16layer'):
+	if variable in ('input_sizes', 'NL_16hid_8layer', 'NL_32hid_16layer', 'causal_masking', 'decoder_RoPE'):
 		x = (inputsizes - 5) // 3
-	elif variable == 'layers' or variable == 'dfs_params':
+	elif variable in ('layers', 'dfs_params', 'si_params', 'causal_masking_hidden_dim', 'decoder_RoPE_params'):
 		x = inputsizes
-	elif variable == 'hidden_dim':
+	elif variable in ('hidden_dim'):
 		fixed_max_input_size = 98
 		ntoken = (fixed_max_input_size-5) // 3 + 5
 		dmodel = np.maximum(ntoken, inputsizes) + fixed_max_input_size
 		x = 6*dmodel*dmodel*nlayers
 	elif variable in ('dfs_padded', 'dfs_unpadded', 'dfs_balanced'):
-		x = (inputsizes - 5) // 3
+		x = (inputsizes - 4) // 4
+	elif variable == 'si':
+		x = (inputsizes - 2) // 6
 	elif variable in ('dfs_schedule', 'direct_schedule'):
 		x = inputsizes / 2**8
 
@@ -365,7 +422,7 @@ def make_scaling_figures(epoch=1500, variable='input_sizes', keep_incomplete_see
 	plt.xlim(xmin, xmax)
 	plt.ylim(-0.05, 1.05)
 	ax.set_xscale("log", base=10)
-	if variable not in ('hidden_dim', 'dfs_params', 'direct_schedule', 'dfs_schedule'):
+	if variable not in ('hidden_dim', 'dfs_params', 'si_params', 'decoder_RoPE_params', 'direct_schedule', 'dfs_schedule', 'causal_masking_hidden_dim'):
 		ax.xaxis.set_major_formatter(mticker.FormatStrFormatter('%d'))
 		ax.xaxis.set_minor_formatter(mticker.FormatStrFormatter('%d'))
 	plt.xlabel(xaxis)
@@ -398,13 +455,12 @@ def make_scaling_figures(epoch=1500, variable='input_sizes', keep_incomplete_see
 		#plt.ylim(0.0001, 10.0)
 		ax.set_xscale("log", base=10)
 		ax.set_yscale("log", base=10)
-		if variable not in ('hidden_dim', 'dfs_params', 'direct_schedule', 'dfs_schedule'):
+		if variable not in ('hidden_dim', 'dfs_params', 'si_params', 'decoder_RoPE_params', 'direct_schedule', 'dfs_schedule', 'causal_masking_hidden_dim'):
 			ax.xaxis.set_major_formatter(mticker.FormatStrFormatter('%d'))
 			ax.xaxis.set_minor_formatter(mticker.FormatStrFormatter('%d'))
 		plt.xlabel(xaxis)
 		plt.ylabel('Minimum test loss')
 		plt.grid(True, axis='x', which='both')
-		import pdb; pdb.set_trace()
 		plt.tight_layout()
 		fig.savefig('figures/scaling_' + variable + '_test.pdf', dpi=256)
 		plt.clf()
@@ -429,7 +485,7 @@ def make_scaling_figures(epoch=1500, variable='input_sizes', keep_incomplete_see
 	#plt.ylim(0.0001, 10.0)
 	ax.set_xscale("log", base=10)
 	ax.set_yscale("log", base=10)
-	if variable not in ('hidden_dim', 'dfs_params', 'direct_schedule', 'dfs_schedule'):
+	if variable not in ('hidden_dim', 'dfs_params', 'si_params', 'decoder_RoPE_params', 'direct_schedule', 'dfs_schedule', 'causal_masking_hidden_dim'):
 		ax.xaxis.set_major_formatter(mticker.FormatStrFormatter('%d'))
 		ax.xaxis.set_minor_formatter(mticker.FormatStrFormatter('%d'))
 	plt.xlabel(xaxis)
@@ -452,145 +508,123 @@ def make_scaling_figures(epoch=1500, variable='input_sizes', keep_incomplete_see
 			colors[inputsize] = cmap(t*start_color_point + (1-t)*end_color_point)
 			counter += 1
 
-	fig = plt.gcf()
-	ax = plt.gca()
-	fig.set_size_inches(4, 2.5, forward=True)
-	max_x = 0.0
-	handles = {}
-	for i in range(len(inputsizes)):
-		inputsize = inputsizes[i]
-		for _,loss_vals in test_losses[inputsize].items():
-			examples_seen = np.arange(0,len(loss_vals)) * (2**18)
-			line, = ax.plot(examples_seen, loss_vals, c=colors[inputsize], alpha=0.8)
-			max_x = max(examples_seen[-1], max_x)
-			if inputsize not in handles:
+	def plot_loss(loss_mode, plot_min_only, vs_flops):
+		fig = plt.gcf()
+		ax = plt.gca()
+		fig.set_size_inches(4, 2.5, forward=True)
+		max_x = 0.0
+		handles = {}
+		losses = train_losses if loss_mode == 'train' else test_losses
+		for i in range(len(inputsizes)):
+			inputsize = inputsizes[i]
+			if plot_min_only:
+				min_loss_len = min([len(loss_vals) for loss_vals in losses[inputsize].values()])
+				all_losses = np.empty((len(losses[inputsize]), min_loss_len))
+				counter = 0
+				for _,loss_vals in losses[inputsize].items():
+					all_losses[counter,:] = loss_vals[:min_loss_len]
+					counter += 1
+				examples_seen = np.arange(0,min_loss_len) * update_period
+				if vs_flops:
+					if variable in ('hidden_dim', 'dfs_params', 'si_params', 'decoder_RoPE_params', 'causal_masking_hidden_dim'):
+						nonembedding_params = x[i]
+					elif variable in ('NL_16hid_8layer', 'NL_32hid_16layer'):
+						vocab_size = 109
+						dmodel = 5*inputsizes[i] + vocab_size
+						nlayers = 8
+						nonembedding_params = 6*dmodel*dmodel*nlayers
+					else:
+						raise Exception('Unimplemented')
+					examples_seen = 6*examples_seen*nonembedding_params
+				line, = ax.plot(examples_seen, np.min(all_losses, axis=0), c=colors[inputsize], alpha=0.8)
+				max_x = max(examples_seen[-1], max_x)
 				handles[inputsize] = (line, x[i])
-	if variable in ('hidden_dim', 'dfs_params'):
-		labels = ['{0:.1f}M'.format(l/1000000) for _,(_,l) in handles.items()]
-	else:
-		labels = [str(l) for _,(_,l) in handles.items()]
-	if len(labels) <= 4:
-		num_cols = len(labels)
-	else:
-		num_cols = np.ceil(len(labels)/6)
-	plt.legend([h for _,(h,_) in handles.items()], labels, title=legend_title, fontsize=6.0, title_fontsize=7.5, ncols=num_cols, handlelength=1.0)
-	plt.xlim(1000000, max_x)
-	#plt.ylim(0.0001, 10.0)
-	ax.set_xscale("log", base=10)
-	ax.set_yscale("log", base=10)
-	plt.xlabel('Training examples')
-	plt.ylabel('Test loss')
-	plt.grid(True, axis='x', which='both')
-	plt.tight_layout()
-	fig.savefig('figures/scaling_' + variable + '_test_loss.pdf', dpi=256)
-	plt.clf()
+			else:
+				for _,loss_vals in losses[inputsize].items():
+					examples_seen = np.arange(0,len(loss_vals)) * update_period
+					if vs_flops:
+						if variable in ('hidden_dim', 'dfs_params', 'si_params', 'decoder_RoPE_params', 'causal_masking_hidden_dim'):
+							nonembedding_params = x[i]
+						elif variable in ('NL_16hid_8layer', 'NL_32hid_16layer'):
+							vocab_size = 109
+							dmodel = 5*inputsizes[i] + vocab_size
+							nlayers = 8
+							nonembedding_params = 6*dmodel*dmodel*nlayers
+						else:
+							raise Exception('Unimplemented')
+						examples_seen = 6*examples_seen*nonembedding_params
+					line, = ax.plot(examples_seen, loss_vals, c=colors[inputsize], alpha=0.8)
+					max_x = max(examples_seen[-1], max_x)
+					if inputsize not in handles:
+						handles[inputsize] = (line, x[i])
+		if variable in ('hidden_dim', 'dfs_params', 'si_params', 'decoder_RoPE_params', 'direct_schedule', 'dfs_schedule', 'causal_masking_hidden_dim'):
+			labels = ['{0:.1f}M'.format(l/1000000) for _,(_,l) in handles.items()]
+		else:
+			labels = [str(l) for _,(_,l) in handles.items()]
+		if variable == 'decoder_RoPE_params':
+			num_cols = 2
+		elif len(labels) <= 4 and variable not in ('hidden_dim', 'causal_masking_hidden_dim'):
+			num_cols = len(labels)
+		elif variable in ('NL_16hid_8layer', 'NL_32hid_16layer', 'si'):
+			num_cols = 2
+		else:
+			num_cols = np.ceil(len(labels)/6)
+		plt.legend([h for _,(h,_) in handles.items()], labels, title=legend_title, fontsize=6.0, title_fontsize=7.5, ncols=num_cols, handlelength=1.0, loc=('lower left' if variable in ('NL_16hid_8layer', 'NL_32hid_16layer') else 'best'))
+		if loss_mode == 'train':
+			if vs_flops:
+				if variable == 'si_params':
+					plt.xlim(235000000*update_period, 6*epoch*update_period*min(inputsizes))
+				else:
+					plt.xlim(10000000*update_period, max_x)
+			else:
+				plt.xlim(update_period, max_x)
+		else:
+			if vs_flops:
+				plt.xlim(10000000*1000000, 6*epoch*update_period*min(inputsizes))
+			else:
+				plt.xlim(1000000, max_x)
+		#plt.ylim(0.0001, 10.0)
+		ax.set_xscale("log", base=10)
+		ax.set_yscale("log", base=10)
+		if vs_flops:
+			plt.xlabel('Floating-point operations')
+		else:
+			plt.xlabel('Training examples')
+		if loss_mode == 'train':
+			if plot_min_only:
+				plt.ylabel('Minimum train loss')
+			else:
+				plt.ylabel('Training loss')
+		else:
+			if plot_min_only:
+				plt.ylabel('Minimum test loss')
+			else:
+				plt.ylabel('Test loss')
+		plt.grid(True, axis='x', which='both')
+		plt.tight_layout()
+		fig.savefig('figures/scaling_' + variable + '_' + loss_mode + '_' + ('min' if plot_min_only else '') + 'loss' + ('_flops' if vs_flops else '') + '.pdf', dpi=256)
+		plt.clf()
 
-	fig = plt.gcf()
-	ax = plt.gca()
-	fig.set_size_inches(4, 2.5, forward=True)
-	max_x = 0.0
-	handles = {}
-	for i in range(len(inputsizes)):
-		inputsize = inputsizes[i]
-		for _,loss_vals in train_losses[inputsize].items():
-			examples_seen = np.arange(0,len(loss_vals)) * (2**18)
-			line, = ax.plot(examples_seen, loss_vals, c=colors[inputsize], alpha=0.8)
-			max_x = max(examples_seen[-1], max_x)
-			if inputsize not in handles:
-				handles[inputsize] = (line, x[i])
-	if variable in ('hidden_dim', 'dfs_params'):
-		labels = ['{0:.1f}M'.format(l/1000000) for _,(_,l) in handles.items()]
-	else:
-		labels = [str(l) for _,(_,l) in handles.items()]
-	if len(labels) <= 4:
-		num_cols = len(labels)
-	else:
-		num_cols = np.ceil(len(labels)/6)
-	plt.legend([h for _,(h,_) in handles.items()], labels, title=legend_title, fontsize=6.0, title_fontsize=7.5, ncols=num_cols, handlelength=1.0)
-	plt.xlim(100000, max_x)
-	#plt.ylim(0.0001, 10.0)
-	ax.set_xscale("log", base=10)
-	ax.set_yscale("log", base=10)
-	plt.xlabel('Training examples')
-	plt.ylabel('Training loss')
-	plt.grid(True, axis='x', which='both')
-	plt.tight_layout()
-	fig.savefig('figures/scaling_' + variable + '_train_loss.pdf', dpi=256)
-	plt.clf()
+	plot_loss(loss_mode='test', plot_min_only=False, vs_flops=False)
+	plot_loss(loss_mode='train', plot_min_only=False, vs_flops=False)
+	plot_loss(loss_mode='test', plot_min_only=True, vs_flops=False)
+	plot_loss(loss_mode='train', plot_min_only=True, vs_flops=False)
+	if variable in ('hidden_dim', 'dfs_params', 'si_params', 'NL_16hid_8layer', 'NL_32hid_16layer', 'causal_masking_hidden_dim', 'decoder_RoPE_params'):
+		plot_loss(loss_mode='test', plot_min_only=False, vs_flops=True)
+		plot_loss(loss_mode='train', plot_min_only=False, vs_flops=True)
+		plot_loss(loss_mode='test', plot_min_only=True, vs_flops=True)
+		plot_loss(loss_mode='train', plot_min_only=True, vs_flops=True)
 
-	fig = plt.gcf()
-	ax = plt.gca()
-	fig.set_size_inches(4, 2.5, forward=True)
-	max_x = 0.0
-	handles = {}
-	for i in range(len(inputsizes)):
-		inputsize = inputsizes[i]
-		min_loss_len = min([len(loss_vals) for loss_vals in test_losses[inputsize].values()])
-		all_losses = np.empty((len(test_losses[inputsize]), min_loss_len))
-		counter = 0
-		for _,loss_vals in test_losses[inputsize].items():
-			all_losses[counter,:] = loss_vals[:min_loss_len]
-			counter += 1
-		examples_seen = np.arange(0,min_loss_len) * (2**18)
-		line, = ax.plot(examples_seen, np.min(all_losses, axis=0), c=colors[inputsize], alpha=0.8)
-		max_x = max(examples_seen[-1], max_x)
-		handles[inputsize] = (line, x[i])
-	if variable in ('hidden_dim', 'dfs_params', 'direct_schedule', 'dfs_schedule'):
-		labels = ['{0:.1f}M'.format(l/1000000) for _,(_,l) in handles.items()]
-	else:
-		labels = [str(l) for _,(_,l) in handles.items()]
-	if len(labels) <= 4:
-		num_cols = len(labels)
-	else:
-		num_cols = np.ceil(len(labels)/6)
-	plt.legend([h for _,(h,_) in handles.items()], labels, title=legend_title, fontsize=6.0, title_fontsize=7.5, ncols=num_cols, handlelength=1.0)
-	plt.xlim(1000000, max_x)
-	#plt.ylim(0.0001, 10.0)
-	ax.set_xscale("log", base=10)
-	ax.set_yscale("log", base=10)
-	plt.xlabel('Training examples')
-	plt.ylabel('Minimum test loss')
-	plt.grid(True, axis='x', which='both')
-	plt.tight_layout()
-	fig.savefig('figures/scaling_' + variable + '_test_minloss.pdf', dpi=256)
-	plt.clf()
-
-	fig = plt.gcf()
-	ax = plt.gca()
-	fig.set_size_inches(4, 2.5, forward=True)
-	max_x = 0.0
-	handles = {}
-	for i in range(len(inputsizes)):
-		inputsize = inputsizes[i]
-		min_loss_len = min([len(loss_vals) for loss_vals in train_losses[inputsize].values()])
-		all_losses = np.empty((len(train_losses[inputsize]), min_loss_len))
-		counter = 0
-		for _,loss_vals in train_losses[inputsize].items():
-			all_losses[counter,:] = loss_vals[:min_loss_len]
-			counter += 1
-		examples_seen = np.arange(0,min_loss_len) * (2**18)
-		line, = ax.plot(examples_seen, np.min(all_losses, axis=0), c=colors[inputsize], alpha=0.8)
-		max_x = max(examples_seen[-1], max_x)
-		handles[inputsize] = (line, x[i])
-	if variable in ('hidden_dim', 'dfs_params', 'direct_schedule', 'dfs_schedule'):
-		labels = ['{0:.1f}M'.format(l/1000000) for _,(_,l) in handles.items()]
-	else:
-		labels = [str(l) for _,(_,l) in handles.items()]
-	if len(labels) <= 4:
-		num_cols = len(labels)
-	else:
-		num_cols = np.ceil(len(labels)/6)
-	plt.legend([h for _,(h,_) in handles.items()], labels, title=legend_title, fontsize=6.0, title_fontsize=7.5, ncols=num_cols, handlelength=1.0)
-	plt.xlim(100000, max_x)
-	#plt.ylim(0.0001, 10.0)
-	ax.set_xscale("log", base=10)
-	ax.set_yscale("log", base=10)
-	plt.xlabel('Training examples')
-	plt.ylabel('Minimum training loss')
-	plt.grid(True, axis='x', which='both')
-	plt.tight_layout()
-	fig.savefig('figures/scaling_' + variable + '_train_minloss.pdf', dpi=256)
-	plt.clf()
+def get_mi_path_merge_stats(ckpt_dir, epoch, lookahead):
+	from trace_circuit import do_analysis, MissingSampleError
+	ckpt_filepath = ckpt_dir + '/epoch{}.pt'.format(epoch)
+	try:
+		print('Reading trace_circuit analysis from {} for lookahead {}.'.format(ckpt_filepath, lookahead))
+		_, _, _, path_merge_stats = do_analysis(ckpt_filepath, None, lookahead, 100, quiet=True)
+		return path_merge_stats
+	except MissingSampleError:
+		print('WARNING: Checkpoint for {} is missing tracing results for lookahead {}.'.format(ckpt_filepath, lookahead))
+		return None
 
 def get_mi_results(ckpt_dir, epoch=3370):
 	from trace_circuit import do_analysis, MissingSampleError
@@ -609,6 +643,54 @@ def get_mi_results(ckpt_dir, epoch=3370):
 			results[:,counter] = np.nan
 		counter += 1
 	return results
+
+def make_mi_path_merge_stats(epoch=3370):
+	greedy_ckpt_dir  = 'useful_path_results/checkpoints_v3_6layer_inputsize128_maxlookahead-1_seed3_trainstreaming_nomask_unablated_padded' # available seeds: 1-8
+	crafted_ckpt_dir = 'useful_path_results/checkpoints_v3_6layer_inputsize128_maxlookahead20_seed1_trainstreaming_nomask_unablated_padded' # available seeds: 1-8
+	crafted_OOD_ckpt_dir = 'useful_path_results/checkpoints_v3_6layer_inputsize128_maxlookahead12_seed2_trainstreaming_nomask_unablated_padded' # available seeds: 1-8
+	path_merge_stats = get_mi_path_merge_stats(crafted_ckpt_dir, epoch, lookahead=12)
+
+	for l in range(len(path_merge_stats)):
+		data = np.zeros((12+2, 12+2))
+		for src, dst_histogram in path_merge_stats[l].items():
+			for dst, frequency in dst_histogram.items():
+				if src == -1:
+					src_index = 0
+				elif src > 12-1:
+					src_index = 12+1
+				else:
+					src_index = src+1
+				if dst == -1:
+					dst_index = 0
+				elif dst > 12-1:
+					dst_index = 12+1
+				else:
+					dst_index = dst+1
+				data[dst_index,src_index] += frequency
+		data = data.T / (np.sum(data.T, axis=0)+1e-9)
+
+		fig = plt.gcf()
+		fig.set_size_inches(4.0, 4.0, forward=True)
+		r_cmap = plt.get_cmap('plasma').reversed()
+		plt.imshow(data, cmap=r_cmap, vmin=0.0, vmax=1.0)
+		#plt.xticks([-0.2] + [i for i in range(1,22)], labels=(['Naïve distr.'] + ['Star distr.'] + [i+1 for i in range(20)]), rotation=45, ha="right", rotation_mode="anchor")
+		#plt.yticks(np.arange(4), labels=['Naïve distr.', 'Star distr.', 'Balanced distr.', 'Balanced distr.\n(lookahead $\\le 12$)'])
+		plt.tick_params(axis='both', which='both', length=0, pad=0.8)
+		plt.grid(False)
+		'''for i in range(data.shape[0]):
+			for j in range(data.shape[1]):
+				c = "w" if data[i,j] > 0.6 else "k"
+				plt.text(j, i, '%.2f' % data[i,j], ha="center", va="center", color=c, fontsize=8)'''
+
+		#plt.xticks(np.arange(-.5, 22, 1), minor=True)
+		#plt.yticks(np.arange(-.5, 4, 1), minor=True)
+		plt.xlabel('Target vertex (distance from start)')
+		plt.ylabel('Source vertex (distance from start)')
+		plt.grid(which='minor', color='w', linestyle='-', linewidth=1)
+		plt.tick_params(which='minor', bottom=False, left=False)
+		plt.tight_layout()
+		fig.savefig('figures/mi_path_merge_stats_layer{}.pdf'.format(l), dpi=128)
+		plt.clf()
 
 def make_mi_figures(epoch=3370):
 	greedy_ckpt_dir  = 'useful_path_results/checkpoints_v3_6layer_inputsize128_maxlookahead-1_seed3_trainstreaming_nomask_unablated_padded' # available seeds: 1-8
@@ -752,16 +834,30 @@ if do_all or '--scaling-inputsize' in argv:
 if do_all or '--scaling-layers' in argv:
 	make_scaling_figures(epoch=290, variable='layers')
 if do_all or '--scaling-hiddendim' in argv:
-	make_scaling_figures(epoch=900, variable='hidden_dim')
+	make_scaling_figures(epoch=900, variable='hidden_dim', keep_incomplete_seeds=False)
 if do_all or '--scaling-NL' in argv:
-	make_scaling_figures(epoch=1120, variable='NL_16hid_8layer')
+	make_scaling_figures(epoch=1500, variable='NL_16hid_8layer', keep_incomplete_seeds=True)
 if do_all or '--scaling-dfs' in argv:
 	make_scaling_figures(epoch=2845, variable='dfs_balanced', train_loss_scaling_bug=False)
 if do_all or '--scaling-dfs-params' in argv:
-	make_scaling_figures(epoch=500, variable='dfs_params', keep_incomplete_seeds=True, train_loss_scaling_bug=False)
+	make_scaling_figures(epoch=700, variable='dfs_params', keep_incomplete_seeds=True, train_loss_scaling_bug=False)
+if do_all or '--scaling-si' in argv:
+	make_scaling_figures(epoch=5125, variable='si', train_loss_scaling_bug=False)
+if do_all or '--scaling-si-params' in argv:
+	make_scaling_figures(epoch=8000, variable='si_params', keep_incomplete_seeds=True, train_loss_scaling_bug=False)
 if do_all or '--scaling-schedule' in argv:
 	make_scaling_figures(epoch=1550, variable='dfs_schedule', keep_incomplete_seeds=True, train_loss_scaling_bug=False)
+if do_all or '--scaling-decoder' in argv:
+	make_scaling_figures(epoch=950, variable='causal_masking', keep_incomplete_seeds=True)
+if do_all or '--scaling-decoder-params' in argv:
+	make_scaling_figures(epoch=15000, variable='causal_masking_hidden_dim', keep_incomplete_seeds=True)
+if do_all or '--scaling-decoder-RoPE' in argv:
+	make_scaling_figures(epoch=2000, variable='decoder_RoPE', keep_incomplete_seeds=True, train_loss_scaling_bug=False)
+if do_all or '--scaling-decoder-RoPE-params' in argv:
+	make_scaling_figures(epoch=20000, variable='decoder_RoPE_params', keep_incomplete_seeds=True, train_loss_scaling_bug=False)
 if do_all or '--mi' in argv:
 	make_mi_figures(epoch=3370)
+if do_all or '--mi-path-merge-stats' in argv:
+	make_mi_path_merge_stats(epoch=3370)
 if do_all or '--lookahead-histogram' in argv:
 	make_lookahead_histogram()
