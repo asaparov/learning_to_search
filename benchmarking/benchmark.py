@@ -191,27 +191,14 @@ def generate_words(n):
 	return fake.words(nb=n)
 
 
-def logic_paragraph_from_tokens(tokens_str: str, paths: list):
-	"""
-	Given a string like:  "E 4 1 E 8 3 Q 4 8 P"
-	1) Parse out edges (E A B) and query (Q X Y).
-	2) Collect all node IDs so we know how many distinct names/adjectives to generate.
-	3) Map each node ID to (Name, Adjective).
-	4) Produce a paragraph of logic statements:
-		  If <Name(A)> is <Adjective(A)>, then <Name(A)> is <Adjective(B)>.
-	   and for query:
-		  If <Name(X)> is <Adjective(X)>, prove that <Name(X)> is <Adjective(Y)>.
-	5) Return that paragraph as a string.
-	"""
-
-	# -- Split the string into tokens, e.g.: ["E","4","1","E","8","3","Q","4","8","P"]
+def logic_paragraph_from_tokens(tokens_str: str, paths: list, use_diff_names=False):
+	# Split string into tokens
 	tokens = tokens_str.strip().split()
 
-	# We'll store edges in a list of (A,B) and queries in a list of (X,Y)
 	edges = []
 	queries = []
 
-	# We also want to keep track of all integer node IDs that appear
+	# Keep track of nodes in a set
 	node_ids = set()
 
 	i = 0
@@ -246,46 +233,38 @@ def logic_paragraph_from_tokens(tokens_str: str, paths: list):
 			# Possibly a stray token or something else (like a vertex ID alone).
 			i += 1
 
-	# --------------------------------------------------------
-	# 1) We have all node IDs in 'node_ids'.
-	# 2) Generate enough names + adjectives to cover them.
-	#    Suppose we have the helper funcs:
-	#       generate_name(N)   -> e.g. ["Alice","Bob",...]
-	#       generate_words(N)  -> e.g. ["happy","strong",...]
-	#    We'll just assume they exist. Example usage:
-	# --------------------------------------------------------
+	# Generate fake names and fake adjectives
 	num_nodes = len(node_ids)
-	all_names = generate_name(num_nodes)  # returns num_nodes distinct names
-	all_adjs = generate_fake_nouns(num_nodes)  # returns num_nodes distinct adjectives
+	all_names = generate_name(num_nodes)
+	all_adjs = generate_fake_nouns(num_nodes)
 
-	# Sort node_ids so we can map them in a stable order
-	# e.g. node 1 -> (all_names[0], all_adjs[0]), node 3->(all_names[1], ...), etc.
+
 	sorted_nodes = sorted(node_ids)
 	id_to_pair = {}  # node_id -> (name, adjective)
+	# Assign all nodes the same name if use_diff_names == False
 	for idx, node_id in enumerate(sorted_nodes):
-		id_to_pair[node_id] = (all_names[0], all_adjs[idx])
+		id_to_pair[node_id] = (all_names[idx if use_diff_names else 0], all_adjs[idx])
 
-	# --------------------------------------------------------
-	# Build up lines of text for each edge and query
-	# --------------------------------------------------------
+	# Lines of logic
 	lines = []
 
 	# For each edge:  E A B => "If name(A) is adj(A), then name(A) is adj(B)."
 	for (A, B) in edges:
-		nameA, adjA = id_to_pair[A]
-		_, adjB = id_to_pair[B]
-		lines.append(f"If {nameA} is {adjA}, then {nameA} is {adjB}.")
+		name_A, adj_A = id_to_pair[A]
+		_, adj_B = id_to_pair[B]
+		lines.append(f"If {name_A} is {adj_A}, then {name_A} is {adj_B}.")
 
 	# For each query: Q X Y => "If name(X) is adj(X), prove that name(X) is adj(Y)."
 	for (X, Y) in queries:
-		nameX, adjX = id_to_pair[X]
-		_, adjY = id_to_pair[Y]
-		lines.append(f"If {nameX} is {adjX}, prove that {nameX} is {adjY}.")
+		name_x, adj_x = id_to_pair[X]
+		_, adj_y = id_to_pair[Y]
+		lines.append(f"If {name_x} is {adj_x}, prove that {name_x} is {adj_y}.")
 
 	# Join all lines into one paragraph
 	paragraph = " ".join(lines)
 
-	path_adjectives = [[id_to_pair[node.id][1] for node in path] for path in paths]
+	# Convert the shortest path to adjectives
+	path_adjectives = [id_to_pair[node.id][1] for node in path[0]]
 
 	return paragraph, path_adjectives
 
