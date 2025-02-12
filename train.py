@@ -9,7 +9,6 @@ from random import sample, randrange, choice, shuffle, seed, getstate, setstate,
 from sys import stdout
 
 import numpy as np
-import pybind11
 from pybind11.__main__ import print_includes
 from io import StringIO
 import torch
@@ -36,32 +35,46 @@ def build_module(name):
 		sys.stdout = old_stdout
 
 	python_extension_suffix = sysconfig.get_config_var("EXT_SUFFIX")
-	command = f"g++ -Ofast -DNDEBUG -fno-stack-protector -Wall -Wpedantic -shared -fPIC {includes} -I. {name}.cpp -o {name}{python_extension_suffix}"
+	if sys.platform == "darwin":
+		# macOS command
+		command = (
+			f"g++ -std=c++11 -Ofast -DNDEBUG -fno-stack-protector "
+			f"-Wall -Wpedantic -undefined dynamic_lookup -shared -fPIC "
+			f"{includes} -I. {name}.cpp -o {name}{python_extension_suffix}"
+		)
+	else:
+		# Non-macOS command
+		command = (
+			f"g++ -Ofast -std=c++11 -DNDEBUG -fno-stack-protector "
+			f"-Wall -Wpedantic -shared -fPIC "
+			f"{includes} -I. {name}.cpp -o {name}{python_extension_suffix}"
+		)
 	print(command)
 	if os.system(command) != 0:
 		print(f"ERROR: Unable to compile `{name}.cpp`.")
 		import sys
 		sys.exit(1)
 
-try:
-	from os.path import getmtime
-	from importlib.util import find_spec
-	generator_spec = find_spec('generator')
-	if generator_spec == None:
-		raise ModuleNotFoundError
-	if getmtime(generator_spec.origin) < getmtime('generator.cpp'):
-		print("C++ module `generator` is out-of-date. Compiling from source...")
+if __name__ == "__main__":
+	try:
+		from os.path import getmtime
+		from importlib.util import find_spec
+		generator_spec = find_spec('generator')
+		if generator_spec == None:
+			raise ModuleNotFoundError
+		if getmtime(generator_spec.origin) < getmtime('generator.cpp'):
+			print("C++ module `generator` is out-of-date. Compiling from source...")
+			build_module("generator")
+		import generator
+	except ModuleNotFoundError:
+		print("C++ module `generator` not found. Compiling from source...")
 		build_module("generator")
-	import generator
-except ModuleNotFoundError:
-	print("C++ module `generator` not found. Compiling from source...")
-	build_module("generator")
-	import generator
-except ImportError:
-	print("Error loading C++ module `generator`. Compiling from source...")
-	build_module("generator")
-	import generator
-print("C++ module `generator` loaded.")
+		import generator
+	except ImportError:
+		print("Error loading C++ module `generator`. Compiling from source...")
+		build_module("generator")
+		import generator
+	print("C++ module `generator` loaded.")
 
 RESERVED_INDICES = (0,)
 
@@ -1224,6 +1237,7 @@ def train(max_input_size, dataset_size, distribution, max_lookahead, seed_value,
 			iterable_dataset = StreamingDataset(epoch * STREAMING_BLOCK_SIZE // BATCH_SIZE, model.lookahead, model.max_edges)
 			train_loader = DataLoader(iterable_dataset, batch_size=None, num_workers=NUM_DATA_WORKERS, pin_memory=True, prefetch_factor=8)
 			reinit_data_loader = False
+
 
 if __name__ == "__main__":
 	import argparse
