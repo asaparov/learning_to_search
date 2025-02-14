@@ -3,8 +3,13 @@ import random
 import sys
 import sysconfig
 from io import StringIO
+import asyncio
 
+from openai import AsyncOpenAI
+
+aclient = AsyncOpenAI()
 from faker import Faker
+from openai import OpenAI
 from pybind11.__main__ import print_includes
 
 # Add the parent directory to path
@@ -53,26 +58,26 @@ def build_module(name):
 		print(f"ERROR: Unable to compile `{name}.cpp`.")
 		sys.exit(1)
 
-try:
-	from os.path import getmtime
-	from importlib.util import find_spec
-
-	generator_spec = find_spec('generator')
-	if generator_spec == None:
-		raise ModuleNotFoundError
-	if getmtime(generator_spec.origin) < getmtime('generator.cpp'):
-		print("C++ module `generator` is out-of-date. Compiling from source...")
-		build_module("generator")
-	import generator
-except ModuleNotFoundError:
-	print("C++ module `generator` not found. Compiling from source...")
-	build_module("generator")
-	import generator
-except ImportError:
-	print("Error loading C++ module `generator`. Compiling from source...")
-	build_module("generator")
-	import generator
-print("C++ module `generator` loaded.")
+# try:
+# 	from os.path import getmtime
+# 	from importlib.util import find_spec
+#
+# 	generator_spec = find_spec('generator')
+# 	if generator_spec == None:
+# 		raise ModuleNotFoundError
+# 	if getmtime(generator_spec.origin) < getmtime('generator.cpp'):
+# 		print("C++ module `generator` is out-of-date. Compiling from source...")
+# 		build_module("generator")
+# 	import generator
+# except ModuleNotFoundError:
+# 	print("C++ module `generator` not found. Compiling from source...")
+# 	build_module("generator")
+# 	import generator
+# except ImportError:
+# 	print("Error loading C++ module `generator`. Compiling from source...")
+# 	build_module("generator")
+# 	import generator
+# print("C++ module `generator` loaded.")
 
 
 def generate_graph_text(
@@ -121,6 +126,9 @@ def generate_graph_text(
 	# Add path prefix token
 	prefix.append(PATH_PREFIX_TOKEN)
 
+	# Add the starting vertex as my current position
+	prefix.append(start.id)
+
 	# Function for mapping tokens to letters
 	def token_to_str(token):
 		if token == EDGE_PREFIX_TOKEN:
@@ -129,6 +137,7 @@ def generate_graph_text(
 			return "Q"
 		elif token == PATH_PREFIX_TOKEN:
 			return "P"
+			# return ""
 		elif token == PADDING_TOKEN:
 			return ""
 		else:
@@ -136,6 +145,7 @@ def generate_graph_text(
 
 	# Convert all tokens to letters
 	text_tokens = [token_to_str(t) for t in prefix if token_to_str(t) != ""]
+
 
 	final_str = " ".join(text_tokens)
 	return final_str, paths
@@ -264,27 +274,100 @@ def logic_paragraph_from_tokens(tokens_str: str, paths: list, use_diff_names=Fal
 	paragraph = " ".join(lines)
 
 	# Convert the shortest path to adjectives
-	path_adjectives = [id_to_pair[node.id][1] for node in path[0]]
+	path_adjectives = [id_to_pair[node.id][1] for node in paths[0]]
 
 	return paragraph, path_adjectives
 
 
+async def get_response(prompt: str):
+	response = await aclient.chat.completions.create(model="gpt-4o",
+			messages=[{"role": "user", "content": prompt}])
+	return response.choices[0].message.content
+
+
+async def main():
+	num_paths = 2
+	max_num_parents = 3
+
+	prompts = []
+	correct_responses = []
+	look_ahead_values = []
+
+	for look_ahead in range(1, 55):
+
+		print(f"Look ahead: {look_ahead}")
+		for _ in range(3):
+			txt, path = generate_graph_text(
+				max_input_size=max_num_parents * look_ahead * num_paths * 4,
+				num_vertices=max_num_parents * look_ahead,
+				max_num_parents=max_num_parents,
+				lookahead=look_ahead,
+				num_paths=num_paths,
+			)
+			logic, logic_path = logic_paragraph_from_tokens(txt, path)
+			path = [node.id for node in path[0]]
+
+			prompt = (f"{txt}\nAbove is a representation of a directed graph search problem, "
+					  f"where E A B represents an edge from A to B, and Q X Y represents starting from X and ending at Y,"
+					  f"find the shortest path. The vertex after P indicates our current position. Respond with only the "
+					  f"next vertex on the shortest path from X to Y.")
+
+			# prompt = f"{logic} Respond with only the list of words that you use in the proof."
+
+			prompts.append(prompt)
+			correct_responses.append(path[1])
+			look_ahead_values.append(look_ahead)
+
+			print(prompt, "\n")
+			# print(logic_path)
+			print(path[1])
+			print("\n")
+
+
+		# if len(prompts) >= 9:
+		# 	tasks = [asyncio.create_task(get_response(prompt)) for prompt in prompts]
+		# 	results = await asyncio.gather(*tasks)
+		#
+		# 	for response, correct, lav in zip(results, correct_responses, look_ahead_values):
+		# 		try:
+		# 			if int(response) == int(correct):
+		# 				print(f"Correct, look_ahead={lav}, num_paths={num_paths}, max_num_parents={max_num_parents}")
+		# 			else:
+		# 				print(f"Incorrect, response={response}, correct={correct} look_ahead={lav}, num_paths={num_paths}, max_num_parents={max_num_parents}")
+		# 		except ValueError:
+		# 			print(f"Response={response}, gave a value error, look_ahead={lav}")
+		#
+		# 	prompts = []
+		# 	correct_responses = []
+		# 	look_ahead_values = []
+
+
+
 if __name__ == "__main__":
-	max_input_size = 40
+	asyncio.run(main())
+	# num_paths = 2
+	# max_num_parents = 3
+	# look_ahead = 10
+	#
+	# # max_vertices = 3 * look_ahead
+	# # max_input_size = 40
+	#
+	# txt, path = generate_graph_text(
+	# 	max_input_size=max_num_parents * look_ahead * 4,
+	# 	num_vertices=max_num_parents * look_ahead,
+	# 	max_num_parents=max_num_parents,
+	# 	lookahead=look_ahead,
+	# 	num_paths=num_paths,
+	# )
 
-	look_ahead = 3
-	max_vertices = 3 * look_ahead
+	# logic, logic_path = logic_paragraph_from_tokens(txt, path)
+	# path = [node.id for node in path[0]]
+	# print("\nRandom DAG:", txt, "\npath: ", path)
+	# # print("\nLogic: ", logic, "\nLogic path: ", logic_path)
 
-	for _ in range(1):
-		txt, path = generate_graph_text(
-			max_input_size=max_input_size,
-			num_vertices=max_vertices,  # or any range
-			max_num_parents=3,
-			lookahead=look_ahead,
-			num_paths=2,
-		)
+	# prompt = (f"{txt}\n\nAbove is a representation of a directed graph search problem, "
+	# 		  f"where E A B represents an edge from A to B, and Q X Y represents starting from X and ending at Y,"
+	# 		  f"find the shortest path. Respond with only the path in the form: V1 V2 V3 V4...")
 
-		logic, logic_path = logic_paragraph_from_tokens(txt, path)
-		path = [node.id for node in path[0]]
-		print("\nRandom DAG:", txt, "\npath: ", path)
-		print("\nLogic: ", logic, "\nLogic path: ", logic_path)
+	# client = OpenAI()
+

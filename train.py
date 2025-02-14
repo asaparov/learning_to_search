@@ -332,10 +332,10 @@ def generate_example(num_vertices, max_num_parents, max_vertex_id, get_shortest_
 
 	# Reject graphs where the path doesn't exist or there are more than one path
 	if paths == None:
-		print("No paths found, rejecting")
+		# print("No paths found, rejecting")
 		return generate_example(num_vertices, max_num_parents, max_vertex_id)
 	if len(paths) > 1:
-		print("More than one path found, rejecting")
+		# print("More than one path found, rejecting")
 		return generate_example(num_vertices, max_num_parents, max_vertex_id)
 
 	return (graph, start, end, paths)
