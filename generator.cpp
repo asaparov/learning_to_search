@@ -564,7 +564,8 @@ py::tuple generate_training_set(const unsigned int max_input_size, const uint64_
 				for (unsigned int i = 0; i < (unsigned) max_lookahead + 1; i++)
 					if (num_generated == 0 || lookahead_step_histogram[i] / num_generated < MAX_FREQS_PER_BUCKET[i])
 						potential_lookaheads[potential_lookahead_count++] = i;
-				unsigned int lookahead = choice(potential_lookaheads, potential_lookahead_count);
+//				unsigned int lookahead = choice(potential_lookaheads, potential_lookahead_count);
+                unsigned int lookahead = max_lookahead;
 
 				unsigned int num_paths;
 				if (lookahead == 0) {
