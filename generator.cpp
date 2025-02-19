@@ -582,6 +582,26 @@ py::tuple generate_training_set(const unsigned int max_input_size, const uint64_
 					g.length = 0; paths.length = 0;
 					continue;
 				}
+
+				unsigned int shortest_path_length = paths[0].length;
+                for (unsigned int i = 1; i < paths.length; i++)
+                    if (paths[i].length < shortest_path_length)
+                        shortest_path_length = paths[i].length;
+
+                // Count how many paths have the shortest length.
+                unsigned int shortest_path_count = 0;
+                for (unsigned int i = 0; i < paths.length; i++) {
+                    if (paths[i].length == shortest_path_length)
+                        shortest_path_count++;
+                }
+
+                // Only accept graphs with a unique (one) shortest path.
+                if (shortest_path_length <= 1 || shortest_path_count != 1) {
+                    for (node& n : g) core::free(n);
+                    for (array<node*>& a : paths) core::free(a);
+                    g.length = 0; paths.length = 0;
+                    continue;
+                }
 			}
 			unsigned int shortest_path_length = paths[0].length;
 			for (unsigned int i = 1; i < paths.length; i++)
