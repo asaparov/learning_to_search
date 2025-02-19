@@ -274,13 +274,14 @@ def logic_paragraph_from_tokens(tokens_str: str, next_step: int, use_diff_names=
 	def get_logic_line(name: str, adj_a: str, adj_b: str) -> str:
 		choices = [
 			f"If {name} is {adj_a}, then {name} is {adj_b}.",
-			f"{name} is {adj_a} implies {name} is {adj_b}.",
+			f"{adj_a} implies {adj_b}.",
 			f"{name} is {adj_a} then {name} is {adj_b}.",
 			f"{adj_b} is true if {adj_a} is true.",
 			f"If {adj_a} then {adj_b} is true.",
 			f"If {adj_a} is true then {adj_b}.",
-			f"Given {adj_a} then {adj_b}.",
+			f"Given someone is {adj_a} then they're {adj_b}.",
 		]
+		return random.choice(choices)
 
 	# For each edge:  E A B => "If name(A) is adj(A), then name(A) is adj(B)."
 	for (A, B) in edges:
@@ -292,55 +293,34 @@ def logic_paragraph_from_tokens(tokens_str: str, next_step: int, use_diff_names=
 	for (X, Y) in queries:
 		name_x, adj_x = id_to_pair[X]
 		_, adj_y = id_to_pair[Y]
-		lines.append(f"If {name_x} is {adj_x}, what is the next step to prove that {name_x} is {adj_y}.")
+		lines.append(f"If {name_x} is {adj_x}, what is the next step to prove that {name_x} is {adj_y}?")
 
 	# Join all lines into one paragraph
 	paragraph = " ".join(lines)
 
 	# Get the correct adjective for the next step
-	next_step_adj = id_to_pair[next_step]
+	next_step_adj = id_to_pair[next_step][1]
 
 	return paragraph, next_step_adj
 
 
-async def get_response(prompt: str):
-	response = await aclient.chat.completions.create(model="o3-mini",
+async def get_response(prompt: str, model: str):
+	response = await aclient.chat.completions.create(model=model,
 			messages=[{"role": "user", "content": prompt}])
 	tokens = response.usage.completion_tokens_details.reasoning_tokens
 	return response.choices[0].message.content, tokens
 
 
-async def main(samples_per_test = 3):
-	# generator.set_seed(0)
-
-	num_paths = 3
-	max_num_parents = 3
+async def main(samples_per_test: int = 3, lookahead_range: range = range(1, 5), num_paths: int = 2, max_num_parents: int = 3, logic: bool = False, seed: int = None, verbose: bool = True, print_prompts: bool = False, model: str = "gpt-4o"):
+	if seed is not None:
+		random.seed(seed)
+		generator.set_seed(seed)
 
 	prompts = []
 	correct_responses = []
 	look_ahead_values = []
 
-	# lookahead = 5
-	# max_input_size = max_num_parents * lookahead * num_paths * 4
-	# QUERY_PREFIX_TOKEN = (max_input_size - 5) // 3 + 4
-	# PADDING_TOKEN = (max_input_size - 5) // 3 + 3
-	# EDGE_PREFIX_TOKEN = (max_input_size - 5) // 3 + 2
-	# PATH_PREFIX_TOKEN = (max_input_size - 5) // 3 + 1
-	#
-	#
-	#
-	# print(QUERY_PREFIX_TOKEN, PADDING_TOKEN, EDGE_PREFIX_TOKEN, PATH_PREFIX_TOKEN)
-	# # print(len([token for token in inputs[0] if token != PADDING_TOKEN]))
-	# # print(len(outputs[0]))
-	# print(inputs[0])
-	# # print(outputs)
-	# print(labels[0])
-	# # print(num_collisions)
-
-	# return
-
-	for look_ahead in range(1, 51):
-		# print(f"Look ahead: {look_ahead}")
+	for look_ahead in lookahead_range:
 		for _ in range(samples_per_test):
 			txt, next_step = generate_graph_text(
 				max_input_size=max_num_parents * look_ahead * num_paths * 4,
@@ -349,45 +329,60 @@ async def main(samples_per_test = 3):
 				lookahead=look_ahead,
 				num_paths=num_paths,
 			)
-			# logic, logic_path = logic_paragraph_from_tokens(txt, next_step)
 
+			# Create the prompt for the graph search
 			prompt = (f"{txt}\nAbove is a representation of a directed graph search problem, "
 					  f"where E A B represents an edge from A to B, and Q X Y represents starting from X and ending at Y, "
 					  f"find the shortest path. The vertex after P indicates our current position. Respond with only the "
 					  f"next vertex on the shortest path from X to Y.")
 
-			# prompt = f"{logic} Respond with only the list of words that you use in the proof."
+			# Change the prompt to a logic puzzle if the logic option is enabled
+			if logic:
+				logic, next_step_adj = logic_paragraph_from_tokens(txt, next_step)
+				prompt = f"{logic} Respond with only the attribute of the next step."
 
 			prompts.append(prompt)
-			correct_responses.append(next_step)
+			correct_responses.append(next_step_adj if logic else next_step)
 			look_ahead_values.append(look_ahead)
 
-			# print(f"Prompt: {prompt}\n")
-			# print(f"Correct:   {next_step}\n")
+			if print_prompts:
+				print(f"Prompt: {prompt}\n")
+				print(f"Correct:   {next_step_adj if logic else next_step}\n")
 
-		# if len(prompts) < 9:
-		# 	continue
-
-		tasks = [asyncio.create_task(get_response(prompt)) for prompt in prompts]
+		# Create async tasks to run multiple AI calls at once
+		tasks = [asyncio.create_task(get_response(prompt, model)) for prompt in prompts]
 		results = await asyncio.gather(*tasks)
 
+		# Keep track of number of tokens and correct responses
 		tokens_used = 0
 		correct_count = 0
 		for response, correct, lav in zip(results, correct_responses, look_ahead_values):
 			response_txt, response_tokens = response
 			tokens_used += response_tokens
-			try:
-				if int(response_txt) == int(correct):
+
+			if logic:
+				if response_txt == correct or correct in response_txt:
 					correct_count += 1
-					print(f"Correct, look_ahead={lav}, num_paths={num_paths}, max_num_parents={max_num_parents}. Tokens: {response_tokens}")
+					if verbose:
+						print(f"Correct, look_ahead={lav}, num_paths={num_paths}, max_num_parents={max_num_parents}. Tokens: {response_tokens}")
 				else:
-					print(f"Incorrect, response={response_txt}, correct={correct} look_ahead={lav}, num_paths={num_paths}, max_num_parents={max_num_parents}. Tokens: {response_tokens}")
-			except ValueError:
-				print(f"Response={response_txt}, gave a value error, correct={correct}, look_ahead={lav}. Tokens: {response_tokens}")
+					if verbose:
+						print(f"Incorrect, response={response_txt}, correct={correct} look_ahead={lav}, num_paths={num_paths}, max_num_parents={max_num_parents}. Tokens: {response_tokens}")
+			else:
+				try:
+					if int(response_txt) == int(correct):
+						correct_count += 1
+						if verbose:
+							print(f"Correct, look_ahead={lav}, num_paths={num_paths}, max_num_parents={max_num_parents}. Tokens: {response_tokens}")
+					else:
+						if verbose:
+							print(f"Incorrect, response={response_txt}, correct={correct} look_ahead={lav}, num_paths={num_paths}, max_num_parents={max_num_parents}. Tokens: {response_tokens}")
+				except ValueError:
+					if verbose:
+						print(f"Response={response_txt}, gave a value error, correct={correct}, look_ahead={lav}. Tokens: {response_tokens}")
 
 		tokens_used /= samples_per_test
 		print(f"look_ahead={look_ahead}, correct={correct_count}, avg_tokens={tokens_used}\n")
-
 
 		prompts = []
 		correct_responses = []
@@ -396,30 +391,14 @@ async def main(samples_per_test = 3):
 
 
 if __name__ == "__main__":
-	asyncio.run(main())
-	# num_paths = 2
-	# max_num_parents = 3
-	# look_ahead = 10
-	#
-	# # max_vertices = 3 * look_ahead
-	# # max_input_size = 40
-	#
-	# txt, path = generate_graph_text(
-	# 	max_input_size=max_num_parents * look_ahead * 4,
-	# 	num_vertices=max_num_parents * look_ahead,
-	# 	max_num_parents=max_num_parents,
-	# 	lookahead=look_ahead,
-	# 	num_paths=num_paths,
-	# )
+	asyncio.run(main(
+		model="o1",
+		samples_per_test=3,
+		lookahead_range=range(1, 52, 5),
+		num_paths=2,
+		logic=False,
+		verbose=True,
+		print_prompts=False
+	))
 
-	# logic, logic_path = logic_paragraph_from_tokens(txt, path)
-	# path = [node.id for node in path[0]]
-	# print("\nRandom DAG:", txt, "\npath: ", path)
-	# # print("\nLogic: ", logic, "\nLogic path: ", logic_path)
-
-	# prompt = (f"{txt}\n\nAbove is a representation of a directed graph search problem, "
-	# 		  f"where E A B represents an edge from A to B, and Q X Y represents starting from X and ending at Y,"
-	# 		  f"find the shortest path. Respond with only the path in the form: V1 V2 V3 V4...")
-
-	# client = OpenAI()
 

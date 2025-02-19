@@ -1,0 +1,249 @@
+Correct, look_ahead=1, num_paths=3, max_num_parents=3. Tokens: 1792
+Incorrect, response=Modus ponens., correct=qilocl look_ahead=1, num_paths=3, max_num_parents=3. Tokens: 832
+Correct, look_ahead=1, num_paths=3, max_num_parents=3. Tokens: 2752
+look_ahead=1, correct=2, avg_tokens=1792.0
+
+Correct, look_ahead=2, num_paths=3, max_num_parents=3. Tokens: 1024
+Correct, look_ahead=2, num_paths=3, max_num_parents=3. Tokens: 640
+Correct, look_ahead=2, num_paths=3, max_num_parents=3. Tokens: 704
+look_ahead=2, correct=3, avg_tokens=789.3333333333334
+
+Correct, look_ahead=3, num_paths=3, max_num_parents=3. Tokens: 768
+Correct, look_ahead=3, num_paths=3, max_num_parents=3. Tokens: 384
+Correct, look_ahead=3, num_paths=3, max_num_parents=3. Tokens: 896
+look_ahead=3, correct=3, avg_tokens=682.6666666666666
+
+Correct, look_ahead=4, num_paths=3, max_num_parents=3. Tokens: 640
+Correct, look_ahead=4, num_paths=3, max_num_parents=3. Tokens: 1664
+Correct, look_ahead=4, num_paths=3, max_num_parents=3. Tokens: 1152
+look_ahead=4, correct=3, avg_tokens=1152.0
+
+Correct, look_ahead=5, num_paths=3, max_num_parents=3. Tokens: 1152
+Incorrect, response=atohn, correct=exxge look_ahead=5, num_paths=3, max_num_parents=3. Tokens: 1472
+Correct, look_ahead=5, num_paths=3, max_num_parents=3. Tokens: 1344
+look_ahead=5, correct=2, avg_tokens=1322.6666666666667
+
+Correct, look_ahead=6, num_paths=3, max_num_parents=3. Tokens: 1216
+Correct, look_ahead=6, num_paths=3, max_num_parents=3. Tokens: 1408
+Correct, look_ahead=6, num_paths=3, max_num_parents=3. Tokens: 1920
+look_ahead=6, correct=3, avg_tokens=1514.6666666666667
+
+Correct, look_ahead=7, num_paths=3, max_num_parents=3. Tokens: 2432
+Correct, look_ahead=7, num_paths=3, max_num_parents=3. Tokens: 1408
+Correct, look_ahead=7, num_paths=3, max_num_parents=3. Tokens: 1408
+look_ahead=7, correct=3, avg_tokens=1749.3333333333333
+
+Correct, look_ahead=8, num_paths=3, max_num_parents=3. Tokens: 1664
+Incorrect, response=edviv, correct=sqaoq look_ahead=8, num_paths=3, max_num_parents=3. Tokens: 3136
+Correct, look_ahead=8, num_paths=3, max_num_parents=3. Tokens: 1728
+look_ahead=8, correct=2, avg_tokens=2176.0
+
+Correct, look_ahead=9, num_paths=3, max_num_parents=3. Tokens: 1216
+Correct, look_ahead=9, num_paths=3, max_num_parents=3. Tokens: 1408
+Correct, look_ahead=9, num_paths=3, max_num_parents=3. Tokens: 2432
+look_ahead=9, correct=3, avg_tokens=1685.3333333333333
+
+Correct, look_ahead=10, num_paths=3, max_num_parents=3. Tokens: 1152
+Correct, look_ahead=10, num_paths=3, max_num_parents=3. Tokens: 2496
+Incorrect, response=uqwbu, correct=xyuat look_ahead=10, num_paths=3, max_num_parents=3. Tokens: 2304
+look_ahead=10, correct=2, avg_tokens=1984.0
+
+Incorrect, response=vzusos, correct=maeruo look_ahead=11, num_paths=3, max_num_parents=3. Tokens: 1536
+Correct, look_ahead=11, num_paths=3, max_num_parents=3. Tokens: 4096
+Correct, look_ahead=11, num_paths=3, max_num_parents=3. Tokens: 2752
+look_ahead=11, correct=2, avg_tokens=2794.6666666666665
+
+Incorrect, response=faeyuz, correct=usjnu look_ahead=12, num_paths=3, max_num_parents=3. Tokens: 1664
+Incorrect, response=uvqa, correct=itazoo look_ahead=12, num_paths=3, max_num_parents=3. Tokens: 1984
+Correct, look_ahead=12, num_paths=3, max_num_parents=3. Tokens: 1664
+look_ahead=12, correct=1, avg_tokens=1770.6666666666667
+
+Correct, look_ahead=13, num_paths=3, max_num_parents=3. Tokens: 2240
+Correct, look_ahead=13, num_paths=3, max_num_parents=3. Tokens: 2432
+Incorrect, response=riqaf, correct=obiija look_ahead=13, num_paths=3, max_num_parents=3. Tokens: 2176
+look_ahead=13, correct=2, avg_tokens=2282.6666666666665
+
+Correct, look_ahead=14, num_paths=3, max_num_parents=3. Tokens: 3328
+Correct, look_ahead=14, num_paths=3, max_num_parents=3. Tokens: 3584
+Correct, look_ahead=14, num_paths=3, max_num_parents=3. Tokens: 4416
+look_ahead=14, correct=3, avg_tokens=3776.0
+
+Correct, look_ahead=15, num_paths=3, max_num_parents=3. Tokens: 1792
+Correct, look_ahead=15, num_paths=3, max_num_parents=3. Tokens: 2944
+Correct, look_ahead=15, num_paths=3, max_num_parents=3. Tokens: 2816
+look_ahead=15, correct=3, avg_tokens=2517.3333333333335
+
+Correct, look_ahead=16, num_paths=3, max_num_parents=3. Tokens: 3776
+Correct, look_ahead=16, num_paths=3, max_num_parents=3. Tokens: 1664
+Correct, look_ahead=16, num_paths=3, max_num_parents=3. Tokens: 4160
+look_ahead=16, correct=3, avg_tokens=3200.0
+
+Correct, look_ahead=17, num_paths=3, max_num_parents=3. Tokens: 3072
+Correct, look_ahead=17, num_paths=3, max_num_parents=3. Tokens: 3776
+Incorrect, response=etiqja, correct=ixuof look_ahead=17, num_paths=3, max_num_parents=3. Tokens: 2304
+look_ahead=17, correct=2, avg_tokens=3050.6666666666665
+
+Incorrect, response=ejugca, correct=ozavi look_ahead=18, num_paths=3, max_num_parents=3. Tokens: 1792
+Incorrect, response=bivxut, correct=acoyee look_ahead=18, num_paths=3, max_num_parents=3. Tokens: 3776
+Correct, look_ahead=18, num_paths=3, max_num_parents=3. Tokens: 4160
+look_ahead=18, correct=1, avg_tokens=3242.6666666666665
+
+Correct, look_ahead=19, num_paths=3, max_num_parents=3. Tokens: 3008
+Correct, look_ahead=19, num_paths=3, max_num_parents=3. Tokens: 2048
+Incorrect, response=upiaji, correct=oxpluy look_ahead=19, num_paths=3, max_num_parents=3. Tokens: 4224
+look_ahead=19, correct=2, avg_tokens=3093.3333333333335
+
+Correct, look_ahead=20, num_paths=3, max_num_parents=3. Tokens: 2240
+Correct, look_ahead=20, num_paths=3, max_num_parents=3. Tokens: 4736
+Correct, look_ahead=20, num_paths=3, max_num_parents=3. Tokens: 5248
+look_ahead=20, correct=3, avg_tokens=4074.6666666666665
+
+Correct, look_ahead=21, num_paths=3, max_num_parents=3. Tokens: 2560
+Correct, look_ahead=21, num_paths=3, max_num_parents=3. Tokens: 5184
+Correct, look_ahead=21, num_paths=3, max_num_parents=3. Tokens: 5888
+look_ahead=21, correct=3, avg_tokens=4544.0
+
+Incorrect, response=idacfi, correct=haokui look_ahead=22, num_paths=3, max_num_parents=3. Tokens: 2688
+Correct, look_ahead=22, num_paths=3, max_num_parents=3. Tokens: 3200
+Incorrect, response=sluoxj, correct=umuivo look_ahead=22, num_paths=3, max_num_parents=3. Tokens: 13312
+look_ahead=22, correct=1, avg_tokens=6400.0
+
+Incorrect, response=ejtujn, correct=tuyoxx look_ahead=23, num_paths=3, max_num_parents=3. Tokens: 1856
+Incorrect, response=houaq, correct=ckurvi look_ahead=23, num_paths=3, max_num_parents=3. Tokens: 3904
+Correct, look_ahead=23, num_paths=3, max_num_parents=3. Tokens: 1088
+look_ahead=23, correct=1, avg_tokens=2282.6666666666665
+
+Incorrect, response=oragav, correct=qegohs look_ahead=24, num_paths=3, max_num_parents=3. Tokens: 4864
+Correct, look_ahead=24, num_paths=3, max_num_parents=3. Tokens: 4352
+Incorrect, response=rucopi, correct=ecvmu look_ahead=24, num_paths=3, max_num_parents=3. Tokens: 5184
+look_ahead=24, correct=1, avg_tokens=4800.0
+
+Correct, look_ahead=25, num_paths=3, max_num_parents=3. Tokens: 3648
+Correct, look_ahead=25, num_paths=3, max_num_parents=3. Tokens: 2880
+Correct, look_ahead=25, num_paths=3, max_num_parents=3. Tokens: 8320
+look_ahead=25, correct=3, avg_tokens=4949.333333333333
+
+Correct, look_ahead=26, num_paths=3, max_num_parents=3. Tokens: 4288
+Incorrect, response=wuiaf, correct=operod look_ahead=26, num_paths=3, max_num_parents=3. Tokens: 6080
+Correct, look_ahead=26, num_paths=3, max_num_parents=3. Tokens: 5248
+look_ahead=26, correct=2, avg_tokens=5205.333333333333
+
+Correct, look_ahead=27, num_paths=3, max_num_parents=3. Tokens: 5184
+Incorrect, response=ecouw, correct=yxolue look_ahead=27, num_paths=3, max_num_parents=3. Tokens: 2368
+Correct, look_ahead=27, num_paths=3, max_num_parents=3. Tokens: 2880
+look_ahead=27, correct=2, avg_tokens=3477.3333333333335
+
+Incorrect, response=raeobu, correct=jpeaxu look_ahead=28, num_paths=3, max_num_parents=3. Tokens: 6592
+Correct, look_ahead=28, num_paths=3, max_num_parents=3. Tokens: 1728
+Correct, look_ahead=28, num_paths=3, max_num_parents=3. Tokens: 6144
+look_ahead=28, correct=2, avg_tokens=4821.333333333333
+
+Correct, look_ahead=29, num_paths=3, max_num_parents=3. Tokens: 5184
+Correct, look_ahead=29, num_paths=3, max_num_parents=3. Tokens: 1088
+Incorrect, response=ilvsia, correct=puem look_ahead=29, num_paths=3, max_num_parents=3. Tokens: 3840
+look_ahead=29, correct=2, avg_tokens=3370.6666666666665
+
+Correct, look_ahead=30, num_paths=3, max_num_parents=3. Tokens: 5760
+Incorrect, response=gotud, correct=cucfwi look_ahead=30, num_paths=3, max_num_parents=3. Tokens: 3776
+Correct, look_ahead=30, num_paths=3, max_num_parents=3. Tokens: 7744
+look_ahead=30, correct=2, avg_tokens=5760.0
+
+Incorrect, response=ascut, correct=ucoqar look_ahead=31, num_paths=3, max_num_parents=3. Tokens: 2304
+Incorrect, response=omgizz, correct=conux look_ahead=31, num_paths=3, max_num_parents=3. Tokens: 3392
+Correct, look_ahead=31, num_paths=3, max_num_parents=3. Tokens: 4416
+look_ahead=31, correct=1, avg_tokens=3370.6666666666665
+
+Incorrect, response=uvoixo, correct=qeos look_ahead=32, num_paths=3, max_num_parents=3. Tokens: 8704
+Incorrect, response=xqeqxa, correct=ilaip look_ahead=32, num_paths=3, max_num_parents=3. Tokens: 5120
+Incorrect, response=vqiboj, correct=gloyru look_ahead=32, num_paths=3, max_num_parents=3. Tokens: 1024
+look_ahead=32, correct=0, avg_tokens=4949.333333333333
+
+Incorrect, response=unsefc, correct=vaygux look_ahead=33, num_paths=3, max_num_parents=3. Tokens: 5056
+Incorrect, response=ipaenz, correct=deulke look_ahead=33, num_paths=3, max_num_parents=3. Tokens: 2944
+Correct, look_ahead=33, num_paths=3, max_num_parents=3. Tokens: 3392
+look_ahead=33, correct=1, avg_tokens=3797.3333333333335
+
+Correct, look_ahead=34, num_paths=3, max_num_parents=3. Tokens: 4288
+Incorrect, response=upope, correct=umtde look_ahead=34, num_paths=3, max_num_parents=3. Tokens: 2752
+Correct, look_ahead=34, num_paths=3, max_num_parents=3. Tokens: 2048
+look_ahead=34, correct=2, avg_tokens=3029.3333333333335
+
+Correct, look_ahead=35, num_paths=3, max_num_parents=3. Tokens: 6208
+Incorrect, response=faeusu, correct=holiya look_ahead=35, num_paths=3, max_num_parents=3. Tokens: 3968
+Correct, look_ahead=35, num_paths=3, max_num_parents=3. Tokens: 3264
+look_ahead=35, correct=2, avg_tokens=4480.0
+
+Incorrect, response=sojdo, correct=iqzye look_ahead=36, num_paths=3, max_num_parents=3. Tokens: 5056
+Correct, look_ahead=36, num_paths=3, max_num_parents=3. Tokens: 6464
+Incorrect, response=udaq, correct=jeaeki look_ahead=36, num_paths=3, max_num_parents=3. Tokens: 3456
+look_ahead=36, correct=1, avg_tokens=4992.0
+
+Correct, look_ahead=37, num_paths=3, max_num_parents=3. Tokens: 2304
+Incorrect, response=ukmey, correct=cloge look_ahead=37, num_paths=3, max_num_parents=3. Tokens: 6336
+Incorrect, response=hgakeu, correct=kzomu look_ahead=37, num_paths=3, max_num_parents=3. Tokens: 5056
+look_ahead=37, correct=1, avg_tokens=4565.333333333333
+
+Incorrect, response=vuqsbu, correct=avpes look_ahead=38, num_paths=3, max_num_parents=3. Tokens: 5888
+Correct, look_ahead=38, num_paths=3, max_num_parents=3. Tokens: 8576
+Incorrect, response=amokgu, correct=qoikj look_ahead=38, num_paths=3, max_num_parents=3. Tokens: 8384
+look_ahead=38, correct=1, avg_tokens=7616.0
+
+Incorrect, response=jomug, correct=bizho look_ahead=39, num_paths=3, max_num_parents=3. Tokens: 4608
+Incorrect, response=The key observation is that “agbivf is true if eyidj is true.” In other words, to conclude that Alexander is agbivf we must show that he has the attribute eyidj. Therefore, starting with the assumption that Alexander is nifmo, the next step is to prove that Alexander is eyidj., correct=bauwuf look_ahead=39, num_paths=3, max_num_parents=3. Tokens: 7616
+Correct, look_ahead=39, num_paths=3, max_num_parents=3. Tokens: 8064
+look_ahead=39, correct=1, avg_tokens=6762.666666666667
+
+Correct, look_ahead=40, num_paths=3, max_num_parents=3. Tokens: 4352
+Incorrect, response=gzojoh, correct=xeug look_ahead=40, num_paths=3, max_num_parents=3. Tokens: 3968
+Correct, look_ahead=40, num_paths=3, max_num_parents=3. Tokens: 2496
+look_ahead=40, correct=2, avg_tokens=3605.3333333333335
+
+Correct, look_ahead=41, num_paths=3, max_num_parents=3. Tokens: 2304
+Incorrect, response=The immediate consequence of “Nathan is jmiuyg” is that Nathan is uliip., correct=orsut look_ahead=41, num_paths=3, max_num_parents=3. Tokens: 7808
+Correct, look_ahead=41, num_paths=3, max_num_parents=3. Tokens: 6272
+look_ahead=41, correct=2, avg_tokens=5461.333333333333
+
+Incorrect, response=xaneu, correct=cnenma look_ahead=42, num_paths=3, max_num_parents=3. Tokens: 5120
+Incorrect, response=gmigoo, correct=axaaqg look_ahead=42, num_paths=3, max_num_parents=3. Tokens: 2624
+Correct, look_ahead=42, num_paths=3, max_num_parents=3. Tokens: 5760
+look_ahead=42, correct=1, avg_tokens=4501.333333333333
+
+Incorrect, response=ovbvab, correct=keurg look_ahead=43, num_paths=3, max_num_parents=3. Tokens: 4096
+Incorrect, response=wizbjo, correct=qafal look_ahead=43, num_paths=3, max_num_parents=3. Tokens: 1792
+Correct, look_ahead=43, num_paths=3, max_num_parents=3. Tokens: 4224
+look_ahead=43, correct=1, avg_tokens=3370.6666666666665
+
+Correct, look_ahead=44, num_paths=3, max_num_parents=3. Tokens: 5376
+Incorrect, response=uvagu, correct=kubir look_ahead=44, num_paths=3, max_num_parents=3. Tokens: 8064
+Incorrect, response=ezan, correct=anjii look_ahead=44, num_paths=3, max_num_parents=3. Tokens: 3776
+look_ahead=44, correct=1, avg_tokens=5738.666666666667
+
+Correct, look_ahead=45, num_paths=3, max_num_parents=3. Tokens: 4736
+Incorrect, response=ajuqi, correct=ahvuju look_ahead=45, num_paths=3, max_num_parents=3. Tokens: 8640
+Correct, look_ahead=45, num_paths=3, max_num_parents=3. Tokens: 6016
+look_ahead=45, correct=2, avg_tokens=6464.0
+
+Incorrect, response=ffuuz, correct=hoaile look_ahead=46, num_paths=3, max_num_parents=3. Tokens: 3584
+Incorrect, response=tsuuwi, correct=cwoaka look_ahead=46, num_paths=3, max_num_parents=3. Tokens: 4032
+Incorrect, response=ufaitl, correct=weiagx look_ahead=46, num_paths=3, max_num_parents=3. Tokens: 6016
+look_ahead=46, correct=0, avg_tokens=4544.0
+
+Incorrect, response=zaqe, correct=daexv look_ahead=47, num_paths=3, max_num_parents=3. Tokens: 7488
+Incorrect, response=iglep, correct=moowe look_ahead=47, num_paths=3, max_num_parents=3. Tokens: 5440
+Correct, look_ahead=47, num_paths=3, max_num_parents=3. Tokens: 5184
+look_ahead=47, correct=1, avg_tokens=6037.333333333333
+
+Correct, look_ahead=48, num_paths=3, max_num_parents=3. Tokens: 2816
+Incorrect, response=ezkze, correct=podua look_ahead=48, num_paths=3, max_num_parents=3. Tokens: 1536
+Incorrect, response=xiuenp, correct=johja look_ahead=48, num_paths=3, max_num_parents=3. Tokens: 2816
+look_ahead=48, correct=1, avg_tokens=2389.3333333333335
+
+Correct, look_ahead=49, num_paths=3, max_num_parents=3. Tokens: 5120
+Incorrect, response=oxfukt, correct=owzqe look_ahead=49, num_paths=3, max_num_parents=3. Tokens: 4992
+Incorrect, response=uvimv, correct=qoqujj look_ahead=49, num_paths=3, max_num_parents=3. Tokens: 3520
+look_ahead=49, correct=1, avg_tokens=4544.0
+
+Incorrect, response=gauoqp, correct=vkufe look_ahead=50, num_paths=3, max_num_parents=3. Tokens: 3136
+Incorrect, response=udnci, correct=jjoogu look_ahead=50, num_paths=3, max_num_parents=3. Tokens: 1152
+Incorrect, response=iyzoze, correct=eljio look_ahead=50, num_paths=3, max_num_parents=3. Tokens: 5312
+look_ahead=50, correct=0, avg_tokens=3200.0

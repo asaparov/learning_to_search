@@ -1,0 +1,249 @@
+Correct, look_ahead=1, num_paths=4, max_num_parents=3. Tokens: 448
+Correct, look_ahead=1, num_paths=4, max_num_parents=3. Tokens: 384
+Correct, look_ahead=1, num_paths=4, max_num_parents=3. Tokens: 448
+look_ahead=1, correct=3, avg_tokens=426.6666666666667
+
+Correct, look_ahead=2, num_paths=4, max_num_parents=3. Tokens: 576
+Correct, look_ahead=2, num_paths=4, max_num_parents=3. Tokens: 576
+Correct, look_ahead=2, num_paths=4, max_num_parents=3. Tokens: 704
+look_ahead=2, correct=3, avg_tokens=618.6666666666666
+
+Correct, look_ahead=3, num_paths=4, max_num_parents=3. Tokens: 704
+Correct, look_ahead=3, num_paths=4, max_num_parents=3. Tokens: 704
+Incorrect, response=25, correct=19 look_ahead=3, num_paths=4, max_num_parents=3. Tokens: 832
+look_ahead=3, correct=2, avg_tokens=746.6666666666666
+
+Incorrect, response=4, correct=7 look_ahead=4, num_paths=4, max_num_parents=3. Tokens: 1152
+Correct, look_ahead=4, num_paths=4, max_num_parents=3. Tokens: 1344
+Correct, look_ahead=4, num_paths=4, max_num_parents=3. Tokens: 1728
+look_ahead=4, correct=2, avg_tokens=1408.0
+
+Correct, look_ahead=5, num_paths=4, max_num_parents=3. Tokens: 1280
+Correct, look_ahead=5, num_paths=4, max_num_parents=3. Tokens: 1536
+Correct, look_ahead=5, num_paths=4, max_num_parents=3. Tokens: 1152
+look_ahead=5, correct=3, avg_tokens=1322.6666666666667
+
+Correct, look_ahead=6, num_paths=4, max_num_parents=3. Tokens: 1344
+Correct, look_ahead=6, num_paths=4, max_num_parents=3. Tokens: 1472
+Correct, look_ahead=6, num_paths=4, max_num_parents=3. Tokens: 1216
+look_ahead=6, correct=3, avg_tokens=1344.0
+
+Correct, look_ahead=7, num_paths=4, max_num_parents=3. Tokens: 1216
+Correct, look_ahead=7, num_paths=4, max_num_parents=3. Tokens: 1024
+Correct, look_ahead=7, num_paths=4, max_num_parents=3. Tokens: 1344
+look_ahead=7, correct=3, avg_tokens=1194.6666666666667
+
+Correct, look_ahead=8, num_paths=4, max_num_parents=3. Tokens: 2048
+Incorrect, response=101, correct=9 look_ahead=8, num_paths=4, max_num_parents=3. Tokens: 2432
+Correct, look_ahead=8, num_paths=4, max_num_parents=3. Tokens: 3520
+look_ahead=8, correct=2, avg_tokens=2666.6666666666665
+
+Correct, look_ahead=9, num_paths=4, max_num_parents=3. Tokens: 1600
+Correct, look_ahead=9, num_paths=4, max_num_parents=3. Tokens: 1920
+Incorrect, response=86, correct=93 look_ahead=9, num_paths=4, max_num_parents=3. Tokens: 2176
+look_ahead=9, correct=2, avg_tokens=1898.6666666666667
+
+Correct, look_ahead=10, num_paths=4, max_num_parents=3. Tokens: 1536
+Correct, look_ahead=10, num_paths=4, max_num_parents=3. Tokens: 1920
+Correct, look_ahead=10, num_paths=4, max_num_parents=3. Tokens: 2688
+look_ahead=10, correct=3, avg_tokens=2048.0
+
+Correct, look_ahead=11, num_paths=4, max_num_parents=3. Tokens: 2880
+Correct, look_ahead=11, num_paths=4, max_num_parents=3. Tokens: 1792
+Incorrect, response=66, correct=172 look_ahead=11, num_paths=4, max_num_parents=3. Tokens: 3520
+look_ahead=11, correct=2, avg_tokens=2730.6666666666665
+
+Correct, look_ahead=12, num_paths=4, max_num_parents=3. Tokens: 2688
+Correct, look_ahead=12, num_paths=4, max_num_parents=3. Tokens: 3008
+Correct, look_ahead=12, num_paths=4, max_num_parents=3. Tokens: 2176
+look_ahead=12, correct=3, avg_tokens=2624.0
+
+Correct, look_ahead=13, num_paths=4, max_num_parents=3. Tokens: 2368
+Correct, look_ahead=13, num_paths=4, max_num_parents=3. Tokens: 3392
+Correct, look_ahead=13, num_paths=4, max_num_parents=3. Tokens: 2176
+look_ahead=13, correct=3, avg_tokens=2645.3333333333335
+
+Correct, look_ahead=14, num_paths=4, max_num_parents=3. Tokens: 2048
+Incorrect, response=68, correct=177 look_ahead=14, num_paths=4, max_num_parents=3. Tokens: 3904
+Correct, look_ahead=14, num_paths=4, max_num_parents=3. Tokens: 2560
+look_ahead=14, correct=2, avg_tokens=2837.3333333333335
+
+Correct, look_ahead=15, num_paths=4, max_num_parents=3. Tokens: 2112
+Correct, look_ahead=15, num_paths=4, max_num_parents=3. Tokens: 3264
+Correct, look_ahead=15, num_paths=4, max_num_parents=3. Tokens: 2496
+look_ahead=15, correct=3, avg_tokens=2624.0
+
+Correct, look_ahead=16, num_paths=4, max_num_parents=3. Tokens: 4096
+Correct, look_ahead=16, num_paths=4, max_num_parents=3. Tokens: 3392
+Incorrect, response=95, correct=252 look_ahead=16, num_paths=4, max_num_parents=3. Tokens: 4416
+look_ahead=16, correct=2, avg_tokens=3968.0
+
+Correct, look_ahead=17, num_paths=4, max_num_parents=3. Tokens: 2688
+Correct, look_ahead=17, num_paths=4, max_num_parents=3. Tokens: 3328
+Correct, look_ahead=17, num_paths=4, max_num_parents=3. Tokens: 3520
+look_ahead=17, correct=3, avg_tokens=3178.6666666666665
+
+Correct, look_ahead=18, num_paths=4, max_num_parents=3. Tokens: 4032
+Correct, look_ahead=18, num_paths=4, max_num_parents=3. Tokens: 2944
+Correct, look_ahead=18, num_paths=4, max_num_parents=3. Tokens: 2624
+look_ahead=18, correct=3, avg_tokens=3200.0
+
+Correct, look_ahead=19, num_paths=4, max_num_parents=3. Tokens: 3584
+Correct, look_ahead=19, num_paths=4, max_num_parents=3. Tokens: 3200
+Correct, look_ahead=19, num_paths=4, max_num_parents=3. Tokens: 3648
+look_ahead=19, correct=3, avg_tokens=3477.3333333333335
+
+Correct, look_ahead=20, num_paths=4, max_num_parents=3. Tokens: 3904
+Correct, look_ahead=20, num_paths=4, max_num_parents=3. Tokens: 4416
+Incorrect, response=41, correct=83 look_ahead=20, num_paths=4, max_num_parents=3. Tokens: 4288
+look_ahead=20, correct=2, avg_tokens=4202.666666666667
+
+Incorrect, response=164, correct=138 look_ahead=21, num_paths=4, max_num_parents=3. Tokens: 3776
+Incorrect, response=35, correct=108 look_ahead=21, num_paths=4, max_num_parents=3. Tokens: 5568
+Correct, look_ahead=21, num_paths=4, max_num_parents=3. Tokens: 3328
+look_ahead=21, correct=1, avg_tokens=4224.0
+
+Correct, look_ahead=22, num_paths=4, max_num_parents=3. Tokens: 3648
+Incorrect, response=3, correct=302 look_ahead=22, num_paths=4, max_num_parents=3. Tokens: 3008
+Correct, look_ahead=22, num_paths=4, max_num_parents=3. Tokens: 3264
+look_ahead=22, correct=2, avg_tokens=3306.6666666666665
+
+Correct, look_ahead=23, num_paths=4, max_num_parents=3. Tokens: 3904
+Correct, look_ahead=23, num_paths=4, max_num_parents=3. Tokens: 5376
+Correct, look_ahead=23, num_paths=4, max_num_parents=3. Tokens: 5696
+look_ahead=23, correct=3, avg_tokens=4992.0
+
+Correct, look_ahead=24, num_paths=4, max_num_parents=3. Tokens: 3904
+Correct, look_ahead=24, num_paths=4, max_num_parents=3. Tokens: 5504
+Correct, look_ahead=24, num_paths=4, max_num_parents=3. Tokens: 4032
+look_ahead=24, correct=3, avg_tokens=4480.0
+
+Correct, look_ahead=25, num_paths=4, max_num_parents=3. Tokens: 5312
+Incorrect, response=343, correct=211 look_ahead=25, num_paths=4, max_num_parents=3. Tokens: 3456
+Correct, look_ahead=25, num_paths=4, max_num_parents=3. Tokens: 7424
+look_ahead=25, correct=2, avg_tokens=5397.333333333333
+
+Correct, look_ahead=26, num_paths=4, max_num_parents=3. Tokens: 6464
+Correct, look_ahead=26, num_paths=4, max_num_parents=3. Tokens: 3840
+Correct, look_ahead=26, num_paths=4, max_num_parents=3. Tokens: 3392
+look_ahead=26, correct=3, avg_tokens=4565.333333333333
+
+Correct, look_ahead=27, num_paths=4, max_num_parents=3. Tokens: 6976
+Correct, look_ahead=27, num_paths=4, max_num_parents=3. Tokens: 3712
+Correct, look_ahead=27, num_paths=4, max_num_parents=3. Tokens: 5056
+look_ahead=27, correct=3, avg_tokens=5248.0
+
+Correct, look_ahead=28, num_paths=4, max_num_parents=3. Tokens: 7552
+Incorrect, response=112, correct=20 look_ahead=28, num_paths=4, max_num_parents=3. Tokens: 3392
+Correct, look_ahead=28, num_paths=4, max_num_parents=3. Tokens: 4672
+look_ahead=28, correct=2, avg_tokens=5205.333333333333
+
+Correct, look_ahead=29, num_paths=4, max_num_parents=3. Tokens: 3520
+Correct, look_ahead=29, num_paths=4, max_num_parents=3. Tokens: 3840
+Incorrect, response=205, correct=177 look_ahead=29, num_paths=4, max_num_parents=3. Tokens: 9920
+look_ahead=29, correct=2, avg_tokens=5760.0
+
+Correct, look_ahead=30, num_paths=4, max_num_parents=3. Tokens: 4416
+Correct, look_ahead=30, num_paths=4, max_num_parents=3. Tokens: 5696
+Correct, look_ahead=30, num_paths=4, max_num_parents=3. Tokens: 5376
+look_ahead=30, correct=3, avg_tokens=5162.666666666667
+
+Correct, look_ahead=31, num_paths=4, max_num_parents=3. Tokens: 5760
+Correct, look_ahead=31, num_paths=4, max_num_parents=3. Tokens: 6144
+Correct, look_ahead=31, num_paths=4, max_num_parents=3. Tokens: 5440
+look_ahead=31, correct=3, avg_tokens=5781.333333333333
+
+Correct, look_ahead=32, num_paths=4, max_num_parents=3. Tokens: 5120
+Correct, look_ahead=32, num_paths=4, max_num_parents=3. Tokens: 4608
+Correct, look_ahead=32, num_paths=4, max_num_parents=3. Tokens: 4544
+look_ahead=32, correct=3, avg_tokens=4757.333333333333
+
+Correct, look_ahead=33, num_paths=4, max_num_parents=3. Tokens: 6400
+Correct, look_ahead=33, num_paths=4, max_num_parents=3. Tokens: 6144
+Correct, look_ahead=33, num_paths=4, max_num_parents=3. Tokens: 5632
+look_ahead=33, correct=3, avg_tokens=6058.666666666667
+
+Correct, look_ahead=34, num_paths=4, max_num_parents=3. Tokens: 9408
+Correct, look_ahead=34, num_paths=4, max_num_parents=3. Tokens: 7360
+Correct, look_ahead=34, num_paths=4, max_num_parents=3. Tokens: 7808
+look_ahead=34, correct=3, avg_tokens=8192.0
+
+Correct, look_ahead=35, num_paths=4, max_num_parents=3. Tokens: 4224
+Correct, look_ahead=35, num_paths=4, max_num_parents=3. Tokens: 8320
+Correct, look_ahead=35, num_paths=4, max_num_parents=3. Tokens: 4864
+look_ahead=35, correct=3, avg_tokens=5802.666666666667
+
+Correct, look_ahead=36, num_paths=4, max_num_parents=3. Tokens: 3840
+Correct, look_ahead=36, num_paths=4, max_num_parents=3. Tokens: 6912
+Correct, look_ahead=36, num_paths=4, max_num_parents=3. Tokens: 6208
+look_ahead=36, correct=3, avg_tokens=5653.333333333333
+
+Incorrect, response=564, correct=224 look_ahead=37, num_paths=4, max_num_parents=3. Tokens: 7616
+Correct, look_ahead=37, num_paths=4, max_num_parents=3. Tokens: 12032
+Correct, look_ahead=37, num_paths=4, max_num_parents=3. Tokens: 5632
+look_ahead=37, correct=2, avg_tokens=8426.666666666666
+
+Correct, look_ahead=38, num_paths=4, max_num_parents=3. Tokens: 7744
+Correct, look_ahead=38, num_paths=4, max_num_parents=3. Tokens: 10176
+Correct, look_ahead=38, num_paths=4, max_num_parents=3. Tokens: 9728
+look_ahead=38, correct=3, avg_tokens=9216.0
+
+Correct, look_ahead=39, num_paths=4, max_num_parents=3. Tokens: 6336
+Incorrect, response=431, correct=571 look_ahead=39, num_paths=4, max_num_parents=3. Tokens: 6592
+Correct, look_ahead=39, num_paths=4, max_num_parents=3. Tokens: 11328
+look_ahead=39, correct=2, avg_tokens=8085.333333333333
+
+Correct, look_ahead=40, num_paths=4, max_num_parents=3. Tokens: 9664
+Correct, look_ahead=40, num_paths=4, max_num_parents=3. Tokens: 7616
+Correct, look_ahead=40, num_paths=4, max_num_parents=3. Tokens: 8448
+look_ahead=40, correct=3, avg_tokens=8576.0
+
+Incorrect, response=194, correct=183 look_ahead=41, num_paths=4, max_num_parents=3. Tokens: 10304
+Correct, look_ahead=41, num_paths=4, max_num_parents=3. Tokens: 5184
+Correct, look_ahead=41, num_paths=4, max_num_parents=3. Tokens: 8256
+look_ahead=41, correct=2, avg_tokens=7914.666666666667
+
+Correct, look_ahead=42, num_paths=4, max_num_parents=3. Tokens: 9152
+Correct, look_ahead=42, num_paths=4, max_num_parents=3. Tokens: 6528
+Incorrect, response=388, correct=192 look_ahead=42, num_paths=4, max_num_parents=3. Tokens: 4672
+look_ahead=42, correct=2, avg_tokens=6784.0
+
+Correct, look_ahead=43, num_paths=4, max_num_parents=3. Tokens: 7040
+Response=NO PATH, gave a value error, correct=280, look_ahead=43. Tokens: 10752
+Correct, look_ahead=43, num_paths=4, max_num_parents=3. Tokens: 8256
+look_ahead=43, correct=2, avg_tokens=8682.666666666666
+
+Correct, look_ahead=44, num_paths=4, max_num_parents=3. Tokens: 10880
+Correct, look_ahead=44, num_paths=4, max_num_parents=3. Tokens: 6464
+Correct, look_ahead=44, num_paths=4, max_num_parents=3. Tokens: 8384
+look_ahead=44, correct=3, avg_tokens=8576.0
+
+Correct, look_ahead=45, num_paths=4, max_num_parents=3. Tokens: 5248
+Correct, look_ahead=45, num_paths=4, max_num_parents=3. Tokens: 6208
+Correct, look_ahead=45, num_paths=4, max_num_parents=3. Tokens: 7744
+look_ahead=45, correct=3, avg_tokens=6400.0
+
+Correct, look_ahead=46, num_paths=4, max_num_parents=3. Tokens: 12416
+Correct, look_ahead=46, num_paths=4, max_num_parents=3. Tokens: 13888
+Incorrect, response=159, correct=557 look_ahead=46, num_paths=4, max_num_parents=3. Tokens: 7872
+look_ahead=46, correct=2, avg_tokens=11392.0
+
+Correct, look_ahead=47, num_paths=4, max_num_parents=3. Tokens: 6656
+Correct, look_ahead=47, num_paths=4, max_num_parents=3. Tokens: 7488
+Correct, look_ahead=47, num_paths=4, max_num_parents=3. Tokens: 6080
+look_ahead=47, correct=3, avg_tokens=6741.333333333333
+
+Correct, look_ahead=48, num_paths=4, max_num_parents=3. Tokens: 6272
+Correct, look_ahead=48, num_paths=4, max_num_parents=3. Tokens: 5952
+Correct, look_ahead=48, num_paths=4, max_num_parents=3. Tokens: 6656
+look_ahead=48, correct=3, avg_tokens=6293.333333333333
+
+Correct, look_ahead=49, num_paths=4, max_num_parents=3. Tokens: 14592
+Correct, look_ahead=49, num_paths=4, max_num_parents=3. Tokens: 10752
+Correct, look_ahead=49, num_paths=4, max_num_parents=3. Tokens: 9280
+look_ahead=49, correct=3, avg_tokens=11541.333333333334
+
+Correct, look_ahead=50, num_paths=4, max_num_parents=3. Tokens: 8768
+Correct, look_ahead=50, num_paths=4, max_num_parents=3. Tokens: 9472
+Incorrect, response=777, correct=89 look_ahead=50, num_paths=4, max_num_parents=3. Tokens: 10304
+look_ahead=50, correct=2, avg_tokens=9514.666666666666
