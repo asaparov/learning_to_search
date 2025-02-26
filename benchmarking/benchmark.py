@@ -7,7 +7,7 @@ import asyncio
 
 from openai import AsyncOpenAI
 
-aclient = AsyncOpenAI()
+# aclient = AsyncOpenAI()
 from faker import Faker
 from openai import OpenAI
 from pybind11.__main__ import print_includes
@@ -159,7 +159,6 @@ def generate_graph_text(
 	# Convert all tokens to letters
 	text_tokens = [token_to_str(t) for t in inputs[0] if token_to_str(t) != ""]
 
-
 	final_str = " ".join(text_tokens)
 	return final_str, labels[0]
 
@@ -169,6 +168,17 @@ def generate_name(n):
 	Generates n random first names using the Faker library.
 	"""
 	fake = Faker()
+	# unique_count = n // 2 + 1
+	# names = [fake.unique.first_name() for _ in range(unique_count)]
+	#
+	# result = [names[0]]
+	# for name in names[1:]:
+	# 	result.extend([name, name])
+	#
+	# print(result)
+	#
+	# return result
+
 	return [fake.unique.first_name() for i in range(n)]
 
 
@@ -214,7 +224,7 @@ def generate_words(n):
 	return fake.words(nb=n)
 
 
-def logic_paragraph_from_tokens(tokens_str: str, next_step: int, use_diff_names=False):
+def logic_paragraph_from_tokens(tokens_str: str, next_step: int, use_diff_names=True):
 	# Split string into tokens
 	tokens = tokens_str.strip().split()
 
@@ -271,29 +281,51 @@ def logic_paragraph_from_tokens(tokens_str: str, next_step: int, use_diff_names=
 	# Lines of logic
 	lines = []
 
-	def get_logic_line(name: str, adj_a: str, adj_b: str) -> str:
+	def get_logic_line(name_a: str, name_b: str, adj_a: str, adj_b: str) -> str:
 		choices = [
-			f"If {name} is {adj_a}, then {name} is {adj_b}.",
-			f"{adj_a} implies {adj_b}.",
-			f"{name} is {adj_a} then {name} is {adj_b}.",
+			f"If {name_a} is {adj_a}, then {name_b} is {adj_b}.",
+			f"{name_a} is {adj_a} implies {name_b} is {adj_b}.",
 			f"{adj_b} is true if {adj_a} is true.",
 			f"If {adj_a} then {adj_b} is true.",
 			f"If {adj_a} is true then {adj_b}.",
-			f"Given someone is {adj_a} then they're {adj_b}.",
+			f"Given {name_a} is {adj_a} then {name_b} is {adj_b}.",
 		]
-		return random.choice(choices)
 
-	# For each edge:  E A B => "If name(A) is adj(A), then name(A) is adj(B)."
-	for (A, B) in edges:
-		name_A, adj_A = id_to_pair[A]
-		_, adj_B = id_to_pair[B]
-		lines.append(get_logic_line(name_A, adj_A, adj_B))
+		sentence = random.choice(choices)
+		return sentence[0].upper() + sentence[1:]
+
+	# # For each edge:  E A B => "If name(A) is adj(A), then name(A) is adj(B)."
+	# for (A, B) in edges:
+	# 	name_A, adj_A = id_to_pair[A]
+	# 	name_B, adj_B = id_to_pair[B]
+	# 	lines.append(get_logic_line(name_A, name_B, adj_A, adj_B))
+
+	# Build the chain using the sorted node IDs.
+	sorted_nodes = sorted(node_ids)
+	lines = []
+
+	# For the first node, use its assigned name and adjective.
+	prev_node = sorted_nodes[0]
+	prev_name, prev_adj = id_to_pair[prev_node]
+
+	# For each subsequent node in the chain, build a logic sentence.
+	for node in sorted_nodes[1:]:
+		curr_name, curr_adj = id_to_pair[node]
+		# Create the logic line using the previous node (as subject) and the current node (as object).
+		# You can also generate a new adjective for the linking node if you want it to appear with a different adjective as subject.
+		lines.append(get_logic_line(prev_name, curr_name, prev_adj, curr_adj))
+
+		# For the chain effect, update prev_name.
+		# Optionally, if you want a new adjective for the linking node when it becomes the subject,
+		# you can generate one here. For example:
+		prev_name = curr_name
+		prev_adj = generate_fake_noun()
 
 	# For each query: Q X Y => "If name(X) is adj(X), prove that name(X) is adj(Y)."
 	for (X, Y) in queries:
 		name_x, adj_x = id_to_pair[X]
-		_, adj_y = id_to_pair[Y]
-		lines.append(f"If {name_x} is {adj_x}, what is the next step to prove that {name_x} is {adj_y}?")
+		name_y, adj_y = id_to_pair[Y]
+		lines.append(f"If {name_x} is {adj_x}, what is the next step to prove that {name_y} is {adj_y}?")
 
 	# Join all lines into one paragraph
 	paragraph = " ".join(lines)
@@ -349,6 +381,8 @@ async def main(samples_per_test: int = 3, lookahead_range: range = range(1, 5), 
 				print(f"Prompt: {prompt}\n")
 				print(f"Correct:   {next_step_adj if logic else next_step}\n")
 
+		continue
+
 		# Create async tasks to run multiple AI calls at once
 		tasks = [asyncio.create_task(get_response(prompt, model)) for prompt in prompts]
 		results = await asyncio.gather(*tasks)
@@ -394,11 +428,11 @@ if __name__ == "__main__":
 	asyncio.run(main(
 		model="o1",
 		samples_per_test=3,
-		lookahead_range=range(1, 52, 5),
+		lookahead_range=range(10, 11),
 		num_paths=2,
-		logic=False,
+		logic=True,
 		verbose=True,
-		print_prompts=False
+		print_prompts=True
 	))
 
 
