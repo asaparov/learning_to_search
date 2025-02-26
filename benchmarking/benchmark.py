@@ -6,8 +6,8 @@ from io import StringIO
 import asyncio
 
 from openai import AsyncOpenAI
+aclient = None
 
-# aclient = AsyncOpenAI()
 from faker import Faker
 from openai import OpenAI
 from pybind11.__main__ import print_includes
@@ -271,7 +271,6 @@ def logic_paragraph_from_tokens(tokens_str: str, next_step: int, use_diff_names=
 	all_names = generate_name(num_nodes)
 	all_adjs = generate_fake_nouns(num_nodes)
 
-
 	sorted_nodes = sorted(node_ids)
 	id_to_pair = {}  # node_id -> (name, adjective)
 	# Assign all nodes the same name if use_diff_names == False
@@ -279,58 +278,39 @@ def logic_paragraph_from_tokens(tokens_str: str, next_step: int, use_diff_names=
 		id_to_pair[node_id] = (all_names[idx if use_diff_names else 0], all_adjs[idx])
 
 	# Lines of logic
-	lines = []
+	lines = ["Given the following list of predicates:"]
 
 	def get_logic_line(name_a: str, name_b: str, adj_a: str, adj_b: str) -> str:
 		choices = [
 			f"If {name_a} is {adj_a}, then {name_b} is {adj_b}.",
 			f"{name_a} is {adj_a} implies {name_b} is {adj_b}.",
-			f"{adj_b} is true if {adj_a} is true.",
-			f"If {adj_a} then {adj_b} is true.",
-			f"If {adj_a} is true then {adj_b}.",
+			f"{name_b} is {adj_b} is true if {name_a} is {adj_a}.",
+			# f"{adj_b} is true if {adj_a} is true.",
+			# f"If {adj_a} then {adj_b} is true.",
+			# f"If {adj_a} is true then {adj_b}.",
 			f"Given {name_a} is {adj_a} then {name_b} is {adj_b}.",
 		]
 
 		sentence = random.choice(choices)
 		return sentence[0].upper() + sentence[1:]
 
-	# # For each edge:  E A B => "If name(A) is adj(A), then name(A) is adj(B)."
-	# for (A, B) in edges:
-	# 	name_A, adj_A = id_to_pair[A]
-	# 	name_B, adj_B = id_to_pair[B]
-	# 	lines.append(get_logic_line(name_A, name_B, adj_A, adj_B))
-
-	# Build the chain using the sorted node IDs.
-	sorted_nodes = sorted(node_ids)
-	lines = []
-
-	# For the first node, use its assigned name and adjective.
-	prev_node = sorted_nodes[0]
-	prev_name, prev_adj = id_to_pair[prev_node]
-
-	# For each subsequent node in the chain, build a logic sentence.
-	for node in sorted_nodes[1:]:
-		curr_name, curr_adj = id_to_pair[node]
-		# Create the logic line using the previous node (as subject) and the current node (as object).
-		# You can also generate a new adjective for the linking node if you want it to appear with a different adjective as subject.
-		lines.append(get_logic_line(prev_name, curr_name, prev_adj, curr_adj))
-
-		# For the chain effect, update prev_name.
-		# Optionally, if you want a new adjective for the linking node when it becomes the subject,
-		# you can generate one here. For example:
-		prev_name = curr_name
-		prev_adj = generate_fake_noun()
+	# For each edge:  E A B => "If name(A) is adj(A), then name(A) is adj(B)."
+	for (A, B) in edges:
+		name_A, adj_A = id_to_pair[A]
+		name_B, adj_B = id_to_pair[B]
+		lines.append(get_logic_line(name_A, name_B, adj_A, adj_B))
 
 	# For each query: Q X Y => "If name(X) is adj(X), prove that name(X) is adj(Y)."
 	for (X, Y) in queries:
 		name_x, adj_x = id_to_pair[X]
 		name_y, adj_y = id_to_pair[Y]
-		lines.append(f"If {name_x} is {adj_x}, what is the next step to prove that {name_y} is {adj_y}?")
+		lines.append(f"\n\nIf {name_x} is {adj_x}, what is the next step to prove that {name_y} is {adj_y}?")
 
 	# Join all lines into one paragraph
 	paragraph = " ".join(lines)
 
 	# Get the correct adjective for the next step
+	next_step_adj = id_to_pair[next_step]
 	next_step_adj = id_to_pair[next_step][1]
 
 	return paragraph, next_step_adj
@@ -343,7 +323,11 @@ async def get_response(prompt: str, model: str):
 	return response.choices[0].message.content, tokens
 
 
-async def main(samples_per_test: int = 3, lookahead_range: range = range(1, 5), num_paths: int = 2, max_num_parents: int = 3, logic: bool = False, seed: int = None, verbose: bool = True, print_prompts: bool = False, model: str = "gpt-4o"):
+async def main(samples_per_test: int = 3, lookahead_range: range = range(1, 5), num_paths: int = 2, max_num_parents: int = 3, logic: bool = False, seed: int = None, verbose: bool = True, print_prompts: bool = False, model: str = "gpt-4o", submit_prompts: bool = True):
+	global aclient
+	if submit_prompts:
+		aclient = AsyncOpenAI()
+
 	if seed is not None:
 		random.seed(seed)
 		generator.set_seed(seed)
@@ -371,7 +355,7 @@ async def main(samples_per_test: int = 3, lookahead_range: range = range(1, 5), 
 			# Change the prompt to a logic puzzle if the logic option is enabled
 			if logic:
 				logic, next_step_adj = logic_paragraph_from_tokens(txt, next_step)
-				prompt = f"{logic} Respond with only the attribute of the next step."
+				prompt = f"{logic} Respond with only the trait of the next step."
 
 			prompts.append(prompt)
 			correct_responses.append(next_step_adj if logic else next_step)
@@ -381,11 +365,13 @@ async def main(samples_per_test: int = 3, lookahead_range: range = range(1, 5), 
 				print(f"Prompt: {prompt}\n")
 				print(f"Correct:   {next_step_adj if logic else next_step}\n")
 
-		continue
+		if not submit_prompts:
+			continue
 
 		# Create async tasks to run multiple AI calls at once
 		tasks = [asyncio.create_task(get_response(prompt, model)) for prompt in prompts]
 		results = await asyncio.gather(*tasks)
+
 
 		# Keep track of number of tokens and correct responses
 		tokens_used = 0
@@ -412,8 +398,8 @@ async def main(samples_per_test: int = 3, lookahead_range: range = range(1, 5), 
 						if verbose:
 							print(f"Incorrect, response={response_txt}, correct={correct} look_ahead={lav}, num_paths={num_paths}, max_num_parents={max_num_parents}. Tokens: {response_tokens}")
 				except ValueError:
-					if verbose:
-						print(f"Response={response_txt}, gave a value error, correct={correct}, look_ahead={lav}. Tokens: {response_tokens}")
+					# if verbose:
+					print(f"\n***Response={response_txt}, gave a value error, \n *correct={correct}, look_ahead={lav}. Tokens: {response_tokens}")
 
 		tokens_used /= samples_per_test
 		print(f"look_ahead={look_ahead}, correct={correct_count}, avg_tokens={tokens_used}\n")
@@ -426,13 +412,14 @@ async def main(samples_per_test: int = 3, lookahead_range: range = range(1, 5), 
 
 if __name__ == "__main__":
 	asyncio.run(main(
-		model="o1",
-		samples_per_test=3,
-		lookahead_range=range(10, 11),
-		num_paths=2,
+		model="gpt-4o",
+		samples_per_test=10,
+		lookahead_range=range(3, 4, 1),
+		num_paths=3,
 		logic=True,
-		verbose=True,
-		print_prompts=True
+		verbose=False,
+		print_prompts=True,
+		submit_prompts=False
 	))
 
 
