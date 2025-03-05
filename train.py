@@ -691,7 +691,7 @@ def train(max_input_size, dataset_size, distribution, max_lookahead, seed_value,
 	print('Number of available CPUs: {}'.format(os.cpu_count()))
 	stdout.flush()
 
-	if curriculum_mode == 'n' and dataset_size != -1:
+	if curriculum_mode != 'n' and dataset_size != -1:
 		print('ERROR: Curriculum learning is only supported with streaming training (i.e. dataset_size = -1).')
 		stdout.flush()
 		return

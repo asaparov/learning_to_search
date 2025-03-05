@@ -7,6 +7,7 @@ import asyncio
 
 from openai import AsyncOpenAI
 aclient = None
+from together import AsyncTogether
 
 from faker import Faker
 from openai import OpenAI
@@ -179,7 +180,7 @@ def generate_name(n):
 	#
 	# return result
 
-	return [fake.unique.first_name() for i in range(n)]
+	return [fake.unique.name() for i in range(n)]
 
 
 def random_syllable():
@@ -322,11 +323,22 @@ async def get_response(prompt: str, model: str):
 	tokens = response.usage.completion_tokens_details.reasoning_tokens
 	return response.choices[0].message.content, tokens
 
+async def get_response_together(prompt: str, model: str):
+	response = await aclient.chat.completions.create(
+		model=model,
+		messages=[{"role": "user", "content": prompt}],
+	)
+	tokens = response.usage.total_tokens
+	return response.choices[0].message.content, tokens
 
-async def main(samples_per_test: int = 3, lookahead_range: range = range(1, 5), num_paths: int = 2, max_num_parents: int = 3, logic: bool = False, seed: int = None, verbose: bool = True, print_prompts: bool = False, model: str = "gpt-4o", submit_prompts: bool = True):
+
+async def main(samples_per_test: int = 3, lookahead_range: list = range(1, 5), num_paths: int = 2, max_num_parents: int = 3, logic: bool = False, seed: int = None, verbose: bool = True, print_prompts: bool = False, model: str = "gpt-4o", submit_prompts: bool = True):
 	global aclient
 	if submit_prompts:
-		aclient = AsyncOpenAI()
+		if model != "deepseek-ai/DeepSeek-R1":
+			aclient = AsyncOpenAI()
+		else:
+			aclient = AsyncTogether()
 
 	if seed is not None:
 		random.seed(seed)
@@ -350,7 +362,7 @@ async def main(samples_per_test: int = 3, lookahead_range: range = range(1, 5), 
 			prompt = (f"{txt}\nAbove is a representation of a directed graph search problem, "
 					  f"where E A B represents an edge from A to B, and Q X Y represents starting from X and ending at Y, "
 					  f"find the shortest path. The vertex after P indicates our current position. Respond with only the "
-					  f"next vertex on the shortest path from X to Y.")
+					  f"next vertex on the shortest path from X to Y and nothing else.")
 
 			# Change the prompt to a logic puzzle if the logic option is enabled
 			if logic:
@@ -369,8 +381,13 @@ async def main(samples_per_test: int = 3, lookahead_range: range = range(1, 5), 
 			continue
 
 		# Create async tasks to run multiple AI calls at once
-		tasks = [asyncio.create_task(get_response(prompt, model)) for prompt in prompts]
-		results = await asyncio.gather(*tasks)
+
+		if model != "deepseek-ai/DeepSeek-R1":
+			tasks = [asyncio.create_task(get_response(prompt, model)) for prompt in prompts]
+			results = await asyncio.gather(*tasks)
+		else:
+			tasks = [asyncio.create_task(get_response_together(prompt, model)) for prompt in prompts]
+			results = await asyncio.gather(*tasks)
 
 
 		# Keep track of number of tokens and correct responses
@@ -409,17 +426,28 @@ async def main(samples_per_test: int = 3, lookahead_range: range = range(1, 5), 
 		look_ahead_values = []
 
 
+def multiplicative_range(start, stop, step):
+	result = []
+	current = start
+	while (step > 1 and current < stop) or (step < 1 and current > stop):
+		result.append(current)
+		current *= step
+	return result
+
 
 if __name__ == "__main__":
+	look_ahead = multiplicative_range(2, 550, 2)
+	print(f"look_ahead range={look_ahead}")
 	asyncio.run(main(
-		model="gpt-4o",
+		# model="o3-mini",
+		model="deepseek-ai/DeepSeek-R1",
 		samples_per_test=10,
-		lookahead_range=range(3, 4, 1),
-		num_paths=3,
-		logic=True,
+		lookahead_range=look_ahead,
+		num_paths=9,
+		logic=False,
 		verbose=False,
-		print_prompts=True,
-		submit_prompts=False
+		print_prompts=False,
+		submit_prompts=True
 	))
 
 
