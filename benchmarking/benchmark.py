@@ -436,7 +436,7 @@ def multiplicative_range(start, stop, step):
 
 
 if __name__ == "__main__":
-	look_ahead = multiplicative_range(2, 550, 2)
+	look_ahead = list(range(72, 128, 8))
 	print(f"look_ahead range={look_ahead}")
 	asyncio.run(main(
 		# model="o3-mini",
@@ -444,7 +444,7 @@ if __name__ == "__main__":
 		samples_per_test=10,
 		lookahead_range=look_ahead,
 		num_paths=9,
-		logic=False,
+		logic=True,
 		verbose=False,
 		print_prompts=False,
 		submit_prompts=True
