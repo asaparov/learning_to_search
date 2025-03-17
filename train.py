@@ -968,7 +968,7 @@ def train(max_input_size, dataset_size, distribution, max_lookahead, seed_value,
 
 		# For SI curriculum learning
 		if task == 'si':
-			curriculum_alpha = 0.5
+			curriculum_alpha = 0.1
 
 	elif curriculum_mode == 'layerbylayer':
 		initial_lookahead = 2
@@ -1198,7 +1198,7 @@ def train(max_input_size, dataset_size, distribution, max_lookahead, seed_value,
 					#stdout.flush()
 
 					# Add code for curriculum training for SI
-					if task == 'si' and curriculum_mode == 'y' and training_acc > 0.99:
+					if task == 'si' and curriculum_mode == 'y' and training_acc > 0.95:
 						if model.alpha < 1.0:
 							model.alpha = min(1.0, model.alpha + 0.1)
 							print("Curriculum update: alpha increased to {:.2f}.".format(model.alpha))
