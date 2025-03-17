@@ -710,6 +710,7 @@ def train(max_input_size, dataset_size, distribution, max_lookahead, seed_value,
 	if max_lookahead == None:
 		max_lookahead = -1
 
+
 	# first reserve some data for OOD testing
 	random_state = getstate()
 	np_random_state = np.random.get_state()
@@ -747,7 +748,7 @@ def train(max_input_size, dataset_size, distribution, max_lookahead, seed_value,
 
 			print('Reserving OOD test data for frontier_size = {}, branch_size = {}'.format(frontier_size, branch_size))
 			stdout.flush()
-			inputs,outputs,_,_ = generator.generate_si_training_set(max_input_size, NUM_TEST_SAMPLES, reserved_inputs, frontier_size, branch_size, False, True)
+			inputs,outputs,_,_ = generator.generate_si_training_set(max_input_size, NUM_TEST_SAMPLES, reserved_inputs, frontier_size, branch_size, False, True, 1.0)
 			print('Done. Throughput: {} examples/s'.format(NUM_TEST_SAMPLES / (time.perf_counter() - gen_eval_start_time)))
 			for i in range(inputs.shape[0]):
 				reserved_inputs.add(tuple([x for x in inputs[i,:] if x != PADDING_TOKEN]))
@@ -958,9 +959,17 @@ def train(max_input_size, dataset_size, distribution, max_lookahead, seed_value,
 	if curriculum_mode == 'n':
 		initial_lookahead = max_lookahead
 		initial_max_edges = (max_input_size - 5) // 3
+		if task == 'si':
+			curriculum_alpha = 1.0
+
 	elif curriculum_mode == 'y':
 		initial_lookahead = 1
 		initial_max_edges = (max_input_size - 5) // 3
+
+		# For SI curriculum learning
+		if task == 'si':
+			curriculum_alpha = 0.5
+
 	elif curriculum_mode == 'layerbylayer':
 		initial_lookahead = 2
 		initial_max_edges = 5
@@ -975,6 +984,12 @@ def train(max_input_size, dataset_size, distribution, max_lookahead, seed_value,
 		initial_max_edges = model.max_edges
 	else:
 		model.max_edges = initial_max_edges
+
+	# For SI curriculum
+	if hasattr(model, 'alpha'):
+		curriculum_alpha = model.alpha
+	else:
+		model.alpha = curriculum_alpha
 
 	if dataset_size == -1:
 		# we are doing streaming training, so use an IterableDataset
@@ -996,11 +1011,14 @@ def train(max_input_size, dataset_size, distribution, max_lookahead, seed_value,
 			return seed_values[index]
 
 		class StreamingDataset(torch.utils.data.IterableDataset):
-			def __init__(self, offset, lookahead, max_edges):
+			def __init__(self, offset, lookahead, max_edges, alpha):
 				super(StreamingDataset).__init__()
 				self.offset = offset
 				self.lookahead = lookahead
 				self.max_edges = max_edges
+
+				# For SI curriculum
+				self.alpha = alpha
 
 				self.multiprocessing_manager = multiprocessing.Manager()
 				self.total_collisions = self.multiprocessing_manager.Value(int, 0)
@@ -1023,7 +1041,18 @@ def train(max_input_size, dataset_size, distribution, max_lookahead, seed_value,
 					if task == 'dfs':
 						inputs, outputs, labels, num_collisions = generator.generate_dfs_training_set(max_input_size, BATCH_SIZE, reserved_inputs, self.lookahead, add_padding, True, True)
 					elif task == 'si':
-						inputs, outputs, labels, num_collisions = generator.generate_si_training_set(max_input_size, BATCH_SIZE, reserved_inputs, max_frontier_size, max_branch_size, True, True)
+						# Update code to include curiculum training
+						if curriculum_mode == 'y':
+							curr_max_edges = int(self.alpha * (max_input_size - 2) / 6)
+							curr_max_frontier = (curr_max_edges + 1) // 2
+							curr_max_branch = curr_max_edges
+
+							inputs, outputs, labels, num_collisions = generator.generate_si_training_set(
+								max_input_size, BATCH_SIZE, reserved_inputs, curr_max_frontier, curr_max_branch,
+								True, True, self.alpha)
+
+						else:
+							inputs, outputs, labels, num_collisions = generator.generate_si_training_set(max_input_size, BATCH_SIZE, reserved_inputs, max_frontier_size, max_branch_size, True, True, 1.0)
 					else:
 						if distribution == 'star':
 							max_spoke_length = self.lookahead
@@ -1051,7 +1080,7 @@ def train(max_input_size, dataset_size, distribution, max_lookahead, seed_value,
 				worker_id = worker_info.id
 				return self.process_data(self.offset + worker_id)
 
-		iterable_dataset = StreamingDataset(epoch * STREAMING_BLOCK_SIZE // BATCH_SIZE, model.lookahead, model.max_edges)
+		iterable_dataset = StreamingDataset(epoch * STREAMING_BLOCK_SIZE // BATCH_SIZE, model.lookahead, model.max_edges, model.alpha)
 		train_loader = DataLoader(iterable_dataset, batch_size=None, num_workers=NUM_DATA_WORKERS, pin_memory=True, prefetch_factor=8)
 
 	examples_seen = epoch * STREAMING_BLOCK_SIZE
@@ -1168,7 +1197,15 @@ def train(max_input_size, dataset_size, distribution, max_lookahead, seed_value,
 					#print('[MAIN] Time to evaluate model: {}s'.format(time6 - time5))
 					#stdout.flush()
 
-					if curriculum_mode != 'n' and model.lookahead < max_lookahead and training_acc > 0.99:
+					# Add code for curriculum training for SI
+					if task == 'si' and curriculum_mode == 'y' and training_acc > 0.99:
+						if model.alpha < 1.0:
+							model.alpha = min(1.0, model.alpha + 0.1)
+							print("Curriculum update: alpha increased to {:.2f}.".format(model.alpha))
+							reinit_data_loader = True
+							break
+
+					elif curriculum_mode != 'n' and model.lookahead < max_lookahead and training_acc > 0.99:
 						if model.max_edges < (max_input_size - 5) // 3:
 							# increase the maximum number of edges by 1
 							print("Increasing maximum number of edges to {}".format(model.max_edges + 1))
@@ -1240,7 +1277,7 @@ def train(max_input_size, dataset_size, distribution, max_lookahead, seed_value,
 			log_time += log_end_time - log_start_time
 
 		if reinit_data_loader:
-			iterable_dataset = StreamingDataset(epoch * STREAMING_BLOCK_SIZE // BATCH_SIZE, model.lookahead, model.max_edges)
+			iterable_dataset = StreamingDataset(epoch * STREAMING_BLOCK_SIZE // BATCH_SIZE, model.lookahead, model.max_edges, model.alpha)
 			train_loader = DataLoader(iterable_dataset, batch_size=None, num_workers=NUM_DATA_WORKERS, pin_memory=True, prefetch_factor=8)
 			reinit_data_loader = False
 
