@@ -1885,7 +1885,7 @@ bool generate_si_example(array<node>& vertices, const node*& start, const node*&
 	return true;
 }
 
-py::tuple generate_si_training_set(const unsigned int max_input_size, const uint64_t dataset_size, const py::object& reserved_inputs, const int requested_frontier_size, const int requested_branch_size, bool uniform, const bool quiet=false, float alpha=1.0)
+py::tuple generate_si_training_set(const unsigned int max_input_size, const uint64_t dataset_size, const py::object& reserved_inputs, const int requested_frontier_size, const int requested_branch_size, bool uniform, const bool quiet=false, float alpha=1.0, int sample_type=0)
 {
 	const unsigned int QUERY_PREFIX_TOKEN = (max_input_size-5) / 3 + 4;
 	const unsigned int PADDING_TOKEN = (max_input_size-5) / 3 + 3;
@@ -2013,11 +2013,26 @@ py::tuple generate_si_training_set(const unsigned int max_input_size, const uint
 		const node* current_node = &g[current_node_index];
 		unsigned int branch_size = current_node->children.length;
 
-		bool is_selection_step;
-		if (path.length == 0)
-			is_selection_step = false;
-		else
-			is_selection_step = (randrange(2) == 0);
+//		bool is_selection_step;
+//		if (path.length == 0)
+//			is_selection_step = false;
+//		else
+//			is_selection_step = (randrange(2) == 0);
+
+        bool is_selection_step;
+        if (sample_type == 1) {          // Force selection samples
+            is_selection_step = true;
+        }
+        else if (sample_type == 2) {   // Force inference samples
+            is_selection_step = false;
+        }
+        else {                         // Mixed mode (default)
+            if (path.length == 0)
+                is_selection_step = false;
+            else
+                is_selection_step = (randrange(2) == 0);
+        }
+
 		if (3*(path.length/2) + (is_selection_step ? 1 : 2) > 3*(max_edges - 1) + 1) {
 			/* we have just barely too many edges */
 			for (node& n : g) core::free(n);
