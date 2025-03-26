@@ -1258,7 +1258,7 @@ def train(max_input_size, dataset_size, distribution, max_lookahead, seed_value,
 
                     print("training sel accuracy: %.2f±%.2f" % (sel_training_acc, binomial_confidence_int(sel_training_acc, sel_outputs.size(0))))
                     print("training inf accuracy: %.2f±%.2f" % (inf_training_acc, binomial_confidence_int(inf_training_acc, inf_outputs.size(0))))
-                    del sel_inputs, sel_outputs, inf_inputs, inf_outputs
+                    del sel_inputs, sel_outputs, sel_labels, inf_inputs, inf_outputs, inf_labels
                     stdout.flush()
 
                     sel_test_acc, sel_test_loss, _ = evaluate_model(model_sel, eval_inputs_sel, eval_outputs_sel)
@@ -1309,7 +1309,7 @@ def train(max_input_size, dataset_size, distribution, max_lookahead, seed_value,
                 epoch_loss = 0.0
                 epoch_loss_inf = 0.0
                 epoch_loss_sel = 0.0
-                if reinit_data_loader:
+                if reinit_data_loader_sel or reinit_data_loader_inf:
                     break
 
             #if device.type == 'cuda':

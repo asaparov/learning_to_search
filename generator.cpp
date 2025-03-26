@@ -2135,37 +2135,69 @@ py::tuple generate_si_training_set(const unsigned int max_input_size, const uint
 	return py::make_tuple(inputs, outputs, labels, num_collisions);
 }
 
-// New function for generating SI training samples that have a separate label for the selectio and inference tasks
-py::tuple generate_si_training_set_split(const unsigned int max_input_size,
-    const uint64_t dataset_size, const py::object& reserved_inputs,
-    const int requested_frontier_size, const int requested_branch_size,
-    bool uniform, const bool quiet=false, float alpha=1.0)
+// Return pointer to the vertex in graph 'g' whose id equals 'token'.
+// If not found, return nullptr.
+inline const node* get_vertex_by_token(const core::array<node>& g, unsigned int token) {
+    for (unsigned int i = 0; i < g.length; i++) {
+        if (g[i].id == token)
+            return &g[i];
+    }
+    return nullptr;
+}
+
+// Returns true if the node pointer 'v' is contained in the path.
+inline bool is_visited(const core::array<const node*>& path, const node* v) {
+    return path.contains(v);
+}
+
+// Returns true if the given vertex 'v' has at least one child that is not in the visited 'path'.
+inline bool has_unvisited_child(const node* v, const core::array<const node*>& path) {
+    for (unsigned int i = 0; i < v->children.length; i++) {
+        if (!path.contains(v->children[i]))
+            return true;
+    }
+    return false;
+}
+
+// Returns true if the given vertex 'v' has at least one parent that is in the visited 'path'.
+inline bool has_visited_parent(const node* v, const core::array<const node*>& path) {
+    for (unsigned int i = 0; i < v->parents.length; i++) {
+        if (path.contains(v->parents[i]))
+            return true;
+    }
+    return false;
+}
+
+py::tuple generate_si_training_set_reward(const unsigned int max_input_size, const uint64_t dataset_size, const py::object& reserved_inputs, const int requested_frontier_size, const int requested_branch_size, bool uniform, const bool quiet=false, float alpha=1.0, int sample_type=0)
 {
-    const unsigned int QUERY_PREFIX_TOKEN = (max_input_size-5) / 3 + 4;
-    const unsigned int PADDING_TOKEN = (max_input_size-5) / 3 + 3;
-    const unsigned int EDGE_PREFIX_TOKEN = (max_input_size-5) / 3 + 2;
-    const unsigned int PATH_PREFIX_TOKEN = (max_input_size-5) / 3 + 1;
+	const unsigned int QUERY_PREFIX_TOKEN = (max_input_size-5) / 3 + 4;
+	const unsigned int PADDING_TOKEN = (max_input_size-5) / 3 + 3;
+	const unsigned int EDGE_PREFIX_TOKEN = (max_input_size-5) / 3 + 2;
+	const unsigned int PATH_PREFIX_TOKEN = (max_input_size-5) / 3 + 1;
 
-    unsigned int max_edges = (unsigned int)((alpha * (max_input_size - 2)) / 6);
+	unsigned int max_edges = (unsigned int)((alpha * (max_input_size - 2)) / 6);
 
-    unsigned int num_generated = 0;
-    unsigned int num_collisions = 0;
-    unsigned int ntokens = (max_input_size - 5) / 3 + 5;
-    size_t input_shape[2]{dataset_size, max_input_size};
-    size_t output_shape[2]{dataset_size, ntokens};
-    size_t label_shape[1]{dataset_size};
+	unsigned int num_generated = 0;
+	unsigned int num_collisions = 0;
+	unsigned int ntokens = (max_input_size - 5) / 3 + 5;
+	size_t input_shape[2]{dataset_size, max_input_size};
+	size_t output_shape[2]{dataset_size, ntokens};
+	size_t label_shape[1]{dataset_size};
 
-    // Create two label arrays: one for selection and one for inference.
-    py::array_t<int64_t, py::array::c_style> inputs(input_shape);
-    py::array_t<float, py::array::c_style> outputs(output_shape);
-    py::array_t<int64_t, py::array::c_style> sel_labels(label_shape);
-    py::array_t<int64_t, py::array::c_style> inf_labels(label_shape);
-    auto inputs_mem = inputs.mutable_unchecked<2>();
-    auto outputs_mem = outputs.mutable_unchecked<2>();
-    auto sel_labels_mem = sel_labels.mutable_unchecked<1>();
-    auto inf_labels_mem = inf_labels.mutable_unchecked<1>();
+	py::array_t<int64_t, py::array::c_style> inputs(input_shape);
+	py::array_t<float, py::array::c_style> outputs(output_shape);
+	py::array_t<int64_t, py::array::c_style> labels(label_shape);
 
-    unsigned int* frontier_branch_histogram = (unsigned int*) alloca(sizeof(unsigned int) * (max_edges + 1) * (max_edges + 1));
+	// Store the reward value for each token in the input
+	py::array_t<float, py::array::c_style> rewards(output_shape);
+
+	auto inputs_mem = inputs.mutable_unchecked<2>();
+	auto outputs_mem = outputs.mutable_unchecked<2>();
+	auto labels_mem = labels.mutable_unchecked<1>();
+	auto rewards_mem = rewards.mutable_unchecked<2>();
+
+
+	unsigned int* frontier_branch_histogram = (unsigned int*) alloca(sizeof(unsigned int) * (max_edges + 1) * (max_edges + 1));
 	for (unsigned int i = 0; i < (max_edges + 1) * (max_edges + 1); i++)
 		frontier_branch_histogram[i] = 0;
 	unsigned int* visited_edges_histogram = (unsigned int*) alloca(sizeof(unsigned int) * (max_edges + 1));
@@ -2271,11 +2303,20 @@ py::tuple generate_si_training_set_split(const unsigned int max_input_size,
 		const node* current_node = &g[current_node_index];
 		unsigned int branch_size = current_node->children.length;
 
-		bool is_selection_step;
-		if (path.length == 0)
-			is_selection_step = false;
-		else
-			is_selection_step = (randrange(2) == 0);
+        bool is_selection_step;
+        if (sample_type == 1) {          // Force selection samples
+            is_selection_step = true;
+        }
+        else if (sample_type == 2) {   // Force inference samples
+            is_selection_step = false;
+        }
+        else {                         // Mixed mode (default)
+            if (path.length == 0)
+                is_selection_step = false;
+            else
+                is_selection_step = (randrange(2) == 0);
+        }
+
 		if (3*(path.length/2) + (is_selection_step ? 1 : 2) > 3*(max_edges - 1) + 1) {
 			/* we have just barely too many edges */
 			for (node& n : g) core::free(n);
@@ -2290,14 +2331,10 @@ py::tuple generate_si_training_set_split(const unsigned int max_input_size,
 			prefix[prefix.length++] = path[j+1]->id;
 		}
 		prefix[prefix.length++] = PATH_PREFIX_TOKEN;
+		if (!is_selection_step)
+			prefix[prefix.length++] = current_node->id;
 
-		// In split mode, we want to generate both a selection sample and an inference sample.
-        // Here we decide: if is_selection_step then the sample is for the selection model;
-        // otherwise, it is for the inference model.
-        if (!is_selection_step)
-            prefix[prefix.length++] = current_node->id;
-
-        if ((requested_frontier_size != -1 && !uniform && (unsigned int) requested_frontier_size != (unsigned int) frontier.length)
+		if ((requested_frontier_size != -1 && !uniform && (unsigned int) requested_frontier_size != (unsigned int) frontier.length)
 		 || (requested_branch_size != -1 && !uniform && (unsigned int) requested_branch_size != branch_size)
 		 || (uniform && num_generated != 0 && (float) frontier_branch_histogram[frontier.length*(max_edges+1) + branch_size] / num_generated >= MAX_FREQS_PER_BUCKET[frontier.length*(max_edges+1) + branch_size]))
 		{
@@ -2328,30 +2365,72 @@ py::tuple generate_si_training_set_split(const unsigned int max_input_size,
 		for (unsigned int i = 0; i < ntokens; i++)
 			outputs_mem(num_generated, i) = 0.0f;
 
-        // Now, in split mode, we produce two kinds of labels:
-        // if is_selection_step then we set sel_labels = choice(frontier) and inf_labels = -1 (dummy)
-        // else we set inf_labels = choice(correct_answers) and sel_labels = -1.
-        if (is_selection_step) {
-            for (const node* frontier_vertex : frontier)
-                outputs_mem(num_generated, frontier_vertex->id) = 1.0f;
-            int sel_target = choice(frontier.data, frontier.length)->id;
-            sel_labels_mem(num_generated) = sel_target;
-            inf_labels_mem(num_generated) = -1; // dummy value
-        } else {
-            array<unsigned int> correct_answers(8);
-            for (const node* child : current_node->children) {
-                if (!path.contains(child)) {
-                    outputs_mem(num_generated, child->id) = 1.0f;
-                    correct_answers.add(child->id);
-                }
-            }
-            int inf_target = choice(correct_answers.data, correct_answers.length);
-            inf_labels_mem(num_generated) = inf_target;
-            sel_labels_mem(num_generated) = -1; // dummy value
-        }
-        num_generated++;
+		if (is_selection_step) {
+			for (const node* frontier_vertex : frontier)
+				outputs_mem(num_generated, frontier_vertex->id) = 1.0f;
+			labels_mem(num_generated) = choice(frontier.data, frontier.length)->id;
+		}
+		else {
+			array<unsigned int> correct_answers(8);
+			for (const node* child : current_node->children) {
+				if (!path.contains(child)) {
+					outputs_mem(num_generated, child->id) = 1.0f;
+					correct_answers.add(child->id);
+				}
+			}
+			labels_mem(num_generated) = choice(correct_answers.data, correct_answers.length);
+		}
 
-        if (!quiet && num_generated > 0 && (num_generated % 1000 == 0 || num_generated >= dataset_size)) {
+		// Calculate rewards for rl
+		for (unsigned int token = 0; token < ntokens; token++) {
+//		    printf("Total tokens: %d\n", ntokens);
+            float reward = 0.0f;
+            const node* v = get_vertex_by_token(g, token);
+            if (v == nullptr) {
+            // token does not correspond to any vertex in graph
+                reward = -1.0f;
+            }
+            else {
+                if (is_selection_step) {
+                    // Selection reward:
+                    if (is_visited(path, v)) {
+                        if (has_unvisited_child(v, path))
+                            reward = 1.0f;
+                        else
+                            reward = -0.3f;
+                    }
+                    else {
+                        if (has_visited_parent(v, path))
+                            reward = -0.2f;
+                        else
+                            reward = -0.5f;
+                    }
+                }
+                else {
+                    // Inference reward:
+                    bool is_child = false;
+                    for (unsigned int i = 0; i < current_node->children.length; i++) {
+                        if (current_node->children[i]->id == v->id) {
+                            is_child = true;
+                            break;
+                        }
+                    }
+                    if (!is_child)
+                        reward = -0.5f;
+                    else {
+                        if (!is_visited(path, v))
+                            reward = 1.0f;
+                        else
+                            reward = -0.2f;
+                    }
+                }
+		    }
+		    rewards_mem(num_generated, token) = reward;
+        }
+
+		num_generated++;
+
+		if (!quiet && num_generated > 0 && (num_generated % 1000 == 0 || num_generated >= dataset_size)) {
 			printf("%d examples generated.\n", num_generated);
 			fflush(stdout);
 
@@ -2385,8 +2464,9 @@ py::tuple generate_si_training_set_split(const unsigned int max_input_size,
 		for (node& n : g) core::free(n);
 		g.length = 0; path.length = 0;
 		continue;
-    }
-    return py::make_tuple(inputs, outputs, sel_labels, inf_labels, num_collisions);
+	}
+
+	return py::make_tuple(inputs, outputs, labels, rewards, num_collisions);
 }
 
 PYBIND11_MODULE(generator, m) {
@@ -2394,8 +2474,8 @@ PYBIND11_MODULE(generator, m) {
 	m.def("generate_reachable_training_set", &generate_reachable_training_set);
 	m.def("generate_dfs_training_set", &generate_dfs_training_set);
 	m.def("generate_si_training_set", &generate_si_training_set);
-	// New function for generating the training set for the SI split models version
-	m.def("generate_si_training_set_split", &generate_si_training_set_split);
+	// Function for getting si training set along with reinforcement learning rewards
+	m.def("generate_si_training_set_reward", &generate_si_training_set_reward);
 	m.def("lookahead_histogram", &lookahead_histogram);
 	m.def("set_seed", &core::set_seed);
 }
