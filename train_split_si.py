@@ -539,6 +539,9 @@ def evaluate_model(model, inputs, outputs):
     outputs = outputs.to(device)
     max_input_size = inputs.shape[1]
 
+    # print("Inputs: ", inputs)
+    # print("Outputs: ", outputs)
+
     if outputs.dim() == 2:
         loss_func = BCEWithLogitsLoss(reduction='mean')
     else:
@@ -547,6 +550,7 @@ def evaluate_model(model, inputs, outputs):
     loss = loss_func(logits[:, -1, :], outputs).item()
 
     predictions = torch.argmax(logits[:, -1, :], 1)
+    # print("Predictions: ", predictions)
     if outputs.dim() == 2:
         acc = torch.sum(torch.gather(outputs, 1, torch.argmax(logits[:,-1,:],dim=1).unsqueeze(1))).item() / outputs.size(0)
     else:
@@ -763,7 +767,7 @@ def train(max_input_size, dataset_size, distribution, max_lookahead, seed_value,
             for i in range(sel_inputs.shape[0]):
                 reserved_inputs.add(tuple([x for x in sel_inputs[i,:] if x != PADDING_TOKEN]))
             if frontier_size == 4 and branch_size == 4:
-                eval_inputs_sel, eval_outputs_sel = sel_inputs, sel_labels
+                eval_inputs_sel, eval_outputs_sel = sel_inputs, sel_outputs
 
             print('Reserving OOD test data (inference) for frontier_size = {}, branch_size = {}'.format(frontier_size, branch_size))
             stdout.flush()
@@ -773,17 +777,20 @@ def train(max_input_size, dataset_size, distribution, max_lookahead, seed_value,
                 if inf_labels[i] != -1:
                     reserved_inputs.add(tuple([x for x in inf_inputs[i, :] if x != PADDING_TOKEN]))
             if frontier_size == 4 and branch_size == 4:
-                eval_inputs_inf, eval_outputs_inf = inf_inputs, inf_labels
+                eval_inputs_inf, eval_outputs_inf = inf_inputs, inf_outputs
 
     else:
         print('ERROR: Unrecognized task "{}".'.format(task))
         stdout.flush()
         return
 
-    eval_inputs_sel = eval_inputs_sel[:BATCH_SIZE]
-    eval_outputs_sel = eval_outputs_sel[:BATCH_SIZE]
-    eval_inputs_inf = eval_inputs_inf[:BATCH_SIZE]
-    eval_outputs_inf = eval_outputs_inf[:BATCH_SIZE]
+    if BATCH_SIZE < eval_inputs_sel.shape[0]:
+        eval_inputs_sel = eval_inputs_sel[:BATCH_SIZE]
+        eval_outputs_sel = eval_outputs_sel[:BATCH_SIZE]
+
+    if BATCH_SIZE < eval_inputs_inf.shape[0]:
+        eval_inputs_inf = eval_inputs_inf[:BATCH_SIZE]
+        eval_outputs_inf = eval_outputs_inf[:BATCH_SIZE]
 
     train_filename = 'train{}_v3_inputsize{}_maxlookahead{}_{}seed{}.pkl'.format(dataset_size, max_input_size, max_lookahead, 'padded_' if add_padding else '', seed_value)
     if task == 'dfs':
@@ -1252,6 +1259,9 @@ def train(max_input_size, dataset_size, distribution, max_lookahead, seed_value,
 
                     sel_logits, _ = model_sel(sel_inputs)
                     inf_logits, _ = model_inf(inf_inputs)
+
+                    # print(f"Sel in: {sel_inputs},\n out: {sel_outputs},\n sum: {torch.sum(sel_outputs, dim=1)}")
+                    # print(f"Inf: {inf_inputs},\n out: {inf_outputs},\n sum: {torch.sum(inf_outputs, dim=1)}")
 
                     sel_training_acc = torch.sum(torch.gather(sel_outputs, 1, torch.argmax(sel_logits[:,-1,:],dim=1).unsqueeze(1))).item() / sel_outputs.size(0)
                     inf_training_acc = torch.sum(torch.gather(inf_outputs, 1, torch.argmax(inf_logits[:,-1,:],dim=1).unsqueeze(1))).item() / inf_outputs.size(0)

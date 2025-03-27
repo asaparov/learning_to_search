@@ -110,5 +110,38 @@ def test_generate_si_training_set_split():
     print(inf_labels)
 
 
+def test_generate_si_training_set():
+    max_input_size = 50
+    dataset_size = 5
+    reserved_inputs = set()
+    requested_frontier_size = 2
+    requested_branch_size = 2
+    uniform = False
+    quiet = True
+    alpha = 1.0
+
+    # 0 is default, 1 is selection only, 2 is inference
+    result = generator.generate_si_training_set(
+        max_input_size, dataset_size, reserved_inputs,
+        requested_frontier_size, requested_branch_size,
+        uniform, quiet, alpha, 2
+    )
+
+    inputs, outputs, labels, collisions = result
+
+    # Print some basic information about the generated arrays.
+    print("Generated SI training samples (split version):")
+    print("Inputs shape:", inputs.shape)
+    print("Outputs shape:", outputs.shape)
+    print("Labels shape:", labels.shape)
+    print("Number of collisions:", collisions)
+    print("\nSample inputs:")
+    print(inputs)
+    print("\nSample outputs:")
+    print(outputs)
+    print("\nLabels:")
+    print(labels)
+
+
 if __name__ == "__main__":
-    test_generate_si_training_set_split()
+    test_generate_si_training_set()

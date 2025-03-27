@@ -566,19 +566,6 @@ class DummyDataset(Dataset):
         tgt_seq = self.y_data[idx]
         return (src_seq, tgt_seq)
 
-# New Dummy Dataset class for the split si models
-class DummyDatasetSplit(Dataset):
-    def __init__(self, inputs, outputs, sel_labels, inf_labels, device, x_type=LongTensor, y_type=LongTensor):
-        self.x_data = x_type(inputs).to(device)
-        self.out_data = outputs
-        self.sel_data = y_type(sel_labels).to(device)
-        self.inf_data = y_type(inf_labels).to(device)
-    def __len__(self):
-        return len(self.x_data)
-    def __getitem__(self, idx):
-        # Return a tuple of (input, output, sel_label, inf_label)
-        return (self.x_data[idx], self.out_data[idx], self.sel_data[idx], self.inf_data[idx])
-
 def unique(x):
     y = []
     for e in x:
@@ -694,7 +681,7 @@ def generate_training_set(max_input_size, dataset_size, max_lookahead, reserved_
 
     return inputs, outputs, valid_outputs, num_collisions
 
-def train(max_input_size, dataset_size, distribution, max_lookahead, seed_value, nlayers, nhead, hidden_dim, bidirectional, pos_emb, learnable_token_emb, toeplitz_attn, toeplitz_reg, toeplitz_pos_only, add_padding, ablate, pre_ln, curriculum_mode, looped, task, warm_up, batch_size, learning_rate, update_rate, grad_accumulation_steps, split_si, reinforce):
+def train(max_input_size, dataset_size, distribution, max_lookahead, seed_value, nlayers, nhead, hidden_dim, bidirectional, pos_emb, learnable_token_emb, toeplitz_attn, toeplitz_reg, toeplitz_pos_only, add_padding, ablate, pre_ln, curriculum_mode, looped, task, warm_up, batch_size, learning_rate, update_rate, grad_accumulation_steps, reinforce):
     generator.set_seed(seed_value)
     seed(seed_value)
     torch.manual_seed(seed_value)
@@ -718,10 +705,6 @@ def train(max_input_size, dataset_size, distribution, max_lookahead, seed_value,
         return
     if distribution in ("crafted_no_prefix", "star") and task != "search":
         print('ERROR: Distributions `crafted_no_prefix` and `star` are only supported with task `search`.')
-        stdout.flush()
-        return
-    if split_si == 'y' and task != "si":
-        print('ERROR: `split_si` is only supported with task `si`.')
         stdout.flush()
         return
     if max_lookahead == None:
@@ -765,7 +748,7 @@ def train(max_input_size, dataset_size, distribution, max_lookahead, seed_value,
 
             print('Reserving OOD test data for frontier_size = {}, branch_size = {}'.format(frontier_size, branch_size))
             stdout.flush()
-            inputs,outputs,_,_ = generator.generate_si_training_set(max_input_size, NUM_TEST_SAMPLES, reserved_inputs, frontier_size, branch_size, False, True, 1.0)
+            inputs,outputs,_,_ = generator.generate_si_training_set(max_input_size, NUM_TEST_SAMPLES, reserved_inputs, frontier_size, branch_size, False, True, 1.0, 0)
             print('Done. Throughput: {} examples/s'.format(NUM_TEST_SAMPLES / (time.perf_counter() - gen_eval_start_time)))
             for i in range(inputs.shape[0]):
                 reserved_inputs.add(tuple([x for x in inputs[i,:] if x != PADDING_TOKEN]))
@@ -937,62 +920,22 @@ def train(max_input_size, dataset_size, distribution, max_lookahead, seed_value,
         else:
             initial_layers = nlayers
 
-        # For selection inference task with split models
-        if task == 'si' and split_si == 'y':
-            print("Building two Transformer models (selection + inference).")
-            model_sel = Transformer(
-                layers=nlayers,
-                pad_idx=PADDING_TOKEN,
-                words=ntoken,
-                seq_len=max_input_size,
-                heads=nhead,
-                dims=max(ntoken, d_hid),
-                rate=1,
-                dropout=dropout,
-                bidirectional=bidirectional,
-                pos_emb=pos_emb_mode,
-                learn_token_emb=learnable_token_emb,
-                ablate=ablation_mode,
-                toeplitz=toeplitz,
-                pre_ln=pre_ln,
-                looped=looped
-            )
-            model_inf = Transformer(
-                layers=nlayers,
-                pad_idx=PADDING_TOKEN,
-                words=ntoken,
-                seq_len=max_input_size,
-                heads=nhead,
-                dims=max(ntoken, d_hid),
-                rate=1,
-                dropout=dropout,
-                bidirectional=bidirectional,
-                pos_emb=pos_emb_mode,
-                learn_token_emb=learnable_token_emb,
-                ablate=ablation_mode,
-                toeplitz=toeplitz,
-                pre_ln=pre_ln,
-                looped=looped
-            )
-            model_sel.to(device)
-            model_inf.to(device)
-        else:
-            model = Transformer(
-                layers=initial_layers,
-                pad_idx=PADDING_TOKEN,
-                words=ntoken,
-                seq_len=max_input_size,
-                heads=nhead,
-                dims=max(ntoken,d_hid),
-                rate=1,
-                dropout=dropout,
-                bidirectional=bidirectional,
-                pos_emb=pos_emb_mode,
-                learn_token_emb=learnable_token_emb,
-                ablate=ablation_mode,
-                toeplitz=toeplitz,
-                pre_ln=pre_ln,
-                looped=looped)
+        model = Transformer(
+            layers=initial_layers,
+            pad_idx=PADDING_TOKEN,
+            words=ntoken,
+            seq_len=max_input_size,
+            heads=nhead,
+            dims=max(ntoken,d_hid),
+            rate=1,
+            dropout=dropout,
+            bidirectional=bidirectional,
+            pos_emb=pos_emb_mode,
+            learn_token_emb=learnable_token_emb,
+            ablate=ablation_mode,
+            toeplitz=toeplitz,
+            pre_ln=pre_ln,
+            looped=looped)
         epoch = 0
         model.to(device)
     else:
@@ -1010,13 +953,7 @@ def train(max_input_size, dataset_size, distribution, max_lookahead, seed_value,
     INITIAL_LR = 1.0e-4
     TARGET_LR = learning_rate
 
-    if task == 'si' and split_si == 'y':
-        optimizer_sel = SophiaG((p for p in model_sel.parameters() if p.requires_grad),
-                                lr=learning_rate, weight_decay=0.1)
-        optimizer_inf = SophiaG((p for p in model_inf.parameters() if p.requires_grad),
-                            lr=learning_rate, weight_decay=0.1)
-    else:
-        optimizer = SophiaG((p for p in model.parameters() if p.requires_grad), lr=TARGET_LR, weight_decay=0.1)
+    optimizer = SophiaG((p for p in model.parameters() if p.requires_grad), lr=TARGET_LR, weight_decay=0.1)
 
     log_interval = 1
     eval_interval = 1
@@ -1115,10 +1052,10 @@ def train(max_input_size, dataset_size, distribution, max_lookahead, seed_value,
 
                             inputs, outputs, labels, num_collisions = generator.generate_si_training_set(
                                 max_input_size, BATCH_SIZE, reserved_inputs, curr_max_frontier, curr_max_branch,
-                                True, True, self.alpha)
+                                True, True, self.alpha, 0)
 
                         else:
-                            inputs, outputs, labels, num_collisions = generator.generate_si_training_set(max_input_size, BATCH_SIZE, reserved_inputs, max_frontier_size, max_branch_size, True, True, 1.0)
+                            inputs, outputs, labels, num_collisions = generator.generate_si_training_set(max_input_size, BATCH_SIZE, reserved_inputs, max_frontier_size, max_branch_size, True, True, 1.0, 0)
                     else:
                         if distribution == 'star':
                             max_spoke_length = self.lookahead
@@ -1281,6 +1218,7 @@ def train(max_input_size, dataset_size, distribution, max_lookahead, seed_value,
                 if epoch % eval_interval == 0:
                     model.eval()
                     logits, _ = model(input)
+                    # print(output)
                     training_acc = torch.sum(torch.gather(output, 1, torch.argmax(logits[:,-1,:],dim=1).unsqueeze(1))).item() / output.size(0)
                     print("training accuracy: %.2f±%.2f" % (training_acc, binomial_confidence_int(training_acc, output.size(0))))
                     del input, output
@@ -1301,7 +1239,7 @@ def train(max_input_size, dataset_size, distribution, max_lookahead, seed_value,
                             reinit_data_loader = True
                             break
 
-                    elif curriculum_mode != 'n' and model.lookahead < max_lookahead and training_acc > 0.99:
+                    elif curriculum_mode != 'n' and model.lookahead < max_lookahead and training_acc > 0.98:
                         if model.max_edges < (max_input_size - 5) // 3:
                             # increase the maximum number of edges by 1
                             print("Increasing maximum number of edges to {}".format(model.max_edges + 1))
@@ -1416,7 +1354,6 @@ if __name__ == "__main__":
     parser.add_argument("--learning-rate", type=float, default=1.0e-5, required=False)
     parser.add_argument("--update-rate", type=int, default=2**18, required=False)
     parser.add_argument("--grad-accumulation-steps", type=int, default=1, required=False)
-    parser.add_argument('--split-si', type=str, default='n', choices=['y', 'n'], required=False)
     parser.add_argument('--reinforce', type=str, default='n', choices=['y', 'n'], required=False)
     args = parser.parse_args()
 
@@ -1446,5 +1383,4 @@ if __name__ == "__main__":
         learning_rate=args.learning_rate,
         update_rate=args.update_rate,
         grad_accumulation_steps=args.grad_accumulation_steps,
-        split_si=args.split_si,
         reinforce=args.reinforce)
