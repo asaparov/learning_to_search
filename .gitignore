@@ -6,3 +6,4 @@ __pycache__
 .venv
 .idea
 *.so
+/si_split_results

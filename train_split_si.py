@@ -743,7 +743,7 @@ def train(max_input_size, dataset_size, distribution, max_lookahead, seed_value,
     reserved_inputs = set()
     NUM_TEST_SAMPLES = 10000
     if task == 'si':
-        NUM_TEST_SAMPLES = 1000
+        NUM_TEST_SAMPLES = 500
         max_edges = (max_input_size - 2) // 6
         max_frontier_size = (max_edges + 1) // 2
         max_branch_size = max_edges
