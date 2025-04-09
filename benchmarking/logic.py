@@ -1,27 +1,9 @@
 import os
 import random
-import sys
 import sysconfig
 from io import StringIO
-import asyncio
-
-from openai import AsyncOpenAI
-aclient = None
-from together import AsyncTogether
-
 from faker import Faker
-from openai import OpenAI
 from pybind11.__main__ import print_includes
-
-# Add the parent directory to path
-current_dir = os.path.dirname(os.path.abspath(__file__))
-parent_dir = os.path.dirname(current_dir)
-sys.path.append(parent_dir)
-
-from train import generate_example
-
-# Set working path to the parent
-os.chdir("..")
 
 def build_module(name):
 	import sys
@@ -89,17 +71,6 @@ def generate_graph_text(
 	num_paths,
 ):
 
-	# # Get graph using generate_example
-	# graph, start, end, paths = generate_example(
-	# 	num_vertices,
-	# 	max_num_parents,
-	# 	(max_input_size - 5) // 3,
-	# 	get_shortest_paths=True,
-	# 	lookahead=lookahead,
-	# 	num_paths=num_paths,
-	# 	max_prefix_vertices=0
-	# )
-
 	# Get graph using the C++ generator
 	inputs, outputs, labels, num_collisions = generator.generate_training_set(
 		max_input_size,
@@ -110,7 +81,7 @@ def generate_graph_text(
 		-1, # distance from start
 		0, # max_prefix_vertices
 		True, # quiet
-		# num_paths # number of paths
+		num_paths # number of paths
 	)
 
 	# If the random DAG fails to generate a valid example, return None
@@ -122,26 +93,6 @@ def generate_graph_text(
 	EDGE_PREFIX_TOKEN  = (max_input_size - 5) // 3 + 2
 	PATH_PREFIX_TOKEN  = (max_input_size - 5) // 3 + 1
 	QUERY_PREFIX_TOKEN = (max_input_size - 5) // 3 + 4
-
-	# prefix = []
-
-	# # Add list of edges
-	# for vertex in inputs:
-	# 	for child in vertex.children:
-	# 		prefix.append(EDGE_PREFIX_TOKEN)
-	# 		prefix.append(vertex.id)
-	# 		prefix.append(child.id)
-	#
-	# # Add query
-	# prefix.append(QUERY_PREFIX_TOKEN)
-	# prefix.append(start.id)
-	# prefix.append(end.id)
-	#
-	# # Add path prefix token
-	# prefix.append(PATH_PREFIX_TOKEN)
-	#
-	# # Add the starting vertex as my current position
-	# prefix.append(start.id)
 
 	# Function for mapping tokens to letters
 	def token_to_str(token):
@@ -166,20 +117,10 @@ def generate_graph_text(
 
 def generate_name(n):
 	"""
-	Generates n random first names using the Faker library.
+	Generates n random names using the Faker library.
 	"""
 	fake = Faker()
-	# unique_count = n // 2 + 1
-	# names = [fake.unique.first_name() for _ in range(unique_count)]
-	#
-	# result = [names[0]]
-	# for name in names[1:]:
-	# 	result.extend([name, name])
-	#
-	# print(result)
-	#
-	# return result
-
+	# return [fake.unique.first_name() for i in range(n)]
 	return [fake.unique.name() for i in range(n)]
 
 
@@ -220,9 +161,9 @@ def generate_fake_nouns(n):
 	return list(nouns)
 
 
-def generate_words(n):
-	fake = Faker()
-	return fake.words(nb=n)
+# def generate_words(n):
+# 	fake = Faker()
+# 	return fake.words(nb=n)
 
 
 def logic_paragraph_from_tokens(tokens_str: str, next_step: int, use_diff_names=True):
@@ -317,29 +258,8 @@ def logic_paragraph_from_tokens(tokens_str: str, next_step: int, use_diff_names=
 	return paragraph, next_step_adj
 
 
-async def get_response(prompt: str, model: str):
-	response = await aclient.chat.completions.create(model=model,
-			messages=[{"role": "user", "content": prompt}])
-	tokens = response.usage.completion_tokens_details.reasoning_tokens
-	return response.choices[0].message.content, tokens
 
-async def get_response_together(prompt: str, model: str):
-	response = await aclient.chat.completions.create(
-		model=model,
-		messages=[{"role": "user", "content": prompt}],
-	)
-	tokens = response.usage.total_tokens
-	return response.choices[0].message.content, tokens
-
-
-async def main(samples_per_test: int = 3, lookahead_range: list = range(1, 5), num_paths: int = 2, max_num_parents: int = 3, logic: bool = False, seed: int = None, verbose: bool = True, print_prompts: bool = False, model: str = "gpt-4o", submit_prompts: bool = True):
-	global aclient
-	if submit_prompts:
-		if model != "deepseek-ai/DeepSeek-R1":
-			aclient = AsyncOpenAI()
-		else:
-			aclient = AsyncTogether()
-
+async def main(samples_per_test: int = 3, lookahead_range: list = range(1, 5), num_paths: int = 2, max_num_parents: int = 3, logic: bool = False, seed: int = None, verbose: bool = True, print_prompts: bool = False, model: str = "gpt-4o"):
 	if seed is not None:
 		random.seed(seed)
 		generator.set_seed(seed)
@@ -377,54 +297,9 @@ async def main(samples_per_test: int = 3, lookahead_range: list = range(1, 5), n
 				print(f"Prompt: {prompt}\n")
 				print(f"Correct:   {next_step_adj if logic else next_step}\n")
 
-		if not submit_prompts:
-			continue
-
-		# Create async tasks to run multiple AI calls at once
-
-		if model != "deepseek-ai/DeepSeek-R1":
-			tasks = [asyncio.create_task(get_response(prompt, model)) for prompt in prompts]
-			results = await asyncio.gather(*tasks)
-		else:
-			tasks = [asyncio.create_task(get_response_together(prompt, model)) for prompt in prompts]
-			results = await asyncio.gather(*tasks)
-
-
-		# Keep track of number of tokens and correct responses
-		tokens_used = 0
-		correct_count = 0
-		for response, correct, lav in zip(results, correct_responses, look_ahead_values):
-			response_txt, response_tokens = response
-			tokens_used += response_tokens
-
-			if logic:
-				if response_txt == correct or correct in response_txt:
-					correct_count += 1
-					if verbose:
-						print(f"Correct, look_ahead={lav}, num_paths={num_paths}, max_num_parents={max_num_parents}. Tokens: {response_tokens}")
-				else:
-					if verbose:
-						print(f"Incorrect, response={response_txt}, correct={correct} look_ahead={lav}, num_paths={num_paths}, max_num_parents={max_num_parents}. Tokens: {response_tokens}")
-			else:
-				try:
-					if int(response_txt) == int(correct):
-						correct_count += 1
-						if verbose:
-							print(f"Correct, look_ahead={lav}, num_paths={num_paths}, max_num_parents={max_num_parents}. Tokens: {response_tokens}")
-					else:
-						if verbose:
-							print(f"Incorrect, response={response_txt}, correct={correct} look_ahead={lav}, num_paths={num_paths}, max_num_parents={max_num_parents}. Tokens: {response_tokens}")
-				except ValueError:
-					# if verbose:
-					print(f"\n***Response={response_txt}, gave a value error, \n *correct={correct}, look_ahead={lav}. Tokens: {response_tokens}")
-
-		tokens_used /= samples_per_test
-		print(f"look_ahead={look_ahead}, correct={correct_count}, avg_tokens={tokens_used}\n")
-
 		prompts = []
 		correct_responses = []
 		look_ahead_values = []
-
 
 def multiplicative_range(start, stop, step):
 	result = []
@@ -438,16 +313,13 @@ def multiplicative_range(start, stop, step):
 if __name__ == "__main__":
 	look_ahead = list(range(5, 50, 5))
 	print(f"look_ahead range={look_ahead}")
-	asyncio.run(main(
-		# model="o3-mini",
-		model="deepseek-ai/DeepSeek-R1",
+	main(
 		samples_per_test=1,
 		lookahead_range=look_ahead,
 		num_paths=9,
 		logic=True,
 		verbose=False,
 		print_prompts=True,
-		submit_prompts=False
-	))
+	)
 
 
