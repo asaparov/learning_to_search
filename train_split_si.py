@@ -122,31 +122,18 @@ def evaluate_model(model, inputs, outputs):
         acc = sum(predictions == outputs).item() / len(predictions)
     return acc, loss, predictions
 
-class DummyDataset(Dataset):
-    def __init__(self, inputs, outputs, device, x_type=LongTensor, y_type=LongTensor):
-        self.x_data = x_type(inputs).to(device)
-        self.y_data = y_type(outputs).to(device)
-
-    def __len__(self):
-        return len(self.x_data)
-
-    def __getitem__(self, idx):
-        src_seq = self.x_data[idx]
-        tgt_seq = self.y_data[idx]
-        return (src_seq, tgt_seq)
-
 # New Dummy Dataset class for the split si models
 class DummyDatasetSplit(Dataset):
-    def __init__(self, inputs, outputs, sel_labels, inf_labels, device, x_type=LongTensor, y_type=LongTensor):
+    def __init__(self, inputs, outputs, inf_labels, device, x_type=LongTensor, y_type=LongTensor):
         self.x_data = x_type(inputs).to(device)
         self.out_data = outputs
-        self.sel_data = y_type(sel_labels).to(device)
+        # self.sel_data = y_type(sel_labels).to(device)
         self.inf_data = y_type(inf_labels).to(device)
     def __len__(self):
         return len(self.x_data)
     def __getitem__(self, idx):
-        # Return a tuple of (input, output, sel_label, inf_label)
-        return (self.x_data[idx], self.out_data[idx], self.sel_data[idx], self.inf_data[idx])
+        # Return a tuple of (input, output, inf_label)
+        return (self.x_data[idx], self.out_data[idx], self.inf_data[idx])
 
 def unique(x):
     y = []
@@ -155,7 +142,50 @@ def unique(x):
             y.append(e)
     return y
 
-def train(max_input_size, dataset_size, distribution, max_lookahead, seed_value, nlayers, nhead, hidden_dim, bidirectional, pos_emb, learnable_token_emb, toeplitz_attn, toeplitz_reg, toeplitz_pos_only, add_padding, ablate, pre_ln, curriculum_mode, looped, task, warm_up, batch_size, learning_rate, update_rate, grad_accumulation_steps, split_si, reinforce):
+#############################
+# PPO Helper Functions
+#############################
+# PPO hyperparameters
+PPO_EPSILON = 0.2
+PPO_EPOCHS = 4
+PPO_VALUE_COEF = 0.5
+PPO_ENTROPY_COEF = 0.01
+PPO_MINIBATCH_SIZE = 16
+
+
+def get_policy_and_value(model, inputs):
+    # Get the output from the transformer.
+    x = model(inputs)
+    # In evaluation mode, model(inputs) may return (x, past) so support that:
+    if isinstance(x, tuple):
+        logits, _ = x
+    else:
+        logits = x
+    # Assume logits has shape [batch, seq_len, hidden_dim].
+    # We use the last time step's hidden state.
+    last_hidden = logits[:, -1, :]
+    # Compute the value estimate using the value head.
+    value = model.value_head(last_hidden)  # shape: [batch, 1]
+    return logits, value
+
+def ppo_update(model, optimizer, inputs, actions, old_log_probs, rewards, old_values):
+    logits, values = get_policy_and_value(model, inputs)
+    prob_dist = torch.softmax(logits, dim=1)
+    new_log_probs = torch.log(torch.gather(prob_dist, 1, actions.unsqueeze(1)).squeeze(1) + 1e-8)
+    ratio = torch.exp(new_log_probs - old_log_probs)
+    advantages = rewards - old_values.squeeze(1)
+    surr1 = ratio * advantages
+    surr2 = torch.clamp(ratio, 1 - PPO_EPSILON, 1 + PPO_EPSILON) * advantages
+    policy_loss = -torch.mean(torch.min(surr1, surr2))
+    value_loss = torch.mean((values.squeeze(1) - rewards) ** 2)
+    entropy = -torch.mean(torch.sum(prob_dist * torch.log(prob_dist + 1e-8), dim=1))
+    total_loss = policy_loss + PPO_VALUE_COEF * value_loss - PPO_ENTROPY_COEF * entropy
+    optimizer.zero_grad()
+    total_loss.backward()
+    optimizer.step()
+    return total_loss.item(), policy_loss.item(), value_loss.item(), entropy.item()
+
+def train(max_input_size, dataset_size, distribution, max_lookahead, seed_value, nlayers, nhead, hidden_dim, bidirectional, pos_emb, learnable_token_emb, toeplitz_attn, toeplitz_reg, toeplitz_pos_only, add_padding, ablate, pre_ln, curriculum_mode, looped, task, warm_up, batch_size, learning_rate, update_rate, grad_accumulation_steps, split_si, reinforce, loss):
     generator.set_seed(seed_value)
     seed(seed_value)
     torch.manual_seed(seed_value)
@@ -167,6 +197,12 @@ def train(max_input_size, dataset_size, distribution, max_lookahead, seed_value,
 
     if curriculum_mode == 'y':
         print("Using curriculum learning")
+
+    if reinforce == 'y':
+        print("Using PPO reinforcement learning")
+
+    if loss == "bce":
+        print("Using BCE loss")
 
     if curriculum_mode != 'n' and dataset_size != -1:
         print('ERROR: Curriculum learning is only supported with streaming training (i.e. dataset_size = -1).')
@@ -216,15 +252,15 @@ def train(max_input_size, dataset_size, distribution, max_lookahead, seed_value,
             np.random.set_state(np_random_state)
             torch.set_rng_state(torch_random_state)
 
-            print('Reserving OOD test data (selection) for frontier_size = {}, branch_size = {}'.format(frontier_size, branch_size))
-            stdout.flush()
-            sel_inputs, sel_outputs, sel_labels ,_ = generator.generate_si_training_set(
-                max_input_size, NUM_TEST_SAMPLES, reserved_inputs, frontier_size, branch_size, False, True, 1.0, 1)
-            print('Done. Throughput: {} examples/s'.format(NUM_TEST_SAMPLES / (time.perf_counter() - gen_eval_start_time)))
-            for i in range(sel_inputs.shape[0]):
-                reserved_inputs.add(tuple([x for x in sel_inputs[i,:] if x != PADDING_TOKEN]))
-            if frontier_size == 4 and branch_size == 4:
-                eval_inputs_sel, eval_outputs_sel = sel_inputs, sel_outputs
+            # print('Reserving OOD test data (selection) for frontier_size = {}, branch_size = {}'.format(frontier_size, branch_size))
+            # stdout.flush()
+            # sel_inputs, sel_outputs, sel_labels ,_ = generator.generate_si_training_set(
+            #     max_input_size, NUM_TEST_SAMPLES, reserved_inputs, frontier_size, branch_size, False, True, 1.0, 1)
+            # print('Done. Throughput: {} examples/s'.format(NUM_TEST_SAMPLES / (time.perf_counter() - gen_eval_start_time)))
+            # for i in range(sel_inputs.shape[0]):
+            #     reserved_inputs.add(tuple([x for x in sel_inputs[i,:] if x != PADDING_TOKEN]))
+            # if frontier_size == 4 and branch_size == 4:
+            #     eval_inputs_sel, eval_outputs_sel = sel_inputs, sel_outputs
 
             print('Reserving OOD test data (inference) for frontier_size = {}, branch_size = {}'.format(frontier_size, branch_size))
             stdout.flush()
@@ -241,37 +277,17 @@ def train(max_input_size, dataset_size, distribution, max_lookahead, seed_value,
         stdout.flush()
         return
 
-    if BATCH_SIZE < eval_inputs_sel.shape[0]:
-        eval_inputs_sel = eval_inputs_sel[:BATCH_SIZE]
-        eval_outputs_sel = eval_outputs_sel[:BATCH_SIZE]
+    # if BATCH_SIZE < eval_inputs_sel.shape[0]:
+    #     eval_inputs_sel = eval_inputs_sel[:BATCH_SIZE]
+    #     eval_outputs_sel = eval_outputs_sel[:BATCH_SIZE]
 
     if BATCH_SIZE < eval_inputs_inf.shape[0]:
         eval_inputs_inf = eval_inputs_inf[:BATCH_SIZE]
         eval_outputs_inf = eval_outputs_inf[:BATCH_SIZE]
 
     train_filename = 'train{}_v3_inputsize{}_maxlookahead{}_{}seed{}.pkl'.format(dataset_size, max_input_size, max_lookahead, 'padded_' if add_padding else '', seed_value)
-    if task == 'dfs':
-        prefix = 'dfs_results/'
-    elif task == 'si':
-        prefix = 'si_split_results/'
-    else:
-        prefix = 'useful_path_results/'
 
-    # if dataset_size != -1:
-    #     train_path = prefix + train_filename
-    #     if isfile(train_path):
-    #         # check if we've already generated the training data
-    #         print("Loading training data from '{}'...".format(train_path))
-    #         stdout.flush()
-    #         with open(train_path, 'rb') as f:
-    #             inputs, outputs, valid_outputs = pickle.load(f)
-    #     else:
-    #         # we haven't generated the training data yet, so generate it here
-    #         inputs, outputs, labels, _ = generator.generate_training_set(max_input_size, dataset_size, max_lookahead, reserved_inputs, 1 if add_padding else -1, False)
-    #
-    #         # save the generated training data to file
-    #         with open(train_path, 'wb') as f:
-    #             pickle.dump((inputs, outputs, labels), f)
+    prefix = 'si_split_results/'
 
     if not torch.cuda.is_available():
         print("ERROR: CUDA device is not available.")
@@ -280,10 +296,6 @@ def train(max_input_size, dataset_size, distribution, max_lookahead, seed_value,
         device = torch.device('cpu')
     else:
         device = torch.device('cuda')
-
-    # if dataset_size != -1:
-    #     train_data = DummyDataset(inputs, outputs, device)
-    #     train_loader = DataLoader(train_data, batch_size=BATCH_SIZE, shuffle=True)
 
     # compute the checkpoint filenames and try to resume from the last one
     filename = prefix + 'checkpoints_v3_{}layer_inputsize{}_maxlookahead{}_seed{}_train{}'.format(nlayers, max_input_size, max_lookahead, seed_value, dataset_size if dataset_size != -1 else 'streaming')
@@ -336,6 +348,11 @@ def train(max_input_size, dataset_size, distribution, max_lookahead, seed_value,
         filename += '_lr' + str(learning_rate)
     if update_rate != 2 ** 18:
         filename += '_update' + str(update_rate)
+    if reinforce == 'y':
+        filename += '_reinforce'
+    if loss == "bce":
+        filename += '_bce'
+
     if isdir(filename):
         existing_epochs = [int(ckpt[(ckpt.rfind('epoch') + len('epoch')):-len('.pt')]) for ckpt in listdir(filename) if ckpt.startswith('epoch')]
     else:
@@ -372,24 +389,24 @@ def train(max_input_size, dataset_size, distribution, max_lookahead, seed_value,
 
         # For selection inference task with split models
         if task == 'si' and split_si == 'y':
-            print("Building two Transformer models (selection + inference).")
-            model_sel = Transformer(
-                layers=nlayers,
-                pad_idx=PADDING_TOKEN,
-                words=ntoken,
-                seq_len=max_input_size,
-                heads=nhead,
-                dims=max(ntoken, d_hid),
-                rate=1,
-                dropout=dropout,
-                bidirectional=bidirectional,
-                pos_emb=pos_emb_mode,
-                learn_token_emb=learnable_token_emb,
-                ablate=ablation_mode,
-                toeplitz=toeplitz,
-                pre_ln=pre_ln,
-                looped=looped
-            )
+            print("Building an inference model.")
+            # model_sel = Transformer(
+            #     layers=nlayers,
+            #     pad_idx=PADDING_TOKEN,
+            #     words=ntoken,
+            #     seq_len=max_input_size,
+            #     heads=nhead,
+            #     dims=max(ntoken, d_hid),
+            #     rate=1,
+            #     dropout=dropout,
+            #     bidirectional=bidirectional,
+            #     pos_emb=pos_emb_mode,
+            #     learn_token_emb=learnable_token_emb,
+            #     ablate=ablation_mode,
+            #     toeplitz=toeplitz,
+            #     pre_ln=pre_ln,
+            #     looped=looped
+            # )
             model_inf = Transformer(
                 layers=nlayers,
                 pad_idx=PADDING_TOKEN,
@@ -407,28 +424,19 @@ def train(max_input_size, dataset_size, distribution, max_lookahead, seed_value,
                 pre_ln=pre_ln,
                 looped=looped
             )
-            model_sel.to(device)
+            # model_sel.to(device)
             model_inf.to(device)
-        # else:
-        #     model = Transformer(
-        #         layers=initial_layers,
-        #         pad_idx=PADDING_TOKEN,
-        #         words=ntoken,
-        #         seq_len=max_input_size,
-        #         heads=nhead,
-        #         dims=max(ntoken,d_hid),
-        #         rate=1,
-        #         dropout=dropout,
-        #         bidirectional=bidirectional,
-        #         pos_emb=pos_emb_mode,
-        #         learn_token_emb=learnable_token_emb,
-        #         ablate=ablation_mode,
-        #         toeplitz=toeplitz,
-        #         pre_ln=pre_ln,
-        #         looped=looped)
+
+            if reinforce == 'y':
+                # Attach value heads for PPO
+                print("Attaching value head")
+                # model_sel.value_head = nn.Linear(ntoken, 1).to(device)
+                model_inf.value_head = nn.Linear(ntoken, 1).to(device)
         epoch = 0
-        # model.to(device)
     else:
+        # TODO: this doesnt work currently
+        print("Resuming training from file currently not supported for split SI models")
+        exit(1)
         last_epoch = max(existing_epochs)
         epoch = last_epoch + 1
         print("Loading model from '{}/epoch{}.pt'...".format(filename, last_epoch))
@@ -439,12 +447,15 @@ def train(max_input_size, dataset_size, distribution, max_lookahead, seed_value,
         np.random.set_state(np_random_state)
         torch.set_rng_state(torch_random_state.cpu())
 
-    loss_func = CrossEntropyLoss(ignore_index=PADDING_TOKEN, reduction='mean')
+    if loss == "bce":
+        loss_func = BCEWithLogitsLoss(reduction='mean')
+    else:
+        loss_func = CrossEntropyLoss(ignore_index=PADDING_TOKEN, reduction='mean')
     INITIAL_LR = 1.0e-4
     TARGET_LR = learning_rate
 
     if task == 'si' and split_si == 'y':
-        optimizer_sel = SophiaG((p for p in model_sel.parameters() if p.requires_grad), lr=learning_rate, weight_decay=0.1)
+        # optimizer_sel = SophiaG((p for p in model_sel.parameters() if p.requires_grad), lr=learning_rate, weight_decay=0.1)
         optimizer_inf = SophiaG((p for p in model_inf.parameters() if p.requires_grad), lr=learning_rate, weight_decay=0.1)
 
     log_interval = 1
@@ -463,32 +474,25 @@ def train(max_input_size, dataset_size, distribution, max_lookahead, seed_value,
 
         # For SI curriculum learning
         if task == 'si':
-            curriculum_alpha = 0.1
+            curriculum_alpha = 0.05
 
-    elif curriculum_mode == 'layerbylayer':
-        initial_lookahead = 2
-        initial_max_edges = 5
-    elif curriculum_mode == 'layerbylayer2':
-        initial_lookahead = 2
-        initial_max_edges = 5
-
-    if hasattr(model_sel, 'lookahead'):
-        initial_lookahead = model_sel.lookahead
+    if hasattr(model_inf, 'lookahead'):
+        initial_lookahead = model_inf.lookahead
     else:
-        model_sel.lookahead = initial_lookahead
+        # model_sel.lookahead = initial_lookahead
         model_inf.lookahead = initial_lookahead
 
-    if hasattr(model_sel, 'max_edges'):
-        initial_max_edges = model_sel.max_edges
+    if hasattr(model_inf, 'max_edges'):
+        initial_max_edges = model_inf.max_edges
     else:
-        model_sel.max_edges = initial_max_edges
+        # model_sel.max_edges = initial_max_edges
         model_inf.max_edges = initial_max_edges
 
     # For SI curriculum
-    if hasattr(model_sel, 'alpha'):
-        curriculum_alpha = model_sel.alpha
+    if hasattr(model_inf, 'alpha'):
+        curriculum_alpha = model_inf.alpha
     else:
-        model_sel.alpha = curriculum_alpha
+        # model_sel.alpha = curriculum_alpha
         model_inf.alpha = curriculum_alpha
 
     if dataset_size == -1:
@@ -509,7 +513,6 @@ def train(max_input_size, dataset_size, distribution, max_lookahead, seed_value,
                 seed_values.append(seed_generator.randrange(2 ** 32))
             seed_generator_lock.release()
             return seed_values[index]
-
 
 
         class StreamingDatasetSI(torch.utils.data.IterableDataset):
@@ -548,22 +551,40 @@ def train(max_input_size, dataset_size, distribution, max_lookahead, seed_value,
                         curr_max_frontier = (curr_max_edges + 1) // 2
                         curr_max_branch = curr_max_edges
 
-                        batch = generator.generate_si_training_set(
-                            max_input_size, BATCH_SIZE, reserved_inputs, curr_max_frontier, curr_max_branch,
-                            True, True, self.alpha, self.sample_type)
+                        if reinforce == 'y':
+                            batch = generator.generate_si_training_set_reward(
+                                max_input_size, BATCH_SIZE, reserved_inputs, curr_max_frontier, curr_max_branch,
+                                True, True, self.alpha, self.sample_type)
+                        else:
+                            batch = generator.generate_si_training_set(
+                                max_input_size, BATCH_SIZE, reserved_inputs, curr_max_frontier, curr_max_branch,
+                                True, True, self.alpha, self.sample_type)
 
                     else:
                         # Call the updated generator with sample_type parameter.
-                        batch = generator.generate_si_training_set(
-                            max_input_size, BATCH_SIZE, reserved_inputs,
-                            max_frontier_size, max_branch_size, True, True, self.alpha,
-                            self.sample_type)
-                        # batch returns (inputs, outputs, labels, num_collisions)
+                        if reinforce == 'y':
+                            batch = generator.generate_si_training_set_reward(
+                                max_input_size, BATCH_SIZE, reserved_inputs,
+                                max_frontier_size, max_branch_size, True, True, self.alpha,
+                                self.sample_type)
+                            # batch returns (inputs, outputs, labels, rewards, num_collisions)
+                        else:
+                            batch = generator.generate_si_training_set(
+                                max_input_size, BATCH_SIZE, reserved_inputs,
+                                max_frontier_size, max_branch_size, True, True, self.alpha,
+                                self.sample_type)
+                            # batch returns (inputs, outputs, labels, num_collisions)
 
-                    if batch[3] != 0:
-                        with self.collisions_lock:
-                            self.total_collisions.value += batch[3]
-                        stdout.flush()
+                    if reinforce == 'y':
+                        if batch[4] != 0:
+                            with self.collisions_lock:
+                                self.total_collisions.value += batch[4]
+                            stdout.flush()
+                    else:
+                        if batch[3] != 0:
+                            with self.collisions_lock:
+                                self.total_collisions.value += batch[3]
+                            stdout.flush()
 
                     worker_end_time = time.perf_counter()
                     #print('[WORKER {}] yield = {}, throughput = {} examples/s, rank = {}'.format(worker_id, current, BATCH_SIZE / (worker_end_time - worker_start_time), multiprocessing.current_process()._identity[0]))
@@ -577,226 +598,355 @@ def train(max_input_size, dataset_size, distribution, max_lookahead, seed_value,
                 worker_id = worker_info.id
                 return self.process_data(self.offset + worker_id)
 
-        sel_dataset = StreamingDatasetSI(epoch * STREAMING_BLOCK_SIZE // BATCH_SIZE, model_sel.lookahead, model_sel.max_edges, model_sel.alpha, 1)
+        # sel_dataset = StreamingDatasetSI(epoch * STREAMING_BLOCK_SIZE // BATCH_SIZE, model_sel.lookahead, model_sel.max_edges, model_sel.alpha, 1)
         inf_dataset = StreamingDatasetSI(epoch * STREAMING_BLOCK_SIZE // BATCH_SIZE, model_inf.lookahead, model_inf.max_edges, model_inf.alpha, 2)
-        sel_loader = DataLoader(sel_dataset, batch_size=None, num_workers=NUM_DATA_WORKERS, pin_memory=True, prefetch_factor=8)
+        # sel_loader = DataLoader(sel_dataset, batch_size=None, num_workers=NUM_DATA_WORKERS, pin_memory=True, prefetch_factor=8)
         inf_loader = DataLoader(inf_dataset, batch_size=None, num_workers=NUM_DATA_WORKERS, pin_memory=True, prefetch_factor=8)
 
     examples_seen = epoch * STREAMING_BLOCK_SIZE
     LR_DECAY_TIME = 2**24 # examples seen
-    while True:
-        start_time = time.perf_counter()
-        transfer_time = 0.0
-        train_time = 0.0
-        log_time = 0.0
-        epoch_loss = 0.0
-        epoch_loss_sel = 0.0
-        epoch_loss_inf = 0.0
-        num_batches = 0
-        effective_dataset_size = (STREAMING_BLOCK_SIZE if dataset_size == -1 else dataset_size)
-        reinit_data_loader_sel = False
-        reinit_data_loader_inf = False
-        for sel_batch, inf_batch in zip(sel_loader, inf_loader):
-            batch_start_time = time.perf_counter()
+    if reinforce == 'y':
+        while True:
+            start_time = time.perf_counter()
+            transfer_time = 0.0
+            train_time = 0.0
+            log_time = 0.0
+            epoch_loss = 0.0
+            # epoch_loss_sel = 0.0
+            epoch_loss_inf = 0.0
+            num_batches = 0
+            effective_dataset_size = (STREAMING_BLOCK_SIZE if dataset_size == -1 else dataset_size)
+            # reinit_data_loader_sel = False
+            reinit_data_loader_inf = False
+            for inf_batch in inf_loader:
+                batch_start_time = time.perf_counter()
 
-            if warm_up != 0:
-                if examples_seen < warm_up:
-                    lr = examples_seen * INITIAL_LR / warm_up
-                elif examples_seen < warm_up + LR_DECAY_TIME:
-                    lr = (0.5*np.cos(np.pi * (examples_seen - warm_up) / LR_DECAY_TIME) + 0.5) * (INITIAL_LR - TARGET_LR) + TARGET_LR
+                if warm_up != 0:
+                    if examples_seen < warm_up:
+                        lr = examples_seen * INITIAL_LR / warm_up
+                    elif examples_seen < warm_up + LR_DECAY_TIME:
+                        lr = (0.5 * np.cos(np.pi * (examples_seen - warm_up) / LR_DECAY_TIME) + 0.5) * (
+                                    INITIAL_LR - TARGET_LR) + TARGET_LR
+                    else:
+                        lr = TARGET_LR
                 else:
                     lr = TARGET_LR
-            else:
-                lr = TARGET_LR
-            for param_group in optimizer_sel.param_groups:
-                param_group['lr'] = lr
-            for param_group in optimizer_inf.param_groups:
-                param_group['lr'] = lr
+                # for param_group in optimizer_sel.param_groups:
+                #     param_group['lr'] = lr
+                for param_group in optimizer_inf.param_groups:
+                    param_group['lr'] = lr
 
-            model_sel.train()
-            model_inf.train()
+                # model_sel.train()
+                model_inf.train()
 
-            sel_inputs, sel_outputs, sel_labels = sel_batch
-            inf_inputs, inf_outputs, inf_labels = inf_batch
+                # sel_inputs, sel_outputs, sel_labels, sel_rewards = sel_batch
+                inf_inputs, inf_outputs, inf_labels, inf_rewards = inf_batch
 
-            sel_inputs = sel_inputs.to(device, non_blocking=True)
-            inf_inputs = inf_inputs.to(device, non_blocking=True)
-            sel_outputs = sel_outputs.to(device, non_blocking=True)
-            inf_outputs = inf_outputs.to(device, non_blocking=True)
-            sel_labels = sel_labels.to(device, non_blocking=True)
-            inf_labels = inf_labels.to(device, non_blocking=True)
-            examples_seen += BATCH_SIZE
+                # sel_inputs = sel_inputs.to(device, non_blocking=True)
+                inf_inputs = inf_inputs.to(device, non_blocking=True)
+                # sel_outputs = sel_outputs.to(device, non_blocking=True)
+                inf_outputs = inf_outputs.to(device, non_blocking=True)
+                # sel_labels = sel_labels.to(device, non_blocking=True)
+                inf_labels = inf_labels.to(device, non_blocking=True)
+                # sel_rewards = torch.tensor(sel_rewards, device=device, dtype=torch.float32)
+                inf_rewards = torch.tensor(inf_rewards, device=device, dtype=torch.float32)
+                examples_seen += BATCH_SIZE
 
-            #if device.type == 'cuda':
-            #	torch.cuda.synchronize(device)
-            train_start_time = time.perf_counter()
-            transfer_time += train_start_time - batch_start_time
+                # Get current policy outputs and compute old log probs and values.
+                with torch.no_grad():
+                    # logits_sel, values_sel = get_policy_and_value(model_sel, sel_inputs)
+                    # prob_dist_sel = torch.softmax(logits_sel, dim=1)
+                    # old_log_probs_sel = torch.log(torch.gather(prob_dist_sel, 1, sel_outputs.unsqueeze(1)).squeeze(1) + 1e-8)
 
-            # Forward pass for selection model.
-            logits_sel = model_sel(sel_inputs)
-            loss_sel = loss_func(logits_sel[:, -1, :], sel_labels)
-            # Forward pass for inference model.
-            logits_inf = model_inf(inf_inputs)
-            loss_inf = loss_func(logits_inf[:, -1, :], inf_labels)
-            loss_val = loss_sel + loss_inf
+                    logits_inf, values_inf = get_policy_and_value(model_inf, inf_inputs)
+                    prob_dist_inf = torch.softmax(logits_inf, dim=1)
+                    old_log_probs_inf = torch.log(
+                        torch.gather(prob_dist_inf, 1, inf_outputs.unsqueeze(1)).squeeze(1) + 1e-8)
 
-            # if toeplitz_reg != 0.0:
-            #     def compute_toeplitz_regularization(m):
-            #         regularization = 0.0
-            #         for i in range(-A.size(0) + 1, A.size(1)):
-            #             regularization += torch.var(torch.diagonal(A, offset=i), unbiased=False)
-            #         return regularization
-            #
-            #     for transformer in model.transformers:
-            #         P_q = next(v for k,v in transformer.attn.proj_q.named_parameters() if k == 'weight')
-            #         P_k = next(v for k,v in transformer.attn.proj_k.named_parameters() if k == 'weight')
-            #         A = torch.matmul(P_q.transpose(-2,-1),P_k)
-            #         if not toeplitz_pos_only:
-            #             loss_val += toeplitz_reg * compute_toeplitz_regularization(A[:ntoken,:ntoken])
-            #             loss_val += toeplitz_reg * compute_toeplitz_regularization(A[:ntoken,ntoken:d_hid])
-            #             loss_val += toeplitz_reg * compute_toeplitz_regularization(A[:ntoken,d_hid:])
-            #             loss_val += toeplitz_reg * compute_toeplitz_regularization(A[ntoken:d_hid,:ntoken])
-            #             loss_val += toeplitz_reg * compute_toeplitz_regularization(A[ntoken:d_hid,ntoken:d_hid])
-            #             loss_val += toeplitz_reg * compute_toeplitz_regularization(A[ntoken:d_hid,d_hid:])
-            #             loss_val += toeplitz_reg * compute_toeplitz_regularization(A[d_hid:,:ntoken])
-            #             loss_val += toeplitz_reg * compute_toeplitz_regularization(A[d_hid:,ntoken:d_hid])
-            #         loss_val += toeplitz_reg * compute_toeplitz_regularization(A[d_hid:,d_hid:])
+                    # Run several PPO epochs over the batch.
+                    # ppo_loss_sel = 0.0
+                    ppo_loss_inf = 0.0
+                    batch_size = inf_inputs.size(0)
+                    num_minibatches = max(1, batch_size // PPO_MINIBATCH_SIZE)
+                    for epoch_ppo in range(PPO_EPOCHS):
+                        # Shuffle indices
+                        indices = torch.randperm(batch_size)
+                        for i in range(num_minibatches):
+                            minibatch_idx = indices[i * PPO_MINIBATCH_SIZE: (i + 1) * PPO_MINIBATCH_SIZE]
 
-            epoch_loss_sel += loss_sel.item()
-            epoch_loss_inf += loss_inf.item()
-            epoch_loss += loss_val.item()
+                            # mb_inputs_sel = sel_inputs[minibatch_idx]
+                            # mb_actions_sel = sel_labels[minibatch_idx]
+                            # mb_old_log_probs_sel = old_log_probs_sel[minibatch_idx]
+                            # mb_rewards_sel = sel_rewards[minibatch_idx]
+                            # mb_old_values_sel = values_sel[minibatch_idx]
+                            #
+                            # loss_vals_sel = ppo_update(model_sel, optimizer_sel, mb_inputs_sel, mb_actions_sel,
+                            #                            mb_old_log_probs_sel, mb_rewards_sel, mb_old_values_sel)
+                            # ppo_loss_sel += loss_vals_sel[0]
 
-            # loss_val.backward()
-            loss_sel.backward()
-            loss_inf.backward()
+                            mb_inputs_inf = inf_inputs[minibatch_idx]
+                            mb_actions_inf = inf_labels[minibatch_idx]
+                            mb_old_log_probs_inf = old_log_probs_inf[minibatch_idx]
+                            mb_rewards_inf = inf_rewards[minibatch_idx]
+                            mb_old_values_inf = values_inf[minibatch_idx]
 
-            if examples_seen % (BATCH_SIZE * grad_accumulation_steps) == 0:
-                optimizer_sel.step()
-                optimizer_sel.zero_grad()
-                optimizer_inf.step()
-                optimizer_inf.zero_grad()
+                            loss_vals_inf = ppo_update(model_inf, optimizer_inf, mb_inputs_inf, mb_actions_inf,
+                                                       mb_old_log_probs_inf, mb_rewards_inf, mb_old_values_inf)
+                            ppo_loss_inf += loss_vals_inf[0]
 
-            #if device.type == 'cuda':
-            #	torch.cuda.synchronize(device)
-            log_start_time = time.perf_counter()
-            train_time += log_start_time - train_start_time
-            num_batches += 1
+                    # ppo_loss_sel /= (PPO_EPOCHS * num_minibatches)
+                    ppo_loss_inf /= (PPO_EPOCHS * num_minibatches)
+                    # epoch_loss_sel += ppo_loss_sel
+                    epoch_loss_inf += ppo_loss_inf
+                    num_batches += 1
 
-            if num_batches == effective_dataset_size // BATCH_SIZE:
-                #time4 = time.perf_counter()
-                #print('[MAIN] Time to train: {}s'.format(time4 - time3))
-                #stdout.flush()
+                    if num_batches % 100 == 0:
+                        print(f"Batch {num_batches}: PPO inf loss = {ppo_loss_inf:.4f}")
+                        elapsed_time = time.perf_counter() - start_time
+                        print("Epoch {}: avg PPO inf loss = {:.4f}, throughput = {:.2f} examples/s"
+                              .format(epoch, epoch_loss_inf / num_batches,
+                                      (BATCH_SIZE * num_batches) / elapsed_time))
 
-                if epoch % log_interval == 0:
-                    elapsed_time = time.perf_counter() - start_time
-                    avg_loss_sel = epoch_loss_sel / num_batches
-                    avg_loss_inf = epoch_loss_inf / num_batches
-                    avg_loss_combined = epoch_loss / num_batches
-                    print("epoch = {}, training sel loss = {}, inf loss = {}, combined loss = {}".format(epoch, avg_loss_sel, avg_loss_inf, avg_loss_combined))
-                    if device.type == 'cuda':
-                        utilization = popen('nvidia-smi --query-gpu=utilization.gpu --format=csv').read().split('\n')[1]
-                        print("throughput = {} examples/s, GPU utilization = {}".format(effective_dataset_size / elapsed_time, utilization))
+                # Evaluate on OOD data (using standard evaluation function)
+                # model_sel.eval()
+                model_inf.eval()
+                # sel_test_acc, sel_test_loss, _ = evaluate_model(model_sel, eval_inputs_sel, eval_outputs_sel)
+                inf_test_acc, inf_test_loss, _ = evaluate_model(model_inf, eval_inputs_inf, eval_outputs_inf)
+                # print("Epoch {}: Test Sel Acc = {:.2f}, Loss = {:.6f}".format(epoch, sel_test_acc, sel_test_loss))
+                print("Epoch {}: Test Inf Acc = {:.2f}, Loss = {:.6f}".format(epoch, inf_test_acc, inf_test_loss))
+                # Save checkpoints
+                # sel_ckpt_filename = filename + '/sel_epoch{}.pt'.format(epoch)
+                inf_ckpt_filename = filename + '/inf_epoch{}.pt'.format(epoch)
+                print('Saving models to "{}".'.format(inf_ckpt_filename))
+                # torch.save((model_sel, getstate(), np.random.get_state(), torch.get_rng_state()), sel_ckpt_filename)
+                torch.save((model_inf, getstate(), np.random.get_state(), torch.get_rng_state()), inf_ckpt_filename)
+                epoch += 1
+
+    else:
+        while True:
+            start_time = time.perf_counter()
+            transfer_time = 0.0
+            train_time = 0.0
+            log_time = 0.0
+            epoch_loss = 0.0
+            # epoch_loss_sel = 0.0
+            epoch_loss_inf = 0.0
+            num_batches = 0
+            effective_dataset_size = (STREAMING_BLOCK_SIZE if dataset_size == -1 else dataset_size)
+            # reinit_data_loader_sel = False
+            reinit_data_loader_inf = False
+            for inf_batch in inf_loader:
+                batch_start_time = time.perf_counter()
+
+                if warm_up != 0:
+                    if examples_seen < warm_up:
+                        lr = examples_seen * INITIAL_LR / warm_up
+                    elif examples_seen < warm_up + LR_DECAY_TIME:
+                        lr = (0.5*np.cos(np.pi * (examples_seen - warm_up) / LR_DECAY_TIME) + 0.5) * (INITIAL_LR - TARGET_LR) + TARGET_LR
                     else:
-                        print("throughput = {} examples/s".format(effective_dataset_size / elapsed_time))
-                    print('Total number of training examples generated that are in the test set: {}'.format(sel_dataset.total_collisions.value + inf_dataset.total_collisions.value))
-                    print('Learning rate: {}'.format(lr))
-                    print("[PROFILE] Total batch time: {}s".format(elapsed_time))
-                    print("[PROFILE] Time to transfer data to GPU: {}s".format(transfer_time))
-                    print("[PROFILE] Time to train: {}s".format(train_time))
-                    print("[PROFILE] Time to log/save/validate: {}s".format(log_time))
-                    stdout.flush()
-                    start_time = time.perf_counter()
-                    transfer_time = 0.0
-                    train_time = 0.0
-                    log_time = 0.0
+                        lr = TARGET_LR
+                else:
+                    lr = TARGET_LR
+                # for param_group in optimizer_sel.param_groups:
+                #     param_group['lr'] = lr
+                for param_group in optimizer_inf.param_groups:
+                    param_group['lr'] = lr
 
-                if epoch % eval_interval == 0:
-                    model_sel.eval()
-                    model_inf.eval()
+                # model_sel.train()
+                model_inf.train()
 
-                    sel_logits, _ = model_sel(sel_inputs)
-                    inf_logits, _ = model_inf(inf_inputs)
+                # sel_inputs, sel_outputs, sel_labels = sel_batch
+                inf_inputs, inf_outputs, inf_labels = inf_batch
 
-                    # print(f"Sel in: {sel_inputs},\n out: {sel_outputs},\n sum: {torch.sum(sel_outputs, dim=1)}")
-                    # print(f"Inf: {inf_inputs},\n out: {inf_outputs},\n sum: {torch.sum(inf_outputs, dim=1)}")
+                # sel_inputs = sel_inputs.to(device, non_blocking=True)
+                inf_inputs = inf_inputs.to(device, non_blocking=True)
+                # sel_outputs = sel_outputs.to(device, non_blocking=True)
+                inf_outputs = inf_outputs.to(device, non_blocking=True)
+                # sel_labels = sel_labels.to(device, non_blocking=True)
+                inf_labels = inf_labels.to(device, non_blocking=True)
+                examples_seen += BATCH_SIZE
 
-                    sel_training_acc = torch.sum(torch.gather(sel_outputs, 1, torch.argmax(sel_logits[:,-1,:],dim=1).unsqueeze(1))).item() / sel_outputs.size(0)
-                    inf_training_acc = torch.sum(torch.gather(inf_outputs, 1, torch.argmax(inf_logits[:,-1,:],dim=1).unsqueeze(1))).item() / inf_outputs.size(0)
+                #if device.type == 'cuda':
+                #	torch.cuda.synchronize(device)
+                train_start_time = time.perf_counter()
+                transfer_time += train_start_time - batch_start_time
 
-                    print("training sel accuracy: %.2f±%.2f" % (sel_training_acc, binomial_confidence_int(sel_training_acc, sel_outputs.size(0))))
-                    print("training inf accuracy: %.2f±%.2f" % (inf_training_acc, binomial_confidence_int(inf_training_acc, inf_outputs.size(0))))
-                    del sel_inputs, sel_outputs, sel_labels, inf_inputs, inf_outputs, inf_labels
-                    stdout.flush()
+                # Forward pass for selection model.
+                # logits_sel = model_sel(sel_inputs)
+                # loss_sel = loss_func(logits_sel[:, -1, :], sel_labels)
 
-                    sel_test_acc, sel_test_loss, _ = evaluate_model(model_sel, eval_inputs_sel, eval_outputs_sel)
-                    inf_test_acc, inf_test_loss, _ = evaluate_model(model_inf, eval_inputs_inf, eval_outputs_inf)
+                # Forward pass for inference model.
+                logits_inf = model_inf(inf_inputs)
 
-                    print("Epoch {}: Test Selection Acc = {:.2f}±{:.2f}, Loss = {:.6f}".format(
-                        epoch, sel_test_acc, binomial_confidence_int(sel_test_acc, 1000), sel_test_loss))
-                    print("Epoch {}: Test Inference Acc = {:.2f}±{:.2f}, Loss = {:.6f}".format(
-                        epoch, inf_test_acc, binomial_confidence_int(inf_test_acc, 1000), inf_test_loss))
-                    stdout.flush()
-                    #time6 = time.perf_counter()
-                    #print('[MAIN] Time to evaluate model: {}s'.format(time6 - time5))
+                if loss == "bce":
+                    loss_inf = loss_func(logits_inf[:, -1, :], inf_outputs)
+                else:
+                    loss_inf = loss_func(logits_inf[:, -1, :], inf_labels)
+
+                loss_val = loss_inf
+
+                # if toeplitz_reg != 0.0:
+                #     def compute_toeplitz_regularization(m):
+                #         regularization = 0.0
+                #         for i in range(-A.size(0) + 1, A.size(1)):
+                #             regularization += torch.var(torch.diagonal(A, offset=i), unbiased=False)
+                #         return regularization
+                #
+                #     for transformer in model.transformers:
+                #         P_q = next(v for k,v in transformer.attn.proj_q.named_parameters() if k == 'weight')
+                #         P_k = next(v for k,v in transformer.attn.proj_k.named_parameters() if k == 'weight')
+                #         A = torch.matmul(P_q.transpose(-2,-1),P_k)
+                #         if not toeplitz_pos_only:
+                #             loss_val += toeplitz_reg * compute_toeplitz_regularization(A[:ntoken,:ntoken])
+                #             loss_val += toeplitz_reg * compute_toeplitz_regularization(A[:ntoken,ntoken:d_hid])
+                #             loss_val += toeplitz_reg * compute_toeplitz_regularization(A[:ntoken,d_hid:])
+                #             loss_val += toeplitz_reg * compute_toeplitz_regularization(A[ntoken:d_hid,:ntoken])
+                #             loss_val += toeplitz_reg * compute_toeplitz_regularization(A[ntoken:d_hid,ntoken:d_hid])
+                #             loss_val += toeplitz_reg * compute_toeplitz_regularization(A[ntoken:d_hid,d_hid:])
+                #             loss_val += toeplitz_reg * compute_toeplitz_regularization(A[d_hid:,:ntoken])
+                #             loss_val += toeplitz_reg * compute_toeplitz_regularization(A[d_hid:,ntoken:d_hid])
+                #         loss_val += toeplitz_reg * compute_toeplitz_regularization(A[d_hid:,d_hid:])
+
+                # epoch_loss_sel += loss_sel.item()
+                epoch_loss_inf += loss_inf.item()
+                epoch_loss += loss_val.item()
+
+                # loss_val.backward()
+                # loss_sel.backward()
+                loss_inf.backward()
+
+                if examples_seen % (BATCH_SIZE * grad_accumulation_steps) == 0:
+                    # optimizer_sel.step()
+                    # optimizer_sel.zero_grad()
+                    optimizer_inf.step()
+                    optimizer_inf.zero_grad()
+
+                #if device.type == 'cuda':
+                #	torch.cuda.synchronize(device)
+                log_start_time = time.perf_counter()
+                train_time += log_start_time - train_start_time
+                num_batches += 1
+
+                if num_batches == effective_dataset_size // BATCH_SIZE:
+                    #time4 = time.perf_counter()
+                    #print('[MAIN] Time to train: {}s'.format(time4 - time3))
                     #stdout.flush()
 
-                    # Add code for curriculum training for SI
-                    if task == 'si' and curriculum_mode == 'y' and sel_training_acc > 0.98:
-                        if model_sel.alpha < 1.0:
-                            model_sel.alpha = min(1.0, model_sel.alpha + 0.1)
-                            print("Curriculum update: selection alpha increased to {:.2f}.".format(model_sel.alpha))
-                            reinit_data_loader_sel = True
-                            break
+                    if epoch % log_interval == 0:
+                        elapsed_time = time.perf_counter() - start_time
+                        # avg_loss_sel = epoch_loss_sel / num_batches
+                        avg_loss_inf = epoch_loss_inf / num_batches
+                        avg_loss_combined = epoch_loss / num_batches
+                        print("epoch = {}, training inf loss = {}".format(epoch, avg_loss_inf))
+                        if device.type == 'cuda':
+                            utilization = popen('nvidia-smi --query-gpu=utilization.gpu --format=csv').read().split('\n')[1]
+                            print("throughput = {} examples/s, GPU utilization = {}".format(effective_dataset_size / elapsed_time, utilization))
+                        else:
+                            print("throughput = {} examples/s".format(effective_dataset_size / elapsed_time))
+                        print('Total number of training examples generated that are in the test set: {}'.format(inf_dataset.total_collisions.value))
+                        print('Learning rate: {}'.format(lr))
+                        print("[PROFILE] Total batch time: {}s".format(elapsed_time))
+                        print("[PROFILE] Time to transfer data to GPU: {}s".format(transfer_time))
+                        print("[PROFILE] Time to train: {}s".format(train_time))
+                        print("[PROFILE] Time to log/save/validate: {}s".format(log_time))
+                        stdout.flush()
+                        start_time = time.perf_counter()
+                        transfer_time = 0.0
+                        train_time = 0.0
+                        log_time = 0.0
 
-                    if task == 'si' and curriculum_mode == 'y' and inf_training_acc > 0.98:
-                        if model_inf.alpha < 1.0:
-                            model_inf.alpha = min(1.0, model_inf.alpha + 0.1)
-                            print("Curriculum update: inference alpha increased to {:.2f}.".format(model_inf.alpha))
-                            reinit_data_loader_inf = True
-                            break
+                    if epoch % eval_interval == 0:
+                        # model_sel.eval()
+                        model_inf.eval()
 
-                if epoch % save_interval == 0:
-                    sel_ckpt_filename = filename + '/sel_epoch{}.pt'.format(epoch)
-                    inf_ckpt_filename = filename + '/inf_epoch{}.pt'.format(epoch)
-                    print('saving to "{} and {}".'.format(sel_ckpt_filename, inf_ckpt_filename))
-                    torch.save((model_sel,getstate(),np.random.get_state(),torch.get_rng_state()), sel_ckpt_filename)
-                    torch.save((model_inf,getstate(),np.random.get_state(),torch.get_rng_state()), inf_ckpt_filename)
-                    print('done saving models.')
-                    stdout.flush()
+                        # sel_logits, _ = model_sel(sel_inputs)
+                        inf_logits, _ = model_inf(inf_inputs)
 
-                #time5 = time.perf_counter()
-                #print('[MAIN] Time to save model: {}s'.format(time5 - time4))
-                #stdout.flush()
+                        # print(f"Sel in: {sel_inputs},\n out: {sel_outputs},\n sum: {torch.sum(sel_outputs, dim=1)}")
+                        # print(f"Inf: {inf_inputs},\n out: {inf_outputs},\n sum: {torch.sum(inf_outputs, dim=1)}")
 
-                #time7 = time.perf_counter()
-                #print('[MAIN] Total time for epoch: {}s'.format(time7 - time1))
-                #stdout.flush()
-                epoch += 1
-                num_batches = 0
-                epoch_loss = 0.0
-                epoch_loss_inf = 0.0
-                epoch_loss_sel = 0.0
-                if reinit_data_loader_sel or reinit_data_loader_inf:
-                    break
+                        # sel_training_acc = torch.sum(torch.gather(sel_outputs, 1, torch.argmax(sel_logits[:,-1,:],dim=1).unsqueeze(1))).item() / sel_outputs.size(0)
 
-            #if device.type == 'cuda':
-            #	torch.cuda.synchronize(device)
-            log_end_time = time.perf_counter()
-            log_time += log_end_time - log_start_time
+                        if loss == "bce":
+                            predictions = torch.argmax(inf_logits[:, -1, :], 1)
+                            inf_training_acc = sum(predictions == inf_outputs).item() / len(predictions)
+                        else:
+                            inf_training_acc = torch.sum(torch.gather(inf_outputs, 1, torch.argmax(inf_logits[:,-1,:],dim=1).unsqueeze(1))).item() / inf_outputs.size(0)
 
-        if reinit_data_loader_sel:
-            sel_dataset = StreamingDatasetSI(epoch * STREAMING_BLOCK_SIZE // BATCH_SIZE, model_sel.lookahead,
-                                             model_sel.max_edges, model_sel.alpha, 1)
-            sel_loader = DataLoader(sel_dataset, batch_size=None, num_workers=NUM_DATA_WORKERS, pin_memory=True,
-                                    prefetch_factor=8)
-            reinit_data_loader_sel = False
+                        # print("training sel accuracy: %.2f±%.2f" % (sel_training_acc, binomial_confidence_int(sel_training_acc, sel_outputs.size(0))))
+                        print("training inf accuracy: %.2f±%.2f" % (inf_training_acc, binomial_confidence_int(inf_training_acc, inf_outputs.size(0))))
+                        del inf_inputs, inf_outputs, inf_labels
+                        stdout.flush()
 
-        if reinit_data_loader_inf:
-            inf_dataset = StreamingDatasetSI(epoch * STREAMING_BLOCK_SIZE // BATCH_SIZE, model_inf.lookahead,
-                                             model_inf.max_edges, model_inf.alpha, 2)
-            inf_loader = DataLoader(inf_dataset, batch_size=None, num_workers=NUM_DATA_WORKERS, pin_memory=True,
-                                    prefetch_factor=8)
-            reinit_data_loader_inf = False
+                        # sel_test_acc, sel_test_loss, _ = evaluate_model(model_sel, eval_inputs_sel, eval_outputs_sel)
+                        inf_test_acc, inf_test_loss, _ = evaluate_model(model_inf, eval_inputs_inf, eval_outputs_inf)
+
+                        # print("Epoch {}: Test Selection Acc = {:.2f}±{:.2f}, Loss = {:.6f}".format(
+                        #     epoch, sel_test_acc, binomial_confidence_int(sel_test_acc, 1000), sel_test_loss))
+                        print("Epoch {}: Test Inference Acc = {:.2f}±{:.2f}, Loss = {:.6f}".format(
+                            epoch, inf_test_acc, binomial_confidence_int(inf_test_acc, 1000), inf_test_loss))
+                        stdout.flush()
+                        #time6 = time.perf_counter()
+                        #print('[MAIN] Time to evaluate model: {}s'.format(time6 - time5))
+                        #stdout.flush()
+
+                        # Add code for curriculum training for SI
+                        # if task == 'si' and curriculum_mode == 'y' and sel_training_acc > 0.98:
+                        #     if model_sel.alpha < 1.0:
+                        #         model_sel.alpha = min(1.0, model_sel.alpha + 0.1)
+                        #         print("Curriculum update: selection alpha increased to {:.2f}.".format(model_sel.alpha))
+                        #         reinit_data_loader_sel = True
+                        #         break
+
+                        if task == 'si' and curriculum_mode == 'y' and inf_training_acc > 0.98:
+                            if model_inf.alpha < 1.0:
+                                model_inf.alpha = min(1.0, model_inf.alpha + 0.1)
+                                print("Curriculum update: inference alpha increased to {:.2f}.".format(model_inf.alpha))
+                                reinit_data_loader_inf = True
+                                break
+
+                    if epoch % save_interval == 0:
+                        # sel_ckpt_filename = filename + '/sel_epoch{}.pt'.format(epoch)
+                        inf_ckpt_filename = filename + '/inf_epoch{}.pt'.format(epoch)
+                        print('saving to "{}".'.format(inf_ckpt_filename))
+                        # torch.save((model_sel,getstate(),np.random.get_state(),torch.get_rng_state()), sel_ckpt_filename)
+                        torch.save((model_inf,getstate(),np.random.get_state(),torch.get_rng_state()), inf_ckpt_filename)
+                        print('done saving models.')
+                        stdout.flush()
+
+                    #time5 = time.perf_counter()
+                    #print('[MAIN] Time to save model: {}s'.format(time5 - time4))
+                    #stdout.flush()
+
+                    #time7 = time.perf_counter()
+                    #print('[MAIN] Total time for epoch: {}s'.format(time7 - time1))
+                    #stdout.flush()
+                    epoch += 1
+                    num_batches = 0
+                    epoch_loss = 0.0
+                    epoch_loss_inf = 0.0
+                    # epoch_loss_sel = 0.0
+                    if reinit_data_loader_inf:
+                        break
+
+                #if device.type == 'cuda':
+                #	torch.cuda.synchronize(device)
+                log_end_time = time.perf_counter()
+                log_time += log_end_time - log_start_time
+
+            # if reinit_data_loader_sel:
+            #     sel_dataset = StreamingDatasetSI(epoch * STREAMING_BLOCK_SIZE // BATCH_SIZE, model_sel.lookahead,
+            #                                      model_sel.max_edges, model_sel.alpha, 1)
+            #     sel_loader = DataLoader(sel_dataset, batch_size=None, num_workers=NUM_DATA_WORKERS, pin_memory=True,
+            #                             prefetch_factor=8)
+            #     reinit_data_loader_sel = False
+
+            if reinit_data_loader_inf:
+                inf_dataset = StreamingDatasetSI(epoch * STREAMING_BLOCK_SIZE // BATCH_SIZE, model_inf.lookahead,
+                                                 model_inf.max_edges, model_inf.alpha, 2)
+                inf_loader = DataLoader(inf_dataset, batch_size=None, num_workers=NUM_DATA_WORKERS, pin_memory=True,
+                                        prefetch_factor=8)
+                reinit_data_loader_inf = False
 
 
 if __name__ == "__main__":
@@ -839,6 +989,7 @@ if __name__ == "__main__":
     parser.add_argument("--grad-accumulation-steps", type=int, default=1, required=False)
     parser.add_argument('--split-si', type=str, default='n', choices=['y', 'n'], required=False)
     parser.add_argument('--reinforce', type=str, default='n', choices=['y', 'n'], required=False)
+    parser.add_argument('--loss', type=str, default='ce', choices=['ce', 'bce'], required=False)
     args = parser.parse_args()
 
     train(
@@ -868,4 +1019,5 @@ if __name__ == "__main__":
         update_rate=args.update_rate,
         grad_accumulation_steps=args.grad_accumulation_steps,
         split_si=args.split_si,
-        reinforce=args.reinforce)
+        reinforce=args.reinforce,
+        loss=args.loss)
