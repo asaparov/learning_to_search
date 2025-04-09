@@ -474,7 +474,7 @@ def train(max_input_size, dataset_size, distribution, max_lookahead, seed_value,
 
         # For SI curriculum learning
         if task == 'si':
-            curriculum_alpha = 0.05
+            curriculum_alpha = 0.1
 
     if hasattr(model_inf, 'lookahead'):
         initial_lookahead = model_inf.lookahead
@@ -866,12 +866,8 @@ def train(max_input_size, dataset_size, distribution, max_lookahead, seed_value,
                         # print(f"Inf: {inf_inputs},\n out: {inf_outputs},\n sum: {torch.sum(inf_outputs, dim=1)}")
 
                         # sel_training_acc = torch.sum(torch.gather(sel_outputs, 1, torch.argmax(sel_logits[:,-1,:],dim=1).unsqueeze(1))).item() / sel_outputs.size(0)
+                        inf_training_acc = torch.sum(torch.gather(inf_outputs, 1, torch.argmax(inf_logits[:,-1,:],dim=1).unsqueeze(1))).item() / inf_outputs.size(0)
 
-                        if loss == "bce":
-                            predictions = torch.argmax(inf_logits[:, -1, :], 1)
-                            inf_training_acc = sum(predictions == inf_outputs).item() / len(predictions)
-                        else:
-                            inf_training_acc = torch.sum(torch.gather(inf_outputs, 1, torch.argmax(inf_logits[:,-1,:],dim=1).unsqueeze(1))).item() / inf_outputs.size(0)
 
                         # print("training sel accuracy: %.2f±%.2f" % (sel_training_acc, binomial_confidence_int(sel_training_acc, sel_outputs.size(0))))
                         print("training inf accuracy: %.2f±%.2f" % (inf_training_acc, binomial_confidence_int(inf_training_acc, inf_outputs.size(0))))

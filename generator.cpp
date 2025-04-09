@@ -1965,7 +1965,12 @@ py::tuple generate_si_training_set(const unsigned int max_input_size, const uint
 			}
 			unsigned int num_vertices = std::max(2u, randrange(max_edges - frontier_size + 1));
 			num_vertices = std::max(frontier_size + branch_size + 1 - std::min(frontier_size, branch_size), num_vertices);
-			if (!generate_si_example(g, start, end, current_node_index, path, num_vertices, max_input_size / 24 + 1, (max_input_size - 2) / 6 + 2, max_edges, frontier_size, branch_size)) {
+//			printf("%d %d\n", (max_input_size - 2) / 6 + 2, max_edges + 2);
+//            fflush(stdout);
+//			if (!generate_si_example(g, start, end, current_node_index, path, num_vertices, max_input_size / 24 + 1, (max_input_size - 2) / 6 + 2, max_edges, frontier_size, branch_size)) {
+			// Scale max vertex id off of max_edges (so it's affected by alpha)
+
+			if (!generate_si_example(g, start, end, current_node_index, path, num_vertices, max_input_size / 24 + 1, max_edges + 2, max_edges, frontier_size, branch_size)) {
 				for (node& n : g) core::free(n);
 				g.length = 0; path.length = 0;
 				continue;
@@ -2094,6 +2099,80 @@ py::tuple generate_si_training_set(const unsigned int max_input_size, const uint
 			}
 			labels_mem(num_generated) = choice(correct_answers.data, correct_answers.length);
 		}
+
+		// Compute and print the in-degree histogram for the current graph 'g'
+        // First determine the maximum in-degree in the graph:
+        unsigned int total_nodes = g.length;
+        unsigned int max_in_degree = 0;
+        for (unsigned int i = 0; i < total_nodes; i++) {
+            unsigned int indegree = g[i].parents.length;
+            if (indegree > max_in_degree)
+                max_in_degree = indegree;
+        }
+
+        // Build a complete in–degree histogram for the graph.
+        unsigned int* in_degree_hist = (unsigned int*) calloc(max_in_degree + 1, sizeof(unsigned int));
+        if (in_degree_hist == nullptr) {
+            fprintf(stderr, "Failed to allocate global histogram array\n");
+        } else {
+            for (unsigned int i = 0; i < total_nodes; i++) {
+                unsigned int indegree = g[i].parents.length;
+                in_degree_hist[indegree]++;
+            }
+
+            // Print the global histogram
+            if (!quiet) {
+                std::string hist_str = "[";
+                for (unsigned int d = 0; d <= max_in_degree; d++) {
+                    float freq = total_nodes > 0 ? (float) in_degree_hist[d] / total_nodes : 0.0f;
+                    char buf[64];
+                    sprintf(buf, "%u:%.2f", d, freq);
+                    if (d > 0)
+                        hist_str += ", ";
+                    hist_str += buf;
+                }
+                hist_str += "]";
+                printf("in-degree histogram: %s\n", hist_str.c_str());
+                fflush(stdout);
+            }
+        }
+
+        // Determine which nodes have indegree > 0.8 max
+        unsigned int output_count = 0;
+        unsigned int high_degree_outputs = 0;
+        for (unsigned int token = 0; token < ntokens; token++) {
+            // Output node
+            if (outputs_mem(num_generated, token) == 1.0f) {
+                output_count++;
+                unsigned int indegree = 0;
+                for (unsigned int i = 0; i < total_nodes; i++) {
+                    if (g[i].id == token) {
+                        indegree = g[i].parents.length;
+                        break;
+                    }
+                }
+                if (indegree > max_in_degree / 2 + 1)
+                    high_degree_outputs++;
+            }
+        }
+
+        // Compute the fraction of output nodes with high in–degree.
+        float fraction_high = (output_count > 1) ? (float) high_degree_outputs / output_count : 0.0f;
+
+        // Reject the graph if more than 50% of output nodes have high indegree.
+        if (fraction_high > 0.5f) {
+            if (!quiet)
+                py::print("Rejecting graph for high output indegree");
+            // reject this graph.
+            for (node& n : g) core::free(n);
+		    g.length = 0; path.length = 0;
+		    free(in_degree_hist);
+            continue;
+        }
+
+        // Free the temporary histogram array
+        free(in_degree_hist);
+
 		num_generated++;
 
 		if (!quiet && num_generated > 0 && (num_generated % 1000 == 0 || num_generated >= dataset_size)) {
