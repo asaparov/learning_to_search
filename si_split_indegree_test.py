@@ -91,13 +91,13 @@ def test_generate_si_training_set():
 
     # print(max_input_size, max_edges, max_frontier_size, max_branch_size)
 
-        dataset_size = 1
+        dataset_size = 1000
         reserved_inputs = set()
         uniform = False
-        quiet = True
+        quiet = False
         alpha = 1.0
 
-        print(f"({frontier_size},{branch_size})")
+        # print(f"({frontier_size},{branch_size})")
         # 0 is default, 1 is selection only, 2 is inference
         result = generator.generate_si_training_set(
             max_input_size, dataset_size, reserved_inputs,

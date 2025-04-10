@@ -1914,6 +1914,14 @@ py::tuple generate_si_training_set(const unsigned int max_input_size, const uint
 	for (unsigned int i = 0; i < max_edges + 1; i++)
 		visited_edges_histogram[i] = 0;
 
+    // Indegree of output nodes hist
+	unsigned int max_hist_bins = max_edges + 1;
+    unsigned int* output_indegree_hist = (unsigned int*) calloc(max_edges + 1, sizeof(unsigned int));
+    if (output_indegree_hist == nullptr) {
+        fprintf(stderr, "Failed to allocate global output in-degree histogram\n");
+    }
+    unsigned int total_output_nodes_aggregated = 0;
+
 	float* MAX_FREQS_PER_BUCKET = (float*) alloca(sizeof(float) * (max_edges + 1) * (max_edges + 1));
 	unsigned int nonzero_buckets = 0;
 	for (unsigned int i = 0; i < max_edges + 1; i++) {
@@ -2100,110 +2108,77 @@ py::tuple generate_si_training_set(const unsigned int max_input_size, const uint
 			labels_mem(num_generated) = choice(correct_answers.data, correct_answers.length);
 		}
 
-		// Compute and print the in-degree histogram for the current graph 'g'
-        // First determine the maximum in-degree in the graph:
-        unsigned int total_nodes = g.length;
-        unsigned int max_in_degree = 0;
-        for (unsigned int i = 0; i < total_nodes; i++) {
-            unsigned int indegree = g[i].parents.length;
-            if (indegree > max_in_degree)
-                max_in_degree = indegree;
-        }
-
-        // Build a complete in–degree histogram for the graph.
-        unsigned int* in_degree_hist = (unsigned int*) calloc(max_in_degree + 1, sizeof(unsigned int));
-        if (in_degree_hist == nullptr) {
-            fprintf(stderr, "Failed to allocate global histogram array\n");
-        } else {
-            for (unsigned int i = 0; i < total_nodes; i++) {
-                unsigned int indegree = g[i].parents.length;
-                in_degree_hist[indegree]++;
-            }
-
-            // Print the global histogram
-            if (!quiet) {
-                std::string hist_str = "[";
-                for (unsigned int d = 0; d <= max_in_degree; d++) {
-                    float freq = total_nodes > 0 ? (float) in_degree_hist[d] / total_nodes : 0.0f;
-                    char buf[64];
-                    sprintf(buf, "%u:%.2f", d, freq);
-                    if (d > 0)
-                        hist_str += ", ";
-                    hist_str += buf;
-                }
-                hist_str += "]";
-                printf("in-degree histogram: %s\n", hist_str.c_str());
-                fflush(stdout);
-            }
-        }
-
-        // Determine which nodes have indegree > 0.8 max
-        unsigned int output_count = 0;
-        unsigned int high_degree_outputs = 0;
-        for (unsigned int token = 0; token < ntokens; token++) {
-            // Output node
+        // Add current graph to the indegree hist
+		for (unsigned int token = 0; token < ntokens; token++) {
             if (outputs_mem(num_generated, token) == 1.0f) {
-                output_count++;
+                // Find the corresponding node in the graph that has id == token.
                 unsigned int indegree = 0;
-                for (unsigned int i = 0; i < total_nodes; i++) {
+                unsigned int outdegree = 0;
+                for (unsigned int i = 0; i < g.length; i++) {
                     if (g[i].id == token) {
                         indegree = g[i].parents.length;
+                        outdegree = g[i].children.length;
                         break;
                     }
                 }
-                if (indegree > max_in_degree / 2 + 1)
-                    high_degree_outputs++;
+                // Clamp indegree to the size of our global histogram array.
+                if (indegree >= max_hist_bins) {
+                    printf("Exceeded\n");
+                    indegree = max_hist_bins - 1;
+                }
+                output_indegree_hist[indegree]++;
+                total_output_nodes_aggregated++;
             }
         }
-
-        // Compute the fraction of output nodes with high in–degree.
-        float fraction_high = (output_count > 1) ? (float) high_degree_outputs / output_count : 0.0f;
-
-        // Reject the graph if more than 50% of output nodes have high indegree.
-        if (fraction_high > 0.5f) {
-            if (!quiet)
-                py::print("Rejecting graph for high output indegree");
-            // reject this graph.
-            for (node& n : g) core::free(n);
-		    g.length = 0; path.length = 0;
-		    free(in_degree_hist);
-            continue;
-        }
-
-        // Free the temporary histogram array
-        free(in_degree_hist);
 
 		num_generated++;
 
 		if (!quiet && num_generated > 0 && (num_generated % 1000 == 0 || num_generated >= dataset_size)) {
-			printf("%d examples generated.\n", num_generated);
-			fflush(stdout);
+//			printf("%d examples generated.\n", num_generated);
+//			fflush(stdout);
+//
+//			printf("Frontier-branch size histogram: (log frequencies)\n");
+//			printf("[");
+//			bool first = true;
+//			for (unsigned int i = 0; i < max_edges + 1; i++) {
+//				for (unsigned int j = 0; j < max_edges + 1; j++) {
+//					if (frontier_branch_histogram[i*(max_edges+1) + j] == 0)
+//						continue;
+//					if (!first) printf(", ");
+//					printf("(%d,%d):%.2f", i, j, log(frontier_branch_histogram[i*(max_edges+1) + j]) - log(num_generated));
+//					first = false;
+//				}
+//			}
+//			printf("]\n");
+//
+//			printf("Visited edge count histogram: (log frequencies)\n");
+//			printf("[");
+//			first = true;
+//			for (unsigned int i = 0; i < max_edges + 1; i++) {
+//				if (visited_edges_histogram[i] == 0)
+//					continue;
+//				if (!first) printf(", ");
+//				printf("%d:%.2f", i, log(visited_edges_histogram[i]) - log(num_generated));
+//				first = false;
+//			}
+//			printf("]\n");
 
-			printf("Frontier-branch size histogram: (log frequencies)\n");
-			printf("[");
-			bool first = true;
-			for (unsigned int i = 0; i < max_edges + 1; i++) {
-				for (unsigned int j = 0; j < max_edges + 1; j++) {
-					if (frontier_branch_histogram[i*(max_edges+1) + j] == 0)
-						continue;
-					if (!first) printf(", ");
-					printf("(%d,%d):%.2f", i, j, log(frontier_branch_histogram[i*(max_edges+1) + j]) - log(num_generated));
-					first = false;
-				}
-			}
-			printf("]\n");
-
-			printf("Visited edge count histogram: (log frequencies)\n");
-			printf("[");
-			first = true;
-			for (unsigned int i = 0; i < max_edges + 1; i++) {
-				if (visited_edges_histogram[i] == 0)
-					continue;
-				if (!first) printf(", ");
-				printf("%d:%.2f", i, log(visited_edges_histogram[i]) - log(num_generated));
-				first = false;
-			}
-			printf("]\n");
+			printf("(%d,%d): ", requested_frontier_size, requested_branch_size);
+            printf("[");
+            bool first = true;
+            for (unsigned int d = 0; d < max_hist_bins; d++) {
+                // Only print bins that have nonzero counts.
+                if (output_indegree_hist[d] == 0)
+                    continue;
+                if (!first)
+                    printf(", ");
+                float freq = total_output_nodes_aggregated > 0 ? (float) output_indegree_hist[d] / total_output_nodes_aggregated : 0.0f;
+                printf("%d:%.4f", d, freq);
+//                printf("%d:%d", d, output_indegree_hist[d]);
+                first = false;
+            }
+            printf("]\n");
+            fflush(stdout);
 		}
 
 		for (node& n : g) core::free(n);
