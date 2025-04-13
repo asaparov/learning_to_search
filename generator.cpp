@@ -1965,7 +1965,7 @@ py::tuple generate_si_training_set(const unsigned int max_input_size, const uint
 			}
 			unsigned int num_vertices = std::max(2u, randrange(max_edges - frontier_size + 1));
 			num_vertices = std::max(frontier_size + branch_size + 1 - std::min(frontier_size, branch_size), num_vertices);
-			if (!generate_si_example(g, start, end, current_node_index, path, num_vertices, max_input_size / 24 + 1, (max_input_size - 2) / 6 + 2, max_edges, frontier_size, branch_size)) {
+			if (!generate_si_example(g, start, end, current_node_index, path, num_vertices, max(3, max_input_size / 24 + 1), (max_input_size - 2) / 6 + 2, max_edges, frontier_size, branch_size)) {
 				for (node& n : g) core::free(n);
 				g.length = 0; path.length = 0;
 				continue;
