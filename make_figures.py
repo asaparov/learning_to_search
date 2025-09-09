@@ -620,11 +620,30 @@ def get_mi_path_merge_stats(ckpt_dir, epoch, lookahead):
 	ckpt_filepath = ckpt_dir + '/epoch{}.pt'.format(epoch)
 	try:
 		print('Reading trace_circuit analysis from {} for lookahead {}.'.format(ckpt_filepath, lookahead))
-		_, _, _, path_merge_stats = do_analysis(ckpt_filepath, None, lookahead, 100, quiet=True)
+		_, _, _, path_merge_stats, _, _, _ = do_analysis(ckpt_filepath, None, lookahead, 100, quiet=True)
 		return path_merge_stats
 	except MissingSampleError:
 		print('WARNING: Checkpoint for {} is missing tracing results for lookahead {}.'.format(ckpt_filepath, lookahead))
 		return None
+
+def get_mi_path_merge_ops(ckpt_dir, epoch, example_input):
+	import torch
+	from trace_circuit import do_analysis_on_example, TransformerTracer
+	ckpt_filepath = ckpt_dir + '/epoch{}.pt'.format(epoch)
+
+	if not torch.cuda.is_available():
+		print("ERROR: CUDA device is not available.")
+		device = torch.device('cpu')
+	else:
+		device = torch.device('cuda')
+
+	tfm_model, _, _, _ = torch.load(ckpt_filepath, map_location=device, weights_only=False)
+	for transformer in tfm_model.transformers:
+		if not hasattr(transformer, 'pre_ln'):
+			transformer.pre_ln = True
+	tfm_model = torch.compile(tfm_model)
+	tracer = TransformerTracer(tfm_model)
+	return do_analysis_on_example(tracer, example_input, device)
 
 def get_mi_results(ckpt_dir, epoch=3370):
 	from trace_circuit import do_analysis, MissingSampleError
@@ -634,7 +653,7 @@ def get_mi_results(ckpt_dir, epoch=3370):
 		ckpt_filepath = ckpt_dir + '/epoch{}.pt'.format(epoch)
 		try:
 			print('Reading trace_circuit analysis from {} for lookahead {}.'.format(ckpt_filepath, lookahead))
-			explainable_example_proportion, average_merge_ops_per_example, suboptimal_merge_op_proportion = do_analysis(ckpt_filepath, None, lookahead, 100, quiet=True)
+			explainable_example_proportion, average_merge_ops_per_example, suboptimal_merge_op_proportion, _, _, _ = do_analysis(ckpt_filepath, None, lookahead, 100, quiet=True)
 			results[0,counter] = explainable_example_proportion
 			results[1,counter] = average_merge_ops_per_example
 			results[2,counter] = 1.0 - suboptimal_merge_op_proportion
@@ -644,34 +663,33 @@ def get_mi_results(ckpt_dir, epoch=3370):
 		counter += 1
 	return results
 
-def make_mi_path_merge_stats(epoch=3370):
+def make_mi_path_merge_stats(epoch=3370, lookahead=9):
 	greedy_ckpt_dir  = 'useful_path_results/checkpoints_v3_6layer_inputsize128_maxlookahead-1_seed3_trainstreaming_nomask_unablated_padded' # available seeds: 1-8
 	crafted_ckpt_dir = 'useful_path_results/checkpoints_v3_6layer_inputsize128_maxlookahead20_seed1_trainstreaming_nomask_unablated_padded' # available seeds: 1-8
 	crafted_OOD_ckpt_dir = 'useful_path_results/checkpoints_v3_6layer_inputsize128_maxlookahead12_seed2_trainstreaming_nomask_unablated_padded' # available seeds: 1-8
-	path_merge_stats = get_mi_path_merge_stats(crafted_ckpt_dir, epoch, lookahead=12)
+	path_merge_stats = get_mi_path_merge_stats(crafted_ckpt_dir, epoch, lookahead=lookahead)
 
+	edge_list = []
 	for l in range(len(path_merge_stats)):
-		data = np.zeros((12+2, 12+2))
+		data = np.zeros((lookahead+1, lookahead+1))
 		for src, dst_histogram in path_merge_stats[l].items():
+			average_freq = np.mean(list(dst_histogram.values()))
+			max_freq_diff = np.max(np.abs(np.array(list(dst_histogram.values())) - average_freq))
 			for dst, frequency in dst_histogram.items():
-				if src == -1:
-					src_index = 0
-				elif src > 12-1:
-					src_index = 12+1
+				if src != -1 and dst != -1 and src <= lookahead and dst <= lookahead:
+					#edge_list.append((l, src, dst, (frequency - average_freq) / max_freq_diff))
+					pass
 				else:
-					src_index = src+1
-				if dst == -1:
-					dst_index = 0
-				elif dst > 12-1:
-					dst_index = 12+1
-				else:
-					dst_index = dst+1
-				data[dst_index,src_index] += frequency
-		data = data.T / (np.sum(data.T, axis=0)+1e-9)
+					continue
+				data[dst,src] += frequency
+		data = data.T / (np.sum(data.T, axis=0)+1e-9)[np.newaxis,:]
 
 		fig = plt.gcf()
-		fig.set_size_inches(4.0, 4.0, forward=True)
-		r_cmap = plt.get_cmap('plasma').reversed()
+		fig.set_size_inches(3.0, 3.0, forward=True)
+		ax = plt.gca()
+		ax.xaxis.get_major_locator().set_params(integer=True)
+		ax.yaxis.get_major_locator().set_params(integer=True)
+		r_cmap = plt.get_cmap('magma').reversed()
 		plt.imshow(data, cmap=r_cmap, vmin=0.0, vmax=1.0)
 		#plt.xticks([-0.2] + [i for i in range(1,22)], labels=(['Naïve distr.'] + ['Star distr.'] + [i+1 for i in range(20)]), rotation=45, ha="right", rotation_mode="anchor")
 		#plt.yticks(np.arange(4), labels=['Naïve distr.', 'Star distr.', 'Balanced distr.', 'Balanced distr.\n(lookahead $\\le 12$)'])
@@ -691,6 +709,148 @@ def make_mi_path_merge_stats(epoch=3370):
 		plt.tight_layout()
 		fig.savefig('figures/mi_path_merge_stats_layer{}.pdf'.format(l), dpi=128)
 		plt.clf()
+
+	# save the standalone colorbar
+	a = np.array([[0,1]])
+	plt.figure(figsize=(3, 0.6))
+	img = plt.imshow(a, cmap=r_cmap)
+	plt.gca().set_visible(False)
+	cax = plt.axes([0.1, 0.72, 0.8, 0.2])
+	plt.colorbar(orientation="horizontal", cax=cax, label="frequency")
+	plt.savefig("figures/colorbar.pdf", dpi=128)
+
+	return
+
+	template = r"""
+\centering
+\tikzset{vertex/.style={shape=circle,draw,node distance=1.5em,fill=white}}
+\tikzset{edge/.style = {-{Latex[length=3.5pt,width=3.5pt]},color=black}}
+\scalebox{0.82}{
+\begin{tikzpicture}[shorten >=0.5pt,node distance=1.1cm]
+	% vertices and edges
+	\foreach \x in {0,...,12}
+		\foreach \y in {0,...,5}
+			{\node [vertex] (n\y_\x) at (1.3*\x-1.3,-4*\y) {\x};}
+
+	\foreach \y in {0,...,5}
+		\foreach \x in {1,...,12}
+			{\draw [edge,thick] (n\y_\number\numexpr\x-1\relax) -- (n\y_\x);}
+
+	\foreach \y in {0,...,5} {
+		\node [label] [rotate=45,above left=-0.1em of n\y_0,anchor=south] {\color{red!80!black}\footnotesize\textsf{start}};
+		\node [label] [rotate=-45,above right=-0.3em of n\y_12,anchor=south] {\color{red!80!black}\footnotesize\textsf{goal}};
+	}
+"""
+
+	template += '\n'
+	theta = np.pi/5
+	node_radius = 0.3
+	cmap = plt.get_cmap('seismic').reversed()
+	for layer, src, dst, frequency in edge_list:
+		node_distance = 1.3*(dst - src)
+		if node_distance == 0:
+			# TODO: should we depict this in a different way?
+			continue
+		psi = np.asin(node_radius*np.sin(theta)/np.abs(node_distance))
+		(r,g,b,a) = cmap(frequency)
+		template += '	\\definecolor{col}{RGB}{' + str(int(np.round(r*255))) + ',' + str(int(np.round(g*255))) + ',' + str(int(np.round(b*255))) + '}\n'
+		template += f'	\\draw [color=col,opacity=0.8] (n{layer}_{src}) (n{layer}_{dst})++({-np.sin(np.pi/2 - psi - theta)*node_radius*np.sign(node_distance)},{np.cos(np.pi/2 - psi - theta)*node_radius*np.sign(node_distance)}) arc [start angle={(np.pi/2 - theta + 2*psi)*180/np.pi}, delta angle={(2*theta - 4*psi)*180/np.pi}, radius={node_distance/(2*np.sin(theta))}];\n'
+
+	template += r"""
+	\end{tikzpicture}
+	} % scalebox
+"""
+	with open('figures/mi_path_merge_stats.tikz', 'w') as fout:
+		fout.write(template)
+
+def make_mi_path_merge_ops(epoch=3370, example_index=0):
+	max_input_size = 128
+	nlayers = 6
+	greedy_ckpt_dir  = 'useful_path_results/checkpoints_v3_6layer_inputsize128_maxlookahead-1_seed3_trainstreaming_nomask_unablated_padded' # available seeds: 1-8
+	crafted_ckpt_dir = 'useful_path_results/checkpoints_v3_6layer_inputsize128_maxlookahead20_seed1_trainstreaming_nomask_unablated_padded' # available seeds: 1-8
+	crafted_OOD_ckpt_dir = 'useful_path_results/checkpoints_v3_6layer_inputsize128_maxlookahead12_seed2_trainstreaming_nomask_unablated_padded' # available seeds: 1-8
+
+	QUERY_PREFIX_TOKEN = (max_input_size-5) // 3 + 4
+	PADDING_TOKEN = (max_input_size-5) // 3 + 3
+	EDGE_PREFIX_TOKEN = (max_input_size-5) // 3 + 2
+	PATH_PREFIX_TOKEN = (max_input_size-5) // 3 + 1
+	max_vertex_id = (max_input_size - 5) // 3
+
+	input_tokens = []
+	path_length = 10
+	for i in range(path_length):
+		input_tokens += [EDGE_PREFIX_TOKEN, i + 1, i + 2]
+	input_tokens += [QUERY_PREFIX_TOKEN, 1, path_length + 1, PATH_PREFIX_TOKEN, 1]
+	input_length = len(input_tokens)
+	input_offset = max_input_size - len(input_tokens)
+	input_tokens = [PADDING_TOKEN] * input_offset + input_tokens
+	example_input = np.array(input_tokens)
+
+	example_output, path_merge_ops = get_mi_path_merge_ops(crafted_OOD_ckpt_dir, epoch, example_input)
+	print("Model output: ", example_output)
+
+	template = r"""
+		\tikzset{token/.style={shape=rectangle,draw,minimum height=1.4em,minimum width=1.3em,scale=0.9}}
+		\tikzset{tfmedge/.style = {-{Latex[length=3.5pt,width=3.5pt]},color=black!30}}
+		\begin{tikzpicture}[shorten >=0.5pt,node distance=1.1cm]
+	"""
+
+	for layer in range(nlayers + 1):
+		for i in range(input_length):
+			if i == 0 and layer != 0:
+				start_node_pos = '[below=3em of t{}_{}]'.format(layer-1, 0)
+			elif i != 0:
+				start_node_pos = '[right=0em of t{}_{}]'.format(layer, i-1)
+			else:
+				start_node_pos = ''
+			input_token = example_input[input_offset + i]
+			if input_token == EDGE_PREFIX_TOKEN:
+				token_text = '{\\color{RoyalBlue!80!black}\\textbf{\\texttt{E}}}'
+			elif input_token == QUERY_PREFIX_TOKEN:
+				token_text = '{\\color{red!80!black}\\textbf{\\texttt{Q}}}'
+			elif input_token == PATH_PREFIX_TOKEN:
+				token_text = '{\\color{OliveGreen}\\textbf{\\texttt{P}}}'
+			else:
+				token_text = '{\\texttt{' + str(input_token) + '}}'
+			template += '\\node [token] (t{}_{}) {} {};\n'.format(layer, i, start_node_pos, token_text)
+	weights_per_layer = []
+	for layer in range(nlayers + 1):
+		weights_per_layer.append([])
+		for op in [op for op in path_merge_ops if op.layer == layer]:
+			weights_per_layer[layer].extend([w for w in op.weights if w != None])
+	for op in path_merge_ops:
+		for parent in op.predecessors:
+			index = parent.successors.index(op)
+			causes = parent.op_explanations[index]
+			if parent.weights[index] == None:
+				weight = None
+			else:
+				weight = (parent.weights[index] - min(weights_per_layer[layer-1])) / (max(weights_per_layer[layer-1]) - min(weights_per_layer[layer-1]))
+			is_position_op = False
+			is_token_matching = False
+			if causes != None:
+				for cause in causes:
+					if type(cause) == tuple:
+						if type(cause[0]) == int and type(cause[1]) == int and cause[0] > max_vertex_id+5 and cause[1] > max_vertex_id+5:
+							is_position_op = True
+					elif type(cause) == int and cause <= max_vertex_id:
+						is_token_matching = True
+			if is_position_op and not is_token_matching:
+				edge_color = 'red'
+			elif is_token_matching and not is_position_op:
+				edge_color = 'RoyalBlue'
+			elif is_position_op and is_token_matching:
+				edge_color = 'Orange'
+			elif weight != None:
+				edge_color = 'Orange'
+				continue
+			else:
+				edge_color = 'OliveGreen'
+			template += '\\draw [tfmedge,draw={}!85!black,opacity={}] (t{}_{}.south) -- (t{}_{}.north);\n'.format(edge_color, weight if weight != None else 1.0, parent.layer, parent.row_id-input_offset, op.layer, op.row_id-input_offset)
+	template += '\\end{tikzpicture}\n'
+
+	with open('figures/mi_path_merge_ops.tikz', 'w') as fout:
+		fout.write(template)
 
 def make_mi_figures(epoch=3370):
 	greedy_ckpt_dir  = 'useful_path_results/checkpoints_v3_6layer_inputsize128_maxlookahead-1_seed3_trainstreaming_nomask_unablated_padded' # available seeds: 1-8
@@ -859,5 +1019,7 @@ if do_all or '--mi' in argv:
 	make_mi_figures(epoch=3370)
 if do_all or '--mi-path-merge-stats' in argv:
 	make_mi_path_merge_stats(epoch=3370)
+if do_all or '--mi-path-merge-ops' in argv:
+	make_mi_path_merge_ops(epoch=3370)
 if do_all or '--lookahead-histogram' in argv:
 	make_lookahead_histogram()

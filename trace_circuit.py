@@ -20,6 +20,10 @@ def normalize_conditions(conditions):
 	conditions.sort()
 
 def compute_attention(layer_index: int, attn_layer, x: torch.Tensor, mask: torch.Tensor):
+	device = x.get_device()
+	if device == -1:
+		device = torch.device('cpu')
+
 	n, d = x.shape[-2], x.shape[-1]
 	k_params = {k:v for k,v in attn_layer.proj_k.named_parameters()}
 	q_params = {k:v for k,v in attn_layer.proj_q.named_parameters()}
@@ -2202,6 +2206,51 @@ class MissingSampleError(Exception):
 	def __init__(self, message):
 		super().__init__(message)
 
+def filter_irrelevant_nodes(path_merge_explainable, input, root, max_input_size, forward_edges):
+	max_vertex_id = (max_input_size - 5) // 3
+
+	# filter out nodes that are not along the path from the input to the root
+	new_path_merge_explainable = []
+	queue = [root]
+	while len(queue) != 0:
+		node = queue.pop()
+		if node not in path_merge_explainable:
+			continue
+		if node not in new_path_merge_explainable:
+			new_path_merge_explainable.append(node)
+		for predecessor in node.predecessors:
+			queue.append(predecessor)
+	path_merge_explainable = new_path_merge_explainable
+
+	# check that the final node's activations contain the path from the start vertex to the goal vertex
+	def is_reachable(input, start, end, subgraph):
+		if input[start] > max_vertex_id or input[end] > max_vertex_id:
+			return False
+		queue = [input[start]]
+		while len(queue) != 0:
+			current = queue.pop()
+			if current == input[end]:
+				return True
+			for child in forward_edges[current]:
+				if child in subgraph:
+					queue.append(child)
+		return False
+	if root in path_merge_explainable:
+		vertices = [i-(max_vertex_id+5) for i in root.reachable if i >= max_vertex_id+5]
+		subgraph = [int(input[v]) for v in vertices]
+		if not is_reachable(input, max_input_size-4, max_input_size-3, subgraph):
+			path_merge_explainable.remove(root)
+	return path_merge_explainable
+
+def do_analysis_on_example(tracer, example_input, device):
+	input = torch.LongTensor(example_input).to(device)
+	root, forward_edges, important_ops, path_merge_explainable, prediction = tracer.trace2(input)
+
+	if path_merge_explainable != None:
+		path_merge_explainable = filter_irrelevant_nodes(path_merge_explainable, input, root, len(example_input), forward_edges)
+
+	return prediction, path_merge_explainable
+
 def do_analysis(ckpt_filepath, tracer, lookahead, total_samples, quiet=False):
 	seed(1)
 	torch.manual_seed(1)
@@ -2221,40 +2270,6 @@ def do_analysis(ckpt_filepath, tracer, lookahead, total_samples, quiet=False):
 
 	#inputs,outputs = generate_eval_data(max_input_size, min_path_length=1, distance_from_start=1, distance_from_end=-1, lookahead_steps=int(argv[2]), num_paths_at_fork=None, num_samples=total_samples)
 	#inputs = torch.LongTensor(inputs).to(device)
-
-	def filter_irrelevant_nodes(path_merge_explainable, input, root):
-		# filter out nodes that are not along the path from the input to the root
-		new_path_merge_explainable = []
-		queue = [root]
-		while len(queue) != 0:
-			node = queue.pop()
-			if node not in path_merge_explainable:
-				continue
-			if node not in new_path_merge_explainable:
-				new_path_merge_explainable.append(node)
-			for predecessor in node.predecessors:
-				queue.append(predecessor)
-		path_merge_explainable = new_path_merge_explainable
-
-		# check that the final node's activations contain the path from the start vertex to the goal vertex
-		def is_reachable(input, start, end, subgraph):
-			if input[start] > max_vertex_id or input[end] > max_vertex_id:
-				return False
-			queue = [input[start]]
-			while len(queue) != 0:
-				current = queue.pop()
-				if current == input[end]:
-					return True
-				for child in forward_edges[current]:
-					if child in subgraph:
-						queue.append(child)
-			return False
-		if root in path_merge_explainable:
-			vertices = [i-(max_vertex_id+5) for i in root.reachable if i >= max_vertex_id+5]
-			subgraph = [int(input[v]) for v in vertices]
-			if not is_reachable(input, max_input_size-4, max_input_size-3, subgraph):
-				path_merge_explainable.remove(root)
-		return path_merge_explainable
 
 	def print_computation_graph(root, input, path_merge_explainable=None):
 		queue = [root]
@@ -2444,8 +2459,11 @@ def do_analysis(ckpt_filepath, tracer, lookahead, total_samples, quiet=False):
 	from sys import stdout
 	if lookahead == -1:
 		lookahead = None
+	all_inputs, all_outputs, all_path_merge_ops = [], [], []
 	while num_samples < total_samples:
 		inputs,outputs = generate_eval_data(max_input_size, min_path_length=1, distance_from_start=1, distance_from_end=-1, lookahead_steps=lookahead, num_paths_at_fork=None, num_samples=1)
+		all_inputs.append(np.array(inputs))
+		all_outputs.append(np.array(outputs))
 		sample_id += 1
 
 		if sample_id-1 in sample_id_map:
@@ -2487,7 +2505,10 @@ def do_analysis(ckpt_filepath, tracer, lookahead, total_samples, quiet=False):
 				continue
 
 		if path_merge_explainable != None:
-			path_merge_explainable = filter_irrelevant_nodes(path_merge_explainable, inputs[0], root)
+			path_merge_explainable = filter_irrelevant_nodes(path_merge_explainable, inputs[0], root, max_input_size, forward_edges)
+
+		if path_merge_explainable != None and root in path_merge_explainable:
+			all_path_merge_ops.append(path_merge_explainable[:])
 
 		def shortest_distances(input, start, subgraph=None):
 			if input[start] > max_vertex_id:
@@ -2521,6 +2542,21 @@ def do_analysis(ckpt_filepath, tracer, lookahead, total_samples, quiet=False):
 					if successor not in path_merge_explainable:
 						continue
 					if successor.row_id == node.row_id:
+						continue
+
+					# filter out attention operations that are not position-based or token matching
+					is_position_op = False
+					is_token_matching = False
+					causes = node.op_explanations[k]
+					if causes == None:
+						continue
+					for cause in causes:
+						if type(cause) == tuple:
+							if type(cause[0]) == int and type(cause[1]) == int and cause[0] > max_vertex_id+5 and cause[1] > max_vertex_id+5:
+								is_position_op = True
+						elif type(cause) == int and cause <= max_vertex_id:
+							is_token_matching = True
+					if not is_position_op and not is_token_matching:
 						continue
 
 					if inputs[0,node.row_id] not in distances_from_start:
@@ -2701,7 +2737,7 @@ def do_analysis(ckpt_filepath, tracer, lookahead, total_samples, quiet=False):
 	explainable_example_proportion = torch.sum(num_correct_vs_explainable[:,1]) / num_samples
 	average_merge_ops_per_example = total_path_merge_ops / num_samples
 	suboptimal_merge_op_proportion = 0.0 if total_path_merge_ops == 0 else total_suboptimal_path_merge_ops / total_path_merge_ops
-	return explainable_example_proportion, average_merge_ops_per_example, suboptimal_merge_op_proportion, aggregated_path_merge_distances
+	return explainable_example_proportion, average_merge_ops_per_example, suboptimal_merge_op_proportion, aggregated_path_merge_distances, all_inputs, all_outputs, all_path_merge_ops
 
 
 if __name__ == "__main__":
