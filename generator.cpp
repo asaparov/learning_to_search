@@ -1410,7 +1410,7 @@ bool generate_si_example(array<node>& vertices, const node*& start, const node*&
 		return false;
 	for (unsigned int i = 1; i < num_vertices; i++) {
 		/* sample the number of child and parent vertices */
-		unsigned int num_parents = randrange(1, max_num_parents);
+		unsigned int num_parents = randrange(1, max_num_parents + 1);
 		num_parents = std::min(num_parents, i);
 
 		/* sample the parents of this new node */
@@ -1827,7 +1827,8 @@ bool generate_si_example(array<node>& vertices, const node*& start, const node*&
 
 		array<node*> unvisited_children(4);
 		for (node* child : selected_vertex->children) {
-			if (path.contains(child)) continue;
+			if (child == end || path.contains(child))
+				continue;
 
 			/* make sure this is not the unvisited child of another frontier vertex */
 			bool can_visit = true;
@@ -1940,8 +1941,10 @@ py::tuple generate_si_training_set(const unsigned int max_input_size, const uint
 	unsigned int potential_frontier_branch_count = 0;
 	unsigned int num_attempts = 0;
 	while (num_generated < dataset_size) {
-		if (num_attempts >= 10000000)
+		if (num_attempts >= 10000000) {
+			fprintf(stderr, "ERROR: Failed to generate the requested data after 10000000 attempts. (so far we have generated %u examples)\n", num_generated);
 			break;
+		}
 		num_attempts++;
 		array<node> g(32);
 		const node* start; const node* end;
@@ -1965,7 +1968,7 @@ py::tuple generate_si_training_set(const unsigned int max_input_size, const uint
 			}
 			unsigned int num_vertices = std::max(2u, randrange(max_edges - frontier_size + 1));
 			num_vertices = std::max(frontier_size + branch_size + 1 - std::min(frontier_size, branch_size), num_vertices);
-			if (!generate_si_example(g, start, end, current_node_index, path, num_vertices, max(3, max_input_size / 24 + 1), (max_input_size - 2) / 6 + 2, max_edges, frontier_size, branch_size)) {
+			if (!generate_si_example(g, start, end, current_node_index, path, num_vertices, max_input_size / 24 + 1, (max_input_size - 2) / 6 + 1, max_edges, frontier_size, branch_size)) {
 				for (node& n : g) core::free(n);
 				g.length = 0; path.length = 0;
 				continue;
