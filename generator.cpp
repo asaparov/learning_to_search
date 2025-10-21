@@ -532,16 +532,12 @@ py::tuple generate_training_set(const unsigned int max_input_size, const uint64_
 		lookahead_step_histogram[i] = 0;
 		path_length_histogram[i] = 0;
 	}
-	float* MAX_FREQS_PER_BUCKET = (float*) alloca(sizeof(float) * max_input_size);
-	if (max_lookahead == -1) {
+	unsigned int* target_lookahead_histogram = (unsigned int*) alloca(sizeof(unsigned int) * (max_lookahead + 1));
+	if (max_lookahead != -1) {
 		for (unsigned int i = 0; i < max_input_size; i++)
-			MAX_FREQS_PER_BUCKET[i] = 1.0;
-	} else {
-		for (unsigned int i = 0; i < (unsigned) max_lookahead + 1; i++)
-			MAX_FREQS_PER_BUCKET[i] = 1.0 / (max_lookahead+1);
-		for (unsigned int i = max_lookahead + 1; i < max_input_size; i++)
-			MAX_FREQS_PER_BUCKET[i] = 0.0;
-		MAX_FREQS_PER_BUCKET[max_lookahead] += 0.05;
+			target_lookahead_histogram[i] = 0;
+		for (unsigned int i = 0; i < dataset_size; i++)
+			target_lookahead_histogram[randrange(max_lookahead + 1)]++;
 	}
 
 	unsigned int* potential_lookaheads = (unsigned int*) alloca(max((size_t) 1, sizeof(unsigned int) * (max_lookahead + 1)));
@@ -562,7 +558,7 @@ py::tuple generate_training_set(const unsigned int max_input_size, const uint64_
 			} else {
 				potential_lookahead_count = 0;
 				for (unsigned int i = 0; i < (unsigned) max_lookahead + 1; i++)
-					if (num_generated == 0 || lookahead_step_histogram[i] / num_generated < MAX_FREQS_PER_BUCKET[i])
+					if (lookahead_step_histogram[i] < target_lookahead_histogram[i])
 						potential_lookaheads[potential_lookahead_count++] = i;
 				unsigned int lookahead = choice(potential_lookaheads, potential_lookahead_count);
 
@@ -582,6 +578,7 @@ py::tuple generate_training_set(const unsigned int max_input_size, const uint64_
 					continue;
 				}
 			}
+
 			unsigned int shortest_path_length = paths[0].length;
 			for (unsigned int i = 1; i < paths.length; i++)
 				if (paths[i].length < shortest_path_length)
@@ -646,7 +643,7 @@ py::tuple generate_training_set(const unsigned int max_input_size, const uint64_
 					continue;
 				}
 
-				if (num_generated != 0 && lookahead_step_histogram[lookahead_steps] / num_generated >= MAX_FREQS_PER_BUCKET[lookahead_steps])
+				if (num_generated != 0 && lookahead_step_histogram[lookahead_steps] >= target_lookahead_histogram[lookahead_steps])
 					continue;
 				lookahead_step_histogram[lookahead_steps] += 1;
 				path_length_histogram[j] += 1;
