@@ -540,8 +540,12 @@ py::tuple generate_training_set(const unsigned int max_input_size, const uint64_
 			target_lookahead_histogram[randrange(max_lookahead + 1)]++;
 	}
 
-	unsigned int* potential_lookaheads = (unsigned int*) alloca(max((size_t) 1, sizeof(unsigned int) * (max_lookahead + 1)));
-	unsigned int potential_lookahead_count = 0;
+	/* sample the lookahead of the first example */
+	unsigned int lookahead = 0;
+	if (max_lookahead != -1)
+		lookahead = randrange(max_lookahead + 1);
+
+	/* main loop for generating examples */
 	while (num_generated < dataset_size) {
 		array<node> g(32);
 		node* start; node* end;
@@ -556,12 +560,6 @@ py::tuple generate_training_set(const unsigned int max_input_size, const uint64_
 					continue;
 				}
 			} else {
-				potential_lookahead_count = 0;
-				for (unsigned int i = 0; i < (unsigned) max_lookahead + 1; i++)
-					if (lookahead_step_histogram[i] < target_lookahead_histogram[i])
-						potential_lookaheads[potential_lookahead_count++] = i;
-				unsigned int lookahead = choice(potential_lookaheads, potential_lookahead_count);
-
 				unsigned int num_paths;
 				if (lookahead == 0) {
 					num_paths = randrange(1, 3);
@@ -643,7 +641,8 @@ py::tuple generate_training_set(const unsigned int max_input_size, const uint64_
 					continue;
 				}
 
-				if (num_generated != 0 && lookahead_step_histogram[lookahead_steps] >= target_lookahead_histogram[lookahead_steps])
+				/* make sure the lookahead of this example matches the requested lookahead */
+				if (max_lookahead != -1 && lookahead_steps != lookahead)
 					continue;
 				lookahead_step_histogram[lookahead_steps] += 1;
 				path_length_histogram[j] += 1;
@@ -658,6 +657,9 @@ py::tuple generate_training_set(const unsigned int max_input_size, const uint64_
 					outputs_mem(num_generated, useful_steps[i]->id) = 1.0f;
 				labels_mem(num_generated) = choice(useful_steps.data, useful_steps.length)->id;
 				num_generated++;
+				if (max_lookahead != -1)
+					/* sample the lookahead of the next example */
+					lookahead = randrange(max_lookahead + 1);
 				if (num_generated == dataset_size)
 					break;
 			}
@@ -1211,21 +1213,12 @@ py::tuple generate_dfs_training_set(const unsigned int max_input_size, const uin
 	for (unsigned int i = 0; i < max_input_size; i++)
 		backtrack_distance_histogram[i] = 0;
 
-	float* MAX_FREQS_PER_BUCKET = (float*) alloca(sizeof(float) * max_input_size);
-	if (requested_backtrack == -1) {
-		for (unsigned int i = 0; i < max_input_size; i++)
-			MAX_FREQS_PER_BUCKET[i] = 1.0;
-	} else {
-		for (unsigned int i = 0; i < (unsigned) requested_backtrack + 1; i++)
-			MAX_FREQS_PER_BUCKET[i] = 1.0 / (requested_backtrack+1);
-		for (unsigned int i = requested_backtrack + 1; i < max_input_size; i++)
-			MAX_FREQS_PER_BUCKET[i] = 0.0;
-		MAX_FREQS_PER_BUCKET[requested_backtrack] += 0.05;
-	}
+	/* sample the backtrack of the first example */
+	int backtrack = requested_backtrack;
+	if (requested_backtrack != -1 && uniform)
+		backtrack = randrange((unsigned) requested_backtrack + 1);
 
 	array<const node*> path(32);
-	unsigned int* potential_backtracks = (unsigned int*) alloca(max((size_t) 1, sizeof(unsigned int) * (requested_backtrack + 1)));
-	unsigned int potential_backtrack_count = 0;
 	unsigned int num_attempts = 0;
 	while (num_generated < dataset_size) {
 		if (num_attempts >= 10000000)
@@ -1236,17 +1229,8 @@ py::tuple generate_dfs_training_set(const unsigned int max_input_size, const uin
 		unsigned int current_node_index;
 		while (true) {
 			unsigned int num_vertices = std::max(2u, randrange(longest_path_length + 1));
-			int backtrack = requested_backtrack;
-			if (requested_backtrack != -1) {
-				if (uniform) {
-					potential_backtrack_count = 0;
-					for (unsigned int i = 0; i < (unsigned) requested_backtrack + 1; i++)
-						if (num_generated == 0 || backtrack_distance_histogram[i] / num_generated < MAX_FREQS_PER_BUCKET[i])
-							potential_backtracks[potential_backtrack_count++] = i;
-					backtrack = choice(potential_backtracks, potential_backtrack_count);
-				}
+			if (requested_backtrack != -1)
 				num_vertices = std::max((unsigned int) backtrack + 2, num_vertices);
-			}
 			if (!generate_dfs_example(g, start, end, current_node_index, path, num_vertices, max_input_size / 24 + 1, (max_input_size - 5) / 3, backtrack, longest_path_length)) {
 				for (node& n : g) core::free(n);
 				g.length = 0; path.length = 0;
@@ -1326,7 +1310,7 @@ py::tuple generate_dfs_training_set(const unsigned int max_input_size, const uin
 		}
 
 		if ((requested_backtrack != -1 && !uniform && (unsigned int) requested_backtrack != backtrack_distance)
-		 || (uniform && num_generated != 0 && backtrack_distance_histogram[backtrack_distance] / num_generated >= MAX_FREQS_PER_BUCKET[backtrack_distance]))
+		 || (requested_backtrack != -1 && uniform && (unsigned int) backtrack != backtrack_distance))
 		{
 			for (node& n : g) core::free(n);
 			g.length = 0; path.length = 0;
@@ -1357,6 +1341,10 @@ py::tuple generate_dfs_training_set(const unsigned int max_input_size, const uin
 			outputs_mem(num_generated, unvisited[i]->id) = 1.0f;
 		labels_mem(num_generated) = path[current_node_index+1]->id;
 		num_generated++;
+
+		if (requested_backtrack != -1 && uniform)
+			/* sample the backtrack of the next example */
+			backtrack = randrange((unsigned) requested_backtrack + 1);
 
 		if (!quiet && num_generated > 0 && (num_generated % 1000 == 0 || num_generated >= dataset_size)) {
 			printf("%d examples generated.\n", num_generated);
@@ -1499,6 +1487,7 @@ bool generate_si_example(array<node>& vertices, const node*& start, const node*&
 	}
 
 	/* for the unvisited vertices in `frontier`, move edges until they have an incoming edge from a visited vertex */
+	bool* visited = (bool*) malloc(sizeof(bool) * num_vertices);
 	for (node* frontier_vertex : frontier) {
 		if (frontier_vertex == start || path.index_of(frontier_vertex) % 2 == 1)
 			continue;
@@ -1507,6 +1496,9 @@ bool generate_si_example(array<node>& vertices, const node*& start, const node*&
 		array<node*> stack(8);
 		array<node*> visited_ancestors(8);
 		stack.append(frontier_vertex->parents.data, frontier_vertex->parents.length);
+		memset(visited, 0, sizeof(bool) * num_vertices);
+		for (node* parent : frontier_vertex->parents)
+			visited[parent->id] = true;
 		while (stack.length != 0) {
 			node* current = stack.pop();
 
@@ -1516,10 +1508,17 @@ bool generate_si_example(array<node>& vertices, const node*& start, const node*&
 					if (!visited_ancestors.contains(parent))
 						visited_ancestors.add(parent);
 					has_visited_parent = true;
+					break;
 				}
 			}
-			if (!has_visited_parent)
-				stack.append(current->parents.data, current->parents.length);
+			if (!has_visited_parent) {
+				for (node* parent : current->parents) {
+					if (!visited[parent->id]) {
+						stack.add(parent);
+						visited[parent->id] = true;
+					}
+				}
+			}
 		}
 
 		if (current_node->children.length == branch_size && visited_ancestors.contains(current_node))
@@ -1576,6 +1575,7 @@ bool generate_si_example(array<node>& vertices, const node*& start, const node*&
 			path[insert_index + 1] = frontier_vertex;
 		}
 	}
+	free(visited);
 
 	/* next we have to make sure every vertex in `frontier` has an unvisited child */
 	for (node* frontier_vertex : frontier) {
@@ -1912,30 +1912,31 @@ py::tuple generate_si_training_set(const unsigned int max_input_size, const uint
 	for (unsigned int i = 0; i < max_edges + 1; i++)
 		visited_edges_histogram[i] = 0;
 
-	float* MAX_FREQS_PER_BUCKET = (float*) alloca(sizeof(float) * (max_edges + 1) * (max_edges + 1));
-	unsigned int nonzero_buckets = 0;
+	pair<unsigned int, unsigned int>* potential_frontier_branches = (pair<unsigned int, unsigned int>*) alloca(max((size_t) 1, sizeof(pair<unsigned int, unsigned int>) * ((max_edges + 1) * (max_edges + 1))));
+	unsigned int potential_frontier_branch_count = 0;
 	for (unsigned int i = 0; i < max_edges + 1; i++) {
 		/* frontier_size is i */
 		for (unsigned int j = 0; j < max_edges + 1; j++) {
 			/* branch_size is j */
-			if (i == 0 || j == 0 || i > (unsigned) requested_frontier_size || j > (unsigned) requested_branch_size || i + j > max_edges + 1) {
-				MAX_FREQS_PER_BUCKET[i*(max_edges+1) + j] = 0.0;
-			} else {
-				MAX_FREQS_PER_BUCKET[i*(max_edges+1) + j] = 1.0;
-				nonzero_buckets++;
+			if (i != 0 && j != 0 && i <= (unsigned) requested_frontier_size && j <= (unsigned) requested_branch_size && i + j <= max_edges + 1) {
+				potential_frontier_branches[potential_frontier_branch_count++] = make_pair(i, j);
 			}
 		}
 	}
-	for (unsigned int i = 0; i < (max_edges + 1) * (max_edges + 1); i++)
-		if (MAX_FREQS_PER_BUCKET[i] != 0.0) MAX_FREQS_PER_BUCKET[i] /= nonzero_buckets;
-	if ((unsigned) requested_branch_size < max_edges + 1 - requested_frontier_size)
-		MAX_FREQS_PER_BUCKET[requested_frontier_size*(max_edges+1) + requested_branch_size] += 0.05 / nonzero_buckets;
-	else
-		MAX_FREQS_PER_BUCKET[requested_frontier_size*(max_edges+1) + max_edges + 1 - requested_frontier_size] += 0.05 / nonzero_buckets;
 
+	/* sample the frontier size and branch size for the first example */
+	unsigned int frontier_size; unsigned int branch_size;
+	if (uniform) {
+		pair<unsigned int, unsigned int> frontier_branch = choice(potential_frontier_branches, potential_frontier_branch_count);
+		frontier_size = frontier_branch.key;
+		branch_size = frontier_branch.value;
+	} else {
+		frontier_size = requested_frontier_size;
+		branch_size = requested_branch_size;
+	}
+
+	/* main loop for generating examples */
 	array<const node*> path(32);
-	pair<unsigned int, unsigned int>* potential_frontier_branches = (pair<unsigned int, unsigned int>*) alloca(max((size_t) 1, sizeof(pair<unsigned int, unsigned int>) * ((max_edges + 1) * (max_edges + 1))));
-	unsigned int potential_frontier_branch_count = 0;
 	unsigned int num_attempts = 0;
 	while (num_generated < dataset_size) {
 		if (num_attempts >= 10000000) {
@@ -1947,22 +1948,6 @@ py::tuple generate_si_training_set(const unsigned int max_input_size, const uint
 		const node* start; const node* end;
 		unsigned int current_node_index;
 		while (true) {
-			unsigned int frontier_size; unsigned int branch_size;
-			if (uniform) {
-				potential_frontier_branch_count = 0;
-				for (unsigned int i = 1; i < max_edges + 1; i++) {
-					for (unsigned int j = 1; j < max_edges + 1; j++) {
-						if ((num_generated == 0 && MAX_FREQS_PER_BUCKET[i*(max_edges+1) + j] != 0.0) || (float) frontier_branch_histogram[i*(max_edges+1) + j] / num_generated < MAX_FREQS_PER_BUCKET[i*(max_edges+1) + j])
-							potential_frontier_branches[potential_frontier_branch_count++] = make_pair(i, j);
-					}
-				}
-				pair<unsigned int, unsigned int> frontier_branch = choice(potential_frontier_branches, potential_frontier_branch_count);
-				frontier_size = frontier_branch.key;
-				branch_size = frontier_branch.value;
-			} else {
-				frontier_size = requested_frontier_size;
-				branch_size = requested_branch_size;
-			}
 			unsigned int num_vertices = std::max(2u, randrange(max_edges - frontier_size + 1));
 			num_vertices = std::max(frontier_size + branch_size + 1 - std::min(frontier_size, branch_size), num_vertices);
 			if (!generate_si_example(g, start, end, current_node_index, path, num_vertices, max_input_size / 24 + 1, (max_input_size - 2) / 6 + 1, max_edges, frontier_size, branch_size)) {
@@ -2011,7 +1996,7 @@ py::tuple generate_si_training_set(const unsigned int max_input_size, const uint
 		if (frontier.length == 0)
 			frontier.add(start);
 		const node* current_node = &g[current_node_index];
-		unsigned int branch_size = current_node->children.length;
+		unsigned int actual_branch_size = current_node->children.length;
 
 		bool is_selection_step;
 		if (path.length == 0)
@@ -2036,8 +2021,8 @@ py::tuple generate_si_training_set(const unsigned int max_input_size, const uint
 			prefix[prefix.length++] = current_node->id;
 
 		if ((requested_frontier_size != -1 && !uniform && (unsigned int) requested_frontier_size != (unsigned int) frontier.length)
-		 || (requested_branch_size != -1 && !uniform && (unsigned int) requested_branch_size != branch_size)
-		 || (uniform && num_generated != 0 && (float) frontier_branch_histogram[frontier.length*(max_edges+1) + branch_size] / num_generated >= MAX_FREQS_PER_BUCKET[frontier.length*(max_edges+1) + branch_size]))
+		 || (requested_branch_size != -1 && !uniform && (unsigned int) requested_branch_size != actual_branch_size)
+		 || (uniform && (frontier.length != frontier_size || actual_branch_size != branch_size)))
 		{
 			for (node& n : g) core::free(n);
 			g.length = 0; path.length = 0;
@@ -2056,7 +2041,7 @@ py::tuple generate_si_training_set(const unsigned int max_input_size, const uint
 			continue;
 		}
 
-		frontier_branch_histogram[frontier.length*(max_edges+1) + branch_size]++;
+		frontier_branch_histogram[frontier.length*(max_edges+1) + actual_branch_size]++;
 		visited_edges_histogram[path.length/2]++;
 
 		for (unsigned int i = 0; i < max_input_size - prefix.length; i++)
@@ -2080,6 +2065,13 @@ py::tuple generate_si_training_set(const unsigned int max_input_size, const uint
 			labels_mem(num_generated) = choice(correct_answers.data, correct_answers.length);
 		}
 		num_generated++;
+
+		/* sample the frontier size and branch size of the next example */
+		if (uniform) {
+			pair<unsigned int, unsigned int> frontier_branch = choice(potential_frontier_branches, potential_frontier_branch_count);
+			frontier_size = frontier_branch.key;
+			branch_size = frontier_branch.value;
+		}
 
 		if (!quiet && num_generated > 0 && (num_generated % 1000 == 0 || num_generated >= dataset_size)) {
 			printf("%d examples generated.\n", num_generated);
